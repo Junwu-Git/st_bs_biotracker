@@ -5,7 +5,7 @@
   --bsbt-lcd-bg: #87a96b;
   --bsbt-lcd-text: #2d3436;
   --bsbt-border-color: #1a1a1a;
-  --bsbt-font-main: 'Courier New', Courier, monospace;
+  --bsbt-font-main: 'Courier New', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', Courier, monospace;
   --bsbt-btn-grad-1: #4d5456;
   --bsbt-btn-grad-2: #282e30;
   --bsbt-btn-text: #ffffff;
@@ -21,7 +21,7 @@
   --bsbt-lcd-bg: #87a96b;
   --bsbt-lcd-text: #2d3436;
   --bsbt-border-color: #1a1a1a;
-  --bsbt-font-main: 'Courier New', Courier, monospace;
+  --bsbt-font-main: 'Courier New', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', Courier, monospace;
   --bsbt-btn-grad-1: #4d5456;
   --bsbt-btn-grad-2: #282e30;
   --bsbt-btn-text: #ffffff;
@@ -37,7 +37,7 @@
   --bsbt-lcd-bg: #e0f2f1;
   --bsbt-lcd-text: #004d40;
   --bsbt-border-color: #00695c;
-  --bsbt-font-main: 'Ma Shan Zheng', cursive;
+  --bsbt-font-main: 'Ma Shan Zheng', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', cursive;
   --bsbt-btn-grad-1: #264d4d;
   --bsbt-btn-grad-2: #0d1a1a;
   --bsbt-btn-text: #a7ffeb;
@@ -53,7 +53,7 @@
   --bsbt-lcd-bg: #f5e6c8;
   --bsbt-lcd-text: #3e2723;
   --bsbt-border-color: #795548;
-  --bsbt-font-main: 'Playfair Display', serif;
+  --bsbt-font-main: 'Playfair Display', 'Noto Serif TC', 'Microsoft JhengHei', 'PingFang TC', serif;
   --bsbt-btn-grad-1: #8d6e63;
   --bsbt-btn-grad-2: #3e2723;
   --bsbt-btn-text: #efebe9;
@@ -69,7 +69,7 @@
   --bsbt-lcd-bg: #00f2ff;
   --bsbt-lcd-text: #002b2b;
   --bsbt-border-color: #8b7320;
-  --bsbt-font-main: 'Audiowide', cursive;
+  --bsbt-font-main: 'Audiowide', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', cursive;
   --bsbt-btn-grad-1: #daa520;
   --bsbt-btn-grad-2: #8b4513;
   --bsbt-btn-text: #002b2b;
@@ -85,7 +85,7 @@
   --bsbt-lcd-bg: #0d120a;
   --bsbt-lcd-text: #18ff62;
   --bsbt-border-color: #3d4421;
-  --bsbt-font-main: 'Silkscreen', 'DotGothic16', cursive;
+  --bsbt-font-main: 'Silkscreen', 'DotGothic16', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', cursive;
   --bsbt-btn-grad-1: #6b7a3f;
   --bsbt-btn-grad-2: #2d3516;
   --bsbt-btn-text: #18ff62;
@@ -101,7 +101,7 @@
   --bsbt-lcd-bg: #ffffff;
   --bsbt-lcd-text: #ff4081;
   --bsbt-border-color: #f8bbd0;
-  --bsbt-font-main: 'Montserrat', sans-serif;
+  --bsbt-font-main: 'Montserrat', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', sans-serif;
   --bsbt-btn-grad-1: #ffffff;
   --bsbt-btn-grad-2: #f48fb1;
   --bsbt-btn-text: #ad1457;
@@ -257,6 +257,11 @@
   color: var(--bsbt-lcd-text);
   font-family: var(--bsbt-font-main);
   overflow: hidden;
+}
+
+#bs-biotracker-settings,
+#bs-biotracker-settings * {
+  font-family: var(--bsbt-font-main);
 }
 
 #bs-biotracker-settings .bs-bt-drag-handle {
@@ -542,6 +547,7 @@
   background: rgba(255, 255, 255, 0.12);
   color: inherit;
   box-sizing: border-box;
+  font-family: inherit;
 }
 
 #bs-biotracker-settings .bs-bt-track-character-list {
