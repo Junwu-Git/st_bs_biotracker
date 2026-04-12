@@ -490,7 +490,7 @@ function renderRacePaletteSelect(selectId, currentValue, includeEmpty = false) {
   if (includeEmpty) options.push('<option value="">不设</option>');
   for (const group of RACE_PALETTE_GROUPS) {
     const groupOptions = group.races.map((race) => `<option value="${escapeHtml(race)}"${race === currentValue ? ' selected' : ''}>${escapeHtml(race)}</option>`).join('');
-    options.push(`<optgroup label="${escapeHtml(group.label)}">${groupOptions}</optgroup>`);
+    options.push(`<optgroup label="${escapeHtml(`${group.label} (${group.races.length})`)}">${groupOptions}</optgroup>`);
   }
   return `<select id="${selectId}">${options.join('')}</select>`;
 }
@@ -1560,7 +1560,7 @@ function updateClock(settings) {
   } else if (mins > 0) {
     timeEl.textContent = `${mins} 分钟`;
   } else {
-    timeEl.textContent = '【 初始 】';
+    timeEl.textContent = '【初始】';
   }
 }
 

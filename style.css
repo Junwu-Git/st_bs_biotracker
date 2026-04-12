@@ -14,6 +14,9 @@
   --bsbt-case-radius: 40px;
   --bsbt-case-shadow: 0 25px 0 rgba(0, 0, 0, 0.3);
   --bsbt-case-border: 5px solid rgba(255, 255, 255, 0.1);
+  --bsbt-home-tile-bg: rgba(255, 255, 255, 0.12);
+  --bsbt-home-tile-glow: rgba(255, 255, 255, 0.18);
+  --bsbt-home-tile-shadow: rgba(0, 0, 0, 0.28);
 }
 
 #bs-biotracker-settings.theme-retro, .bs-bt-floating-sphere.theme-retro {
@@ -30,6 +33,9 @@
   --bsbt-case-radius: 40px;
   --bsbt-case-shadow: 0 25px 0 rgba(0, 0, 0, 0.3);
   --bsbt-case-border: 5px solid rgba(255, 255, 255, 0.1);
+  --bsbt-home-tile-bg: rgba(255, 255, 255, 0.12);
+  --bsbt-home-tile-glow: rgba(255, 255, 255, 0.18);
+  --bsbt-home-tile-shadow: rgba(0, 0, 0, 0.28);
 }
 
 #bs-biotracker-settings.theme-cultivation, .bs-bt-floating-sphere.theme-cultivation {
@@ -46,6 +52,9 @@
   --bsbt-case-radius: 60px 20px 60px 20px;
   --bsbt-case-shadow: 0 15px 30px rgba(0, 77, 64, 0.4);
   --bsbt-case-border: 4px solid #4db6ac;
+  --bsbt-home-tile-bg: rgba(8, 77, 67, 0.18);
+  --bsbt-home-tile-glow: rgba(167, 255, 235, 0.24);
+  --bsbt-home-tile-shadow: rgba(0, 50, 44, 0.35);
 }
 
 #bs-biotracker-settings.theme-fantasy, .bs-bt-floating-sphere.theme-fantasy {
@@ -62,6 +71,9 @@
   --bsbt-case-radius: 10px;
   --bsbt-case-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
   --bsbt-case-border: 8px solid #3e2723;
+  --bsbt-home-tile-bg: rgba(62, 39, 35, 0.18);
+  --bsbt-home-tile-glow: rgba(245, 230, 200, 0.2);
+  --bsbt-home-tile-shadow: rgba(31, 20, 17, 0.4);
 }
 
 #bs-biotracker-settings.theme-cyber-egypt, .bs-bt-floating-sphere.theme-cyber-egypt {
@@ -78,6 +90,9 @@
   --bsbt-case-radius: 30px;
   --bsbt-case-shadow: 0 0 50px rgba(212, 175, 55, 0.4);
   --bsbt-case-border: 6px solid #8b7320;
+  --bsbt-home-tile-bg: rgba(0, 242, 255, 0.12);
+  --bsbt-home-tile-glow: rgba(0, 242, 255, 0.35);
+  --bsbt-home-tile-shadow: rgba(84, 67, 0, 0.38);
 }
 
 #bs-biotracker-settings.theme-wasteland, .bs-bt-floating-sphere.theme-wasteland {
@@ -94,6 +109,9 @@
   --bsbt-case-radius: 5px;
   --bsbt-case-shadow: 0 25px 0 #2d3516;
   --bsbt-case-border: 10px solid #3d4421;
+  --bsbt-home-tile-bg: rgba(24, 255, 98, 0.08);
+  --bsbt-home-tile-glow: rgba(24, 255, 98, 0.26);
+  --bsbt-home-tile-shadow: rgba(13, 18, 10, 0.55);
 }
 
 #bs-biotracker-settings.theme-sakura, .bs-bt-floating-sphere.theme-sakura {
@@ -110,6 +128,9 @@
   --bsbt-case-radius: 50px;
   --bsbt-case-shadow: 0 15px 40px rgba(248, 187, 208, 0.5);
   --bsbt-case-border: 2px solid #ffffff;
+  --bsbt-home-tile-bg: rgba(255, 255, 255, 0.45);
+  --bsbt-home-tile-glow: rgba(255, 255, 255, 0.55);
+  --bsbt-home-tile-shadow: rgba(173, 20, 87, 0.18);
 }
 
 .bs-bt-modal {
@@ -319,6 +340,10 @@
   text-align: center;
   text-transform: uppercase;
   flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 #bs-biotracker-settings .bs-bt-screen-shell {
@@ -358,9 +383,35 @@
   padding: 8px 12px;
   border-bottom: 2px solid currentColor;
   display: flex;
-  justify-content: space-between;
+  align-items: center;
   gap: 10px;
   font-size: 0.85rem;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+#bs-biotracker-settings #bs-bt-time,
+#bs-biotracker-settings #bs-bt-title,
+#bs-biotracker-settings #bs-bt-status-icons {
+  min-width: 0;
+}
+
+#bs-biotracker-settings #bs-bt-time {
+  flex: 1 1 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#bs-biotracker-settings #bs-bt-title {
+  flex: 1 1 auto;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#bs-biotracker-settings #bs-bt-status-icons {
   flex: 0 0 auto;
 }
 
@@ -392,9 +443,9 @@
 
 #bs-biotracker-settings .bs-bt-menu-grid {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 8px;
-  margin-top: 6px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 8px;
+  margin-top: 0;
 }
 
 #bs-biotracker-settings .bs-bt-menu-card,
@@ -548,6 +599,130 @@
   color: inherit;
   box-sizing: border-box;
   font-family: inherit;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#bs-biotracker-settings .bs-bt-home-tile {
+  position: relative;
+  display: grid;
+  place-items: center;
+  grid-template-rows: auto auto;
+  gap: 6px;
+  min-height: 86px;
+  padding: 8px 6px 6px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  box-sizing: border-box;
+  min-width: 0;
+  overflow: hidden;
+  box-shadow: none;
+  transition: transform 0.12s ease, filter 0.12s ease, background-color 0.12s ease;
+}
+
+#bs-biotracker-settings .bs-bt-home-tile:hover,
+#bs-biotracker-settings .bs-bt-home-tile:focus-visible {
+  filter: brightness(1.03);
+}
+
+#bs-biotracker-settings .bs-bt-home-tile:focus-visible {
+  outline: none;
+}
+
+#bs-biotracker-settings .bs-bt-home-tile:active {
+  transform: scale(0.97);
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon {
+  width: 30px;
+  height: 30px;
+  display: block;
+  background-color: currentColor;
+  filter: drop-shadow(0 0 2px color-mix(in srgb, currentColor 10%, transparent));
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: 88% 88%;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: 88% 88%;
+  transition: filter 0.12s ease, transform 0.12s ease;
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon--filter {
+  mask-image: url('./assets/icons/filter-xmark-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/filter-xmark-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon--register {
+  mask-image: url('./assets/icons/register-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/register-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon--track {
+  mask-image: url('./assets/icons/pulse-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/pulse-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon--json {
+  mask-image: url('./assets/icons/json-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/json-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon--clock {
+  mask-image: url('./assets/icons/clock-lines-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/clock-lines-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon--dna {
+  mask-image: url('./assets/icons/dna-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/dna-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1.08;
+  text-align: center;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  transition: text-shadow 0.12s ease, transform 0.12s ease;
+}
+
+#bs-biotracker-settings .bs-bt-home-tile:hover .bs-bt-home-tile__icon,
+#bs-biotracker-settings .bs-bt-home-tile:focus-visible .bs-bt-home-tile__icon,
+#bs-biotracker-settings .bs-bt-home-tile:active .bs-bt-home-tile__icon {
+  filter:
+    drop-shadow(0 0 4px color-mix(in srgb, currentColor 30%, transparent))
+    drop-shadow(0 0 10px color-mix(in srgb, var(--bsbt-home-tile-glow) 92%, transparent));
+}
+
+#bs-biotracker-settings .bs-bt-home-tile:hover .bs-bt-home-tile__label,
+#bs-biotracker-settings .bs-bt-home-tile:focus-visible .bs-bt-home-tile__label,
+#bs-biotracker-settings .bs-bt-home-tile:active .bs-bt-home-tile__label {
+  text-shadow:
+    0 0 6px color-mix(in srgb, currentColor 24%, transparent),
+    0 0 14px color-mix(in srgb, var(--bsbt-home-tile-glow) 90%, transparent);
+}
+
+#bs-biotracker-settings .bs-bt-home-tile:active .bs-bt-home-tile__icon,
+#bs-biotracker-settings .bs-bt-home-tile:active .bs-bt-home-tile__label {
+  transform: scale(0.98);
+}
+
+#bs-biotracker-settings #bs-bt-view-home {
+  height: 100%;
+}
+
+#bs-biotracker-settings #bs-bt-view-home .bs-bt-panel {
+  height: 100%;
+}
+
+#bs-biotracker-settings #bs-bt-view-home .bs-bt-menu-grid {
+  height: 100%;
+  align-content: stretch;
 }
 
 #bs-biotracker-settings .bs-bt-track-character-list {
@@ -596,10 +771,11 @@
   width: 100%;
   min-height: 60px;
   display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-rows: 1fr auto;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
   align-items: start;
   text-align: left;
+  gap: 6px;
 }
 
 #bs-biotracker-settings .bs-bt-track-tab {
@@ -627,20 +803,26 @@
 
 #bs-biotracker-settings .bs-bt-track-character-name {
   font-weight: 700;
-  grid-column: 1 / 2;
+  grid-column: 1 / -1;
   grid-row: 1 / 2;
   align-self: start;
   justify-self: start;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 #bs-biotracker-settings .bs-bt-track-character-stage {
   font-size: 0.84em;
   opacity: 0.82;
-  grid-column: 2 / 3;
+  grid-column: 1 / -1;
   grid-row: 2 / 3;
   align-self: end;
   justify-self: end;
   text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 #bs-biotracker-settings .bs-bt-track-character-button[disabled] {
@@ -879,6 +1061,8 @@
 #bs-biotracker-settings .bs-bt-track-section-title {
   font-weight: 700;
   margin-bottom: 8px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 #bs-biotracker-settings .bs-bt-track-meta {
@@ -1052,6 +1236,8 @@
 #bs-biotracker-settings .bs-bt-track-card-title {
   font-weight: 700;
   margin-bottom: 6px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 #bs-biotracker-settings .bs-bt-track-card-empty {
