@@ -1,14 +1,9 @@
 {
   "display_name": "BS BioTracker",
-  "loading_order": 20,
-  "requires": [],
-  "optional": [],
-  "dependencies": [],
+  "version": "0.1.1",
+  "author": "Liuuuu54",
   "js": "index.js",
   "css": "style.css",
-  "author": "OpenAI Codex",
-  "version": "0.1.1",
-  "homePage": "https://example.invalid/st-bs-biotracker",
-  "auto_update": false,
-  "minimum_client_version": "1.12.0"
+  "loading_order": 20,
+  "homePage": "https://github.com/Liuuuu54/st_bs_biotracker"
 }
