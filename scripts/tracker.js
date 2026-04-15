@@ -23,6 +23,7 @@ import {
 
 export const POLL_RUNTIME_KEY = '__bs_biotracker_poll__';
 export const RUN_RUNTIME_KEY = '__bs_biotracker_running__';
+const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 
 function getVitalityLevelText(level) {
   const levels = {
@@ -270,6 +271,10 @@ function hasPendingChatHistory(ctx, chatState) {
   return !matchedSnapshot || matchedSnapshot.messageCount !== currentLength;
 }
 
+function emitTrackerUpdateCue(detail = {}) {
+  globalThis.dispatchEvent?.(new CustomEvent(UPDATE_CUE_EVENT, { detail }));
+}
+
 async function processTrackerMessage(ctx, settings, chatState, deps, reason, messageIndex) {
   const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
   const message = chat[messageIndex];
@@ -357,7 +362,11 @@ export async function runTracker(ctx, deps, reason = 'manual') {
     deps.updateMainFlowPrompt?.(ctx);
     if (reason === 'poll' && processedCount === 0) return;
     const toolCalls = Array.isArray(chatState.lastRawResult?.tool_calls) ? chatState.lastRawResult.tool_calls : [];
-    globalThis.toastr?.success?.(toolCalls.length > 0 ? '[BS BioTracker] 状态已更新' : '[BS BioTracker] 分析完成，本轮没有工具调用');
+    emitTrackerUpdateCue({
+      hasChanges: toolCalls.length > 0,
+      processedCount,
+      reason,
+    });
     return { skipped: false, processedCount, toolCalls };
   } catch (error) {
     console.error('[BS BioTracker] runTracker failed', error);

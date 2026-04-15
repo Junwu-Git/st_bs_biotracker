@@ -22,6 +22,7 @@ import {
   getChatKey,
   getChatState,
   getContextSafe,
+  inheritChatStateFromMatchingChat,
   getResolvedCharacter,
   getSettings,
   MODULE_NAME,
@@ -38,12 +39,24 @@ const MAINFLOW_PROMPT_KEY = `${MODULE_NAME}_mainflow`;
 const TRACK_SUBPAGES = ['overview', 'description', 'pregnancy', 'experience', 'debug'];
 const MAX_PROGRESS_BAR_CAP = 200;
 const MODAL_EDGE_GAP = 24;
+const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
+const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
+const FLOATING_SPHERE_DRAG_THRESHOLD = 8;
+const CLOCK_RUNTIME_KEY = '__bs_biotracker_clock__';
+const BOOTSTRAP_RUNTIME_KEY = '__bs_biotracker_bootstrap__';
+const CHAT_CHANGED_HANDLER_KEY = '__bs_biotracker_chat_changed_handler__';
+const CHAT_CREATED_HANDLER_KEY = '__bs_biotracker_chat_created_handler__';
+const APP_READY_HANDLER_KEY = '__bs_biotracker_app_ready_handler__';
+const CHAT_DELETED_HANDLER_KEY = '__bs_biotracker_chat_deleted_handler__';
+const GROUP_CHAT_DELETED_HANDLER_KEY = '__bs_biotracker_group_chat_deleted_handler__';
+const GROUP_CHAT_CREATED_HANDLER_KEY = '__bs_biotracker_group_chat_created_handler__';
 const VITALITY_CAPS = { 1: 50, 2: 75, 3: 100, 4: 125, 5: 150, 6: 175, 7: 200 };
 const PSY_STRESS_CAPS = { 1: 20, 2: 50, 3: 80, 4: 110, 5: 140, 6: 170, 7: 200 };
 
 let selectedFullStateName = '';
 let selectedTrackName = '';
 let selectedTrackSubpage = 'overview';
+let selectedTrackCardIndexes = {};
 let selectedRaceEncyclopedia = '';
 let racePaletteState = {
   targetInputId: '',
@@ -253,6 +266,37 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function formatIntegerDisplay(value, fallback = '未知') {
+  const next = Number(value);
+  if (!Number.isFinite(next)) return fallback;
+  return String(Math.round(next));
+}
+
+function getTrackCardIndexKey(kind) {
+  return `${selectedTrackName || ''}:${kind || ''}`;
+}
+
+function getTrackCardIndex(kind, length) {
+  const key = getTrackCardIndexKey(kind);
+  const maxLength = Math.max(0, Number(length) || 0);
+  if (maxLength <= 0) return 0;
+  const raw = Number(selectedTrackCardIndexes[key]);
+  if (!Number.isInteger(raw) || raw < 0) return 0;
+  return Math.min(raw, maxLength - 1);
+}
+
+function setTrackCardIndex(kind, index, length) {
+  const key = getTrackCardIndexKey(kind);
+  const maxLength = Math.max(0, Number(length) || 0);
+  if (maxLength <= 0) {
+    delete selectedTrackCardIndexes[key];
+    return 0;
+  }
+  const next = Math.max(0, Math.min(maxLength - 1, Number(index) || 0));
+  selectedTrackCardIndexes[key] = next;
+  return next;
 }
 
 function formatRaceLabel(race, derivedType) {
@@ -844,6 +888,36 @@ function renderCardList(items, renderCard, emptyText) {
   return `<div class="bs-bt-track-cards">${items.map((item, index) => renderCard(item, index)).join('')}</div>`;
 }
 
+function renderCardCarouselSection(title, items, renderCard, emptyText, kind) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return `
+      <div class="bs-bt-track-section">
+        <div class="bs-bt-track-section-title">${escapeHtml(title)}</div>
+        <div class="bs-bt-track-card-empty">${escapeHtml(emptyText)}</div>
+      </div>
+    `;
+  }
+
+  const currentIndex = setTrackCardIndex(kind, getTrackCardIndex(kind, items.length), items.length);
+  const currentItem = items[currentIndex];
+  const showNav = items.length > 1;
+  return `
+    <div class="bs-bt-track-section">
+      <div class="bs-bt-track-section-title" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+        <span>${escapeHtml(title)}</span>
+        <span style="display:flex;align-items:center;gap:8px;">
+          ${showNav
+            ? `<button type="button" class="menu_button" data-card-nav="${escapeHtml(kind)}" data-card-step="-1" style="min-width:32px;padding:2px 8px;">◀</button>
+               <button type="button" class="menu_button" data-card-nav="${escapeHtml(kind)}" data-card-step="1" style="min-width:32px;padding:2px 8px;">▶</button>`
+            : ''
+          }
+        </span>
+      </div>
+      <div class="bs-bt-track-cards bs-bt-track-cards--single">${renderCard(currentItem, currentIndex)}</div>
+    </div>
+  `;
+}
+
 function renderTrackOverview(viewModel) {
   const progress = viewModel.overview.stageProgress;
   const progressHtml = progress
@@ -921,9 +995,8 @@ function renderTrackPregnancy(viewModel) {
     }
       </div>
     </div>
-    <div class="bs-bt-track-section">
-      <div class="bs-bt-track-section-title">精液来源</div>
-      ${renderCardList(
+    ${renderCardCarouselSection(
+      '精液来源',
       data.sperms,
       (item, index) => `<div class="bs-bt-track-card">
           <div class="bs-bt-track-card-title">来源 ${index + 1}</div>
@@ -932,12 +1005,11 @@ function renderTrackPregnancy(viewModel) {
           <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">残留量</span><span class="bs-bt-track-list-value">${Math.round(Number(item?.value) || 0)}</span></div>
         </div>`,
       '当前无精液残留',
+      'sperms',
     )}
-    </div>
     ${data.showPregnantFields
-      ? `<div class="bs-bt-track-section">
-            <div class="bs-bt-track-section-title">胎儿信息</div>
-            ${renderCardList(
+      ? `${renderCardCarouselSection(
+            '胎儿信息',
         data.fetuses,
         (item, index) => `<div class="bs-bt-track-card">
                 <div class="bs-bt-track-card-title">胎儿 ${index + 1}</div>
@@ -951,8 +1023,8 @@ function renderTrackPregnancy(viewModel) {
                 <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">性别</span><span class="bs-bt-track-list-value">${escapeHtml(item?.gender || '未知')}</span></div>
               </div>`,
         '当前无妊娠胎儿资料',
+        'fetuses',
       )}
-          </div>
           ${renderDescriptionGroup('孕态描述', data.pregnantBlocks)}`
       : ''
     }
@@ -972,20 +1044,19 @@ function renderTrackExperience(viewModel) {
       .join('')}
       </div>
     </div>
-    <div class="bs-bt-track-section">
-      <div class="bs-bt-track-section-title">孩子记录</div>
-      ${renderCardList(
+    ${renderCardCarouselSection(
+      '孩子记录',
         viewModel.experience.children,
         (item, index) => `<div class="bs-bt-track-card">
           <div class="bs-bt-track-card-title">${escapeHtml(item?.name || `孩子 ${index + 1}`)}</div>
           <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">父方</span><span class="bs-bt-track-list-value">${escapeHtml(item?.fathers || '未知')}</span></div>
           <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">性别</span><span class="bs-bt-track-list-value">${escapeHtml(item?.gender || '未知')}</span></div>
           <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">种族</span><span class="bs-bt-track-list-value">${escapeHtml(formatRaceLabel(item?.race, item?.derivedType))}</span></div>
-          <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">年龄</span><span class="bs-bt-track-list-value">${escapeHtml(item?.age ?? '未知')}</span></div>
+          <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">年龄</span><span class="bs-bt-track-list-value">${escapeHtml(formatIntegerDisplay(item?.age))}</span></div>
         </div>`,
         '当前无孩子记录',
-      )}
-    </div>
+      'children',
+    )}
   `;
 }
 
@@ -1306,6 +1377,22 @@ function renderStatusPanel(ctx) {
   const current = characters.find((item) => item.name === selectedTrackName);
   const viewModel = buildTrackCharacterViewModel(current);
   content.innerHTML = renderTrackCharacterContent(viewModel);
+  content.querySelectorAll('[data-card-nav]').forEach((node) =>
+    node.addEventListener('click', () => {
+      const kind = String(node.getAttribute('data-card-nav') || '').trim();
+      const step = Number(node.getAttribute('data-card-step') || 0);
+      if (!kind || !step) return;
+      let items = [];
+      if (kind === 'sperms') items = Array.isArray(viewModel?.pregnancy?.sperms) ? viewModel.pregnancy.sperms : [];
+      if (kind === 'fetuses') items = Array.isArray(viewModel?.pregnancy?.fetuses) ? viewModel.pregnancy.fetuses : [];
+      if (kind === 'children') items = Array.isArray(viewModel?.experience?.children) ? viewModel.experience.children : [];
+      if (items.length <= 1) return;
+      const currentIndex = getTrackCardIndex(kind, items.length);
+      const nextIndex = (currentIndex + step + items.length) % items.length;
+      setTrackCardIndex(kind, nextIndex, items.length);
+      renderStatusPanel(ctx);
+    }),
+  );
   content.querySelectorAll('[data-debug-immune]').forEach((node) =>
     node.addEventListener('click', () => {
       toggleSelectedTrackImmune(ctx, String(node.dataset.debugImmune || ''));
@@ -1767,28 +1854,72 @@ function initDraggableModal(modal) {
 function initDraggableSphere(sphere, ctx) {
   let dragState = null;
   let hasMoved = false;
+  let pointerDownX = 0;
+  let pointerDownY = 0;
+
+  const persistFloatingSpherePosition = () => {
+    const left = Number.parseFloat(sphere.style.left);
+    const top = Number.parseFloat(sphere.style.top);
+    if (!Number.isFinite(left) || !Number.isFinite(top)) return;
+    try {
+      globalThis.localStorage?.setItem(FLOATING_SPHERE_POSITION_KEY, JSON.stringify({ left, top }));
+    } catch {}
+  };
+
+  const clampFloatingSpherePosition = (left, top) => {
+    const maxLeft = Math.max(0, window.innerWidth - sphere.offsetWidth);
+    const maxTop = Math.max(0, window.innerHeight - sphere.offsetHeight);
+    return {
+      left: Math.max(0, Math.min(left, maxLeft)),
+      top: Math.max(0, Math.min(top, maxTop)),
+    };
+  };
+
+  const setFloatingSpherePosition = (left, top, persist = true) => {
+    const next = clampFloatingSpherePosition(left, top);
+    sphere.style.left = `${next.left}px`;
+    sphere.style.top = `${next.top}px`;
+    if (persist) persistFloatingSpherePosition();
+  };
+
+  const restoreFloatingSpherePosition = () => {
+    try {
+      const raw = globalThis.localStorage?.getItem(FLOATING_SPHERE_POSITION_KEY);
+      if (!raw) return false;
+      const parsed = JSON.parse(raw);
+      const left = Number(parsed?.left);
+      const top = Number(parsed?.top);
+      if (!Number.isFinite(left) || !Number.isFinite(top)) return false;
+      setFloatingSpherePosition(left, top, false);
+      return true;
+    } catch {
+      return false;
+    }
+  };
 
   const onPointerMove = (event) => {
     if (!dragState) return;
-    hasMoved = true;
-    let left = event.clientX - dragState.offsetX;
-    let top = event.clientY - dragState.offsetY;
-    const maxLeft = window.innerWidth - sphere.offsetWidth;
-    const maxTop = window.innerHeight - sphere.offsetHeight;
-    left = Math.max(0, Math.min(left, maxLeft));
-    top = Math.max(0, Math.min(top, maxTop));
-    sphere.style.left = `${left}px`;
-    sphere.style.top = `${top}px`;
+    const deltaX = event.clientX - pointerDownX;
+    const deltaY = event.clientY - pointerDownY;
+    if (!hasMoved && Math.hypot(deltaX, deltaY) >= FLOATING_SPHERE_DRAG_THRESHOLD) {
+      hasMoved = true;
+    }
+    if (!hasMoved) return;
+    const left = event.clientX - dragState.offsetX;
+    const top = event.clientY - dragState.offsetY;
+    setFloatingSpherePosition(left, top, false);
   };
 
-  const onPointerUp = (event) => {
+  const onPointerUp = () => {
     if (!dragState) return;
     dragState = null;
     sphere.classList.remove('is-dragging');
     window.removeEventListener('pointermove', onPointerMove);
     window.removeEventListener('pointerup', onPointerUp);
 
-    if (!hasMoved) {
+    if (hasMoved) {
+      persistFloatingSpherePosition();
+    } else {
       sphere.classList.add('is-shrinking');
       setTimeout(() => {
         sphere.style.display = 'none';
@@ -1804,18 +1935,52 @@ function initDraggableSphere(sphere, ctx) {
       offsetX: event.clientX - sphere.offsetLeft,
       offsetY: event.clientY - sphere.offsetTop,
     };
+    pointerDownX = event.clientX;
+    pointerDownY = event.clientY;
     hasMoved = false;
     sphere.classList.add('is-dragging');
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
     event.preventDefault();
   });
+
+  if (!restoreFloatingSpherePosition()) {
+    const defaultLeft = window.innerWidth - sphere.offsetWidth - MODAL_EDGE_GAP;
+    const defaultTop = Math.max(MODAL_EDGE_GAP, Math.round(window.innerHeight * 0.4));
+    setFloatingSpherePosition(defaultLeft, defaultTop, false);
+  }
+  window.addEventListener('resize', () => {
+    const left = Number.parseFloat(sphere.style.left);
+    const top = Number.parseFloat(sphere.style.top);
+    if (!Number.isFinite(left) || !Number.isFinite(top)) return;
+    setFloatingSpherePosition(left, top);
+  });
+}
+
+function clearFloatingSphereUpdateCue() {
+  const sphere = document.getElementById('bs-bt-floating-sphere');
+  if (!sphere) return;
+  sphere.classList.remove('has-update', 'is-pulsing');
+}
+
+function triggerFloatingSphereUpdateCue(detail = {}) {
+  const sphere = document.getElementById('bs-bt-floating-sphere');
+  if (!sphere || detail?.hasChanges === false) return;
+  sphere.classList.add('has-update');
+  sphere.classList.remove('is-pulsing');
+  void sphere.offsetWidth;
+  sphere.classList.add('is-pulsing');
+  globalThis.clearTimeout?.(sphere._bsBtPulseTimer);
+  sphere._bsBtPulseTimer = globalThis.setTimeout(() => {
+    sphere.classList.remove('is-pulsing');
+  }, 1200);
 }
 
 
 function openModal(ctx) {
   const modal = document.getElementById(MODAL_ID);
   if (!modal) return;
+  clearFloatingSphereUpdateCue();
   applySettingsToForm(ctx);
   modal.classList.add('is-open');
   modal.setAttribute('aria-hidden', 'false');
@@ -1862,6 +2027,12 @@ async function ensureModal(ctx) {
     sphere.innerHTML = `𓃠`;
     document.body.appendChild(sphere);
     initDraggableSphere(sphere, ctx);
+  }
+  if (!globalThis.__bsBtUpdateCueHandler__) {
+    globalThis.__bsBtUpdateCueHandler__ = (event) => {
+      triggerFloatingSphereUpdateCue(event?.detail || {});
+    };
+    globalThis.addEventListener(UPDATE_CUE_EVENT, globalThis.__bsBtUpdateCueHandler__);
   }
 
   document.querySelectorAll('#bs-biotracker-settings [data-nav-view]').forEach((node) =>
@@ -2076,15 +2247,8 @@ async function ensureModal(ctx) {
 
     dialog.classList.add('is-shrinking');
     setTimeout(() => {
-      const rect = dialog.getBoundingClientRect();
-      const targetLeft = rect.left + rect.width / 2 - 28;
-      const targetTop = rect.bottom - 40;
-
       dialog.classList.remove('is-shrinking');
       closeModal();
-
-      sphere.style.left = `${targetLeft}px`;
-      sphere.style.top = `${targetTop}px`;
 
       sphere.style.display = 'flex';
       sphere.classList.add('is-appearing');
@@ -2111,8 +2275,64 @@ async function ensureModal(ctx) {
     executeTimeLapse(ctx, args);
   });
 
-  setInterval(() => updateClock(), 1000);
+  resetClockTicker();
   return modal;
+}
+
+function resetClockTicker() {
+  if (globalThis[CLOCK_RUNTIME_KEY]) {
+    globalThis.clearInterval?.(globalThis[CLOCK_RUNTIME_KEY]);
+  }
+  globalThis[CLOCK_RUNTIME_KEY] = globalThis.setInterval(() => updateClock(), 1000);
+}
+
+function extractDeletedChatKey(ctx, payload) {
+  const directCandidates = [
+    payload?.chatId,
+    payload?.chat_id,
+    payload?.id,
+    payload?.data?.chatId,
+    payload?.data?.chat_id,
+    payload?.data?.id,
+  ];
+  for (const candidate of directCandidates) {
+    const value = String(candidate || '').trim();
+    if (value) return value;
+  }
+
+  const currentKey = getChatKey(ctx);
+  return String(currentKey || '').trim();
+}
+
+function cleanupOrphanedChatStateByKey(ctx, chatKey, reason = 'chat_deleted') {
+  const settings = getSettings(ctx);
+  const normalizedKey = String(chatKey || '').trim();
+  if (!normalizedKey) return false;
+  if (!settings.chatStates || typeof settings.chatStates !== 'object') return false;
+  if (!Object.prototype.hasOwnProperty.call(settings.chatStates, normalizedKey)) return false;
+
+  delete settings.chatStates[normalizedKey];
+  saveSettings(ctx);
+  if (normalizedKey === getChatKey(ctx)) {
+    renderStatusPanel(ctx);
+    renderFullStatePage(ctx);
+    updateMainFlowPrompt(ctx);
+    setRegisterStatus('当前聊天对应的 BioTracker 状态已随聊天删除清理。');
+  }
+  console.info(`[BS BioTracker] cleaned orphaned chat state: ${normalizedKey} (${reason})`);
+  return true;
+}
+
+function tryInheritForkedChatState(ctx, reason = 'chat_changed') {
+  const settings = getSettings(ctx);
+  const result = inheritChatStateFromMatchingChat(ctx, settings);
+  if (!result?.inherited) return result;
+  saveSettings(ctx);
+  renderStatusPanel(ctx);
+  renderFullStatePage(ctx);
+  updateMainFlowPrompt(ctx);
+  console.info(`[BS BioTracker] inherited chat state from ${result.fromChatKey} to ${getChatKey(ctx)} (${reason})`);
+  return result;
 }
 
 function executeTimeLapse(ctx, args) {
@@ -2205,22 +2425,79 @@ async function registerMenuItem(ctx) {
 async function bootstrap() {
   const ctx = getContextSafe();
   if (!ctx) return;
-  await ensureModal(ctx);
-  await registerMenuItem(ctx);
-  trackerDeps.updateMainFlowPrompt = updateMainFlowPrompt;
-  resetPoller(ctx, trackerDeps);
-  updateMainFlowPrompt(ctx);
-  const { eventSource, event_types } = ctx;
-  if (eventSource && event_types?.CHAT_CHANGED) {
-    eventSource.on(event_types.CHAT_CHANGED, () => {
-      renderStatusPanel(ctx);
-      updateMainFlowPrompt(ctx);
-    });
+  if (globalThis[BOOTSTRAP_RUNTIME_KEY]) return;
+  globalThis[BOOTSTRAP_RUNTIME_KEY] = true;
+  try {
+    await ensureModal(ctx);
+    await registerMenuItem(ctx);
+    trackerDeps.updateMainFlowPrompt = updateMainFlowPrompt;
+    resetPoller(ctx, trackerDeps);
+    updateMainFlowPrompt(ctx);
+    const { eventSource, event_types } = ctx;
+    if (eventSource && event_types?.CHAT_CHANGED) {
+      if (globalThis[CHAT_CHANGED_HANDLER_KEY] && typeof eventSource.off === 'function') {
+        eventSource.off(event_types.CHAT_CHANGED, globalThis[CHAT_CHANGED_HANDLER_KEY]);
+      }
+      globalThis[CHAT_CHANGED_HANDLER_KEY] = () => {
+        tryInheritForkedChatState(ctx, 'chat_changed');
+        renderStatusPanel(ctx);
+        updateMainFlowPrompt(ctx);
+      };
+      eventSource.on(event_types.CHAT_CHANGED, globalThis[CHAT_CHANGED_HANDLER_KEY]);
+    }
+    if (eventSource && event_types?.CHAT_CREATED) {
+      if (globalThis[CHAT_CREATED_HANDLER_KEY] && typeof eventSource.off === 'function') {
+        eventSource.off(event_types.CHAT_CREATED, globalThis[CHAT_CREATED_HANDLER_KEY]);
+      }
+      globalThis[CHAT_CREATED_HANDLER_KEY] = () => {
+        tryInheritForkedChatState(ctx, 'chat_created');
+      };
+      eventSource.on(event_types.CHAT_CREATED, globalThis[CHAT_CREATED_HANDLER_KEY]);
+    }
+    if (eventSource && event_types?.CHAT_DELETED) {
+      if (globalThis[CHAT_DELETED_HANDLER_KEY] && typeof eventSource.off === 'function') {
+        eventSource.off(event_types.CHAT_DELETED, globalThis[CHAT_DELETED_HANDLER_KEY]);
+      }
+      globalThis[CHAT_DELETED_HANDLER_KEY] = (payload) => {
+        const chatKey = extractDeletedChatKey(ctx, payload);
+        cleanupOrphanedChatStateByKey(ctx, chatKey, 'chat_deleted');
+      };
+      eventSource.on(event_types.CHAT_DELETED, globalThis[CHAT_DELETED_HANDLER_KEY]);
+    }
+    if (eventSource && event_types?.GROUP_CHAT_DELETED) {
+      if (globalThis[GROUP_CHAT_DELETED_HANDLER_KEY] && typeof eventSource.off === 'function') {
+        eventSource.off(event_types.GROUP_CHAT_DELETED, globalThis[GROUP_CHAT_DELETED_HANDLER_KEY]);
+      }
+      globalThis[GROUP_CHAT_DELETED_HANDLER_KEY] = (payload) => {
+        const chatKey = extractDeletedChatKey(ctx, payload);
+        cleanupOrphanedChatStateByKey(ctx, chatKey, 'group_chat_deleted');
+      };
+      eventSource.on(event_types.GROUP_CHAT_DELETED, globalThis[GROUP_CHAT_DELETED_HANDLER_KEY]);
+    }
+    if (eventSource && event_types?.GROUP_CHAT_CREATED) {
+      if (globalThis[GROUP_CHAT_CREATED_HANDLER_KEY] && typeof eventSource.off === 'function') {
+        eventSource.off(event_types.GROUP_CHAT_CREATED, globalThis[GROUP_CHAT_CREATED_HANDLER_KEY]);
+      }
+      globalThis[GROUP_CHAT_CREATED_HANDLER_KEY] = () => {
+        tryInheritForkedChatState(ctx, 'group_chat_created');
+      };
+      eventSource.on(event_types.GROUP_CHAT_CREATED, globalThis[GROUP_CHAT_CREATED_HANDLER_KEY]);
+    }
+    tryInheritForkedChatState(ctx, 'bootstrap');
+  } catch (error) {
+    globalThis[BOOTSTRAP_RUNTIME_KEY] = false;
+    throw error;
   }
 }
 
 const ctx = getContextSafe();
-if (ctx?.eventSource && ctx?.event_types?.APP_READY) ctx.eventSource.on(ctx.event_types.APP_READY, bootstrap);
+if (ctx?.eventSource && ctx?.event_types?.APP_READY) {
+  if (globalThis[APP_READY_HANDLER_KEY] && typeof ctx.eventSource.off === 'function') {
+    ctx.eventSource.off(ctx.event_types.APP_READY, globalThis[APP_READY_HANDLER_KEY]);
+  }
+  globalThis[APP_READY_HANDLER_KEY] = bootstrap;
+  ctx.eventSource.on(ctx.event_types.APP_READY, globalThis[APP_READY_HANDLER_KEY]);
+}
 else setTimeout(() => {
   bootstrap().catch((error) => console.error('[BS BioTracker] bootstrap failed', error));
 }, 1000);

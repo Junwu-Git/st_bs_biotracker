@@ -108,7 +108,7 @@ export const PSY_MENS_BOOL_FIELDS = Object.freeze({
     definition: '是否当前保持贞洁取向或单一性伴侣关系，不处于多对象性关系状态。',
   },
   hasContraception: {
-    definition: '是否当前存在稳定生效中的避孕措施，例如套、药物、结界、器具等。',
+    definition: '是否当前存在稳定生效中的避孕措施，例如套、药物、结界、器具等。(若角色對自身月经完全无知，则该字段也应为 false)',
   },
 });
 

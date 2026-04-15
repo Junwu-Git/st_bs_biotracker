@@ -10,6 +10,8 @@ import {
 import { LABOR_STAGES, MENSTRUAL_STAGES, MENSTRUAL_STAGE_DAYS, PREGNANCY_STAGE_DAYS } from './stage_config.js';
 
 export const MODULE_NAME = 'bs_biotracker';
+const MAX_CHAT_STATE_SNAPSHOTS = 48;
+const MAX_RAW_RESULT_TEXT_LENGTH = 1200;
 
 export const THEME_CONFIG = {
   retro: {},
@@ -632,6 +634,80 @@ export function getChatState(ctx, settings) {
   return chatState;
 }
 
+function isChatStateEffectivelyEmpty(chatState) {
+  if (!chatState || typeof chatState !== 'object') return true;
+  const hasCharacters = Object.keys(chatState.characters || {}).length > 0;
+  const hasSnapshots = Array.isArray(chatState.snapshots) && chatState.snapshots.length > 0;
+  const hasSceneSummary = Boolean(String(chatState.sceneSummary || '').trim());
+  const hasMinutesPassed = Number(chatState.minutesPassed) > 0;
+  const hasAttemptedSignature = Boolean(String(chatState.lastAttemptedSignature || '').trim());
+  const hasProcessedSignature = Boolean(String(chatState.lastProcessedSignature || '').trim());
+  const hasRawResult = chatState.lastRawResult && typeof chatState.lastRawResult === 'object';
+  return !(hasCharacters || hasSnapshots || hasSceneSummary || hasMinutesPassed || hasAttemptedSignature || hasProcessedSignature || hasRawResult);
+}
+
+function isMessageSignaturePrefixMatch(sourceSignatures, targetSignatures, count) {
+  if (!Array.isArray(sourceSignatures) || !Array.isArray(targetSignatures)) return false;
+  if (!Number.isInteger(count) || count < 0) return false;
+  if (count > sourceSignatures.length || count > targetSignatures.length) return false;
+  for (let index = 0; index < count; index += 1) {
+    if (sourceSignatures[index] !== targetSignatures[index]) return false;
+  }
+  return true;
+}
+
+export function inheritChatStateFromMatchingChat(ctx, settings) {
+  const chatKey = getChatKey(ctx);
+  const currentChat = Array.isArray(ctx?.chat) ? ctx.chat : [];
+  if (!chatKey || currentChat.length === 0) return { inherited: false, reason: 'empty_chat' };
+
+  if (!settings.chatStates || typeof settings.chatStates !== 'object') settings.chatStates = {};
+  if (!settings.chatStates[chatKey]) settings.chatStates[chatKey] = createEmptyChatState();
+  const currentState = settings.chatStates[chatKey];
+  if (!isChatStateEffectivelyEmpty(currentState)) return { inherited: false, reason: 'state_exists' };
+
+  const currentSignatures = buildMessageSignatures(ctx);
+  let bestMatch = null;
+
+  for (const [candidateKey, candidateState] of Object.entries(settings.chatStates)) {
+    if (candidateKey === chatKey || !candidateState || typeof candidateState !== 'object') continue;
+    const candidateSnapshots = Array.isArray(candidateState.snapshots) ? candidateState.snapshots : [];
+    for (const snapshot of candidateSnapshots) {
+      const count = Number.isInteger(snapshot?.messageCount)
+        ? snapshot.messageCount
+        : (Array.isArray(snapshot?.messageSignatures) ? snapshot.messageSignatures.length : 0);
+      if (count <= 0 || count > currentSignatures.length) continue;
+      const signatures = Array.isArray(snapshot?.messageSignatures) ? snapshot.messageSignatures : [];
+      if (!isMessageSignaturePrefixMatch(signatures, currentSignatures, count)) continue;
+      if (!bestMatch || count > bestMatch.count || (count === bestMatch.count && (snapshot.createdAt || 0) > (bestMatch.snapshot?.createdAt || 0))) {
+        bestMatch = { candidateKey, candidateState, snapshot, count };
+      }
+    }
+  }
+
+  if (!bestMatch?.snapshot) return { inherited: false, reason: 'no_matching_snapshot' };
+
+  const inheritedSnapshots = (Array.isArray(bestMatch.candidateState.snapshots) ? bestMatch.candidateState.snapshots : [])
+    .filter((snapshot) => {
+      const count = Number.isInteger(snapshot?.messageCount)
+        ? snapshot.messageCount
+        : (Array.isArray(snapshot?.messageSignatures) ? snapshot.messageSignatures.length : 0);
+      const signatures = Array.isArray(snapshot?.messageSignatures) ? snapshot.messageSignatures : [];
+      return count > 0 && count <= currentSignatures.length && isMessageSignaturePrefixMatch(signatures, currentSignatures, count);
+    })
+    .map((snapshot) => cloneValue(snapshot));
+
+  currentState.snapshots = inheritedSnapshots;
+  trimChatStateSnapshots(currentState);
+  restoreChatStateFromSnapshot(currentState, bestMatch.snapshot);
+
+  return {
+    inherited: true,
+    fromChatKey: bestMatch.candidateKey,
+    messageCount: bestMatch.count,
+  };
+}
+
 export function getCharacterCard(ctx) {
   const card = getResolvedCharacter(ctx)?.card;
   if (!card) return {};
@@ -755,8 +831,31 @@ function exportChatStateSnapshotPayload(chatState) {
     sceneSummary: chatState.sceneSummary || '',
     minutesPassed: chatState.minutesPassed || 0,
     characters: chatState.characters || {},
-    lastRawResult: chatState.lastRawResult || null,
+    lastRawResult: summarizeRawResult(chatState.lastRawResult),
   };
+}
+
+function summarizeRawResult(value) {
+  if (!value || typeof value !== 'object') return null;
+  const toolCalls = Array.isArray(value.tool_calls)
+    ? value.tool_calls.map((call) => ({
+        name: String(call?.name || ''),
+        arguments: call?.arguments && typeof call.arguments === 'object' ? cloneValue(call.arguments) : (call?.arguments ?? null),
+      }))
+    : [];
+  const message = typeof value.message === 'string' ? value.message.slice(0, MAX_RAW_RESULT_TEXT_LENGTH) : undefined;
+  const error = typeof value.error === 'string' ? value.error.slice(0, MAX_RAW_RESULT_TEXT_LENGTH) : undefined;
+  const result = {};
+  if (message) result.message = message;
+  if (error) result.error = error;
+  if (toolCalls.length > 0) result.tool_calls = toolCalls;
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+function trimChatStateSnapshots(chatState) {
+  if (!Array.isArray(chatState?.snapshots)) return;
+  if (chatState.snapshots.length <= MAX_CHAT_STATE_SNAPSHOTS) return;
+  chatState.snapshots.splice(0, chatState.snapshots.length - MAX_CHAT_STATE_SNAPSHOTS);
 }
 
 export function restoreChatStateFromSnapshot(chatState, snapshot) {
@@ -783,6 +882,7 @@ export function recordChatStateSnapshot(ctx, chatState, options = {}) {
     stateSnapshot: cloneValue(exportChatStateSnapshotPayload(chatState)),
   };
   chatState.snapshots.push(snapshot);
+  trimChatStateSnapshots(chatState);
   return snapshot;
 }
 
