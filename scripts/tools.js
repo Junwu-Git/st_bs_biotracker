@@ -1453,6 +1453,15 @@ function maybeStartLabor(profile, tick, female) {
   return true;
 }
 
+function shouldKeepPregnancyPressureWarning(profile) {
+  const base = profile?.base || {};
+  const stage = String(base.stage || '');
+  if (!isPregnancyStage(stage)) return false;
+  const pressureCap = getUterinePressureCap(profile);
+  const currentPressure = clampNumber(base.uterinePressure, 0, pressureCap, 0);
+  return currentPressure >= (pressureCap * 0.5);
+}
+
 function applyPressureCrisis(profile, runtime, female) {
   const base = profile?.base || {};
   const pregnant = profile?.pregnant || {};
@@ -1460,21 +1469,36 @@ function applyPressureCrisis(profile, runtime, female) {
   const experience = profile?.experience || {};
   const cooldown = profile?.cooldown || {};
   const stage = String(base.stage || '');
-  if (!isPregnancyStage(stage)) return false;
+  if (!isPregnancyStage(stage)) return { changed: false, warned: false };
 
   const pressureCap = getUterinePressureCap(profile);
   const currentPressure = clampNumber(base.uterinePressure, 0, pressureCap, 0);
   const triggerThreshold = pressureCap * 0.5;
-  if (currentPressure < triggerThreshold) return false;
+  if (currentPressure < triggerThreshold) return { changed: false, warned: false };
 
   const notify = profile.notify || {};
+  if (!cooldown.pregnancyPressureWarning) {
+    const warningText = (stage === '孕早期' || stage === '孕中期')
+      ? `${female}子宫压力过高，有流产风险；若下次时间推进时仍未缓解，可能会真的流产`
+      : `${female}子宫压力过高，有提前发动产程的风险；若下次时间推进时仍未缓解，可能会进入产前阵痛`;
+    profile.cooldown = {
+      ...cooldown,
+      pregnancyPressureWarning: true,
+    };
+    profile.notify = {
+      ...notify,
+      secondly: warningText,
+    };
+    return { changed: false, warned: true };
+  }
+
   if (stage === '孕早期' || stage === '孕中期') {
     if (immune.miscarriage) {
       profile.notify = {
         ...notify,
         secondly: `${female}的胚胎受到保护，流产无效，胚胎依旧留着`,
       };
-      return false;
+      return { changed: false, warned: false };
     }
 
     clearPregnancyState(profile);
@@ -1488,7 +1512,7 @@ function applyPressureCrisis(profile, runtime, female) {
       firstly: `${female}进入了产后恢复`,
       secondly: `${female}因子宫压力过高而流产了`,
     };
-    return true;
+    return { changed: true, warned: false };
   }
 
   if ((stage === '孕晚期' || stage === '临产期') && immune.miscarriage) {
@@ -1496,7 +1520,7 @@ function applyPressureCrisis(profile, runtime, female) {
       ...notify,
       secondly: `${female}的胎儿受到保护，早产被阻止了`,
     };
-    return false;
+    return { changed: false, warned: false };
   }
 
   if ((stage === '孕晚期' || stage === '临产期' || stage === '逾期') && !cooldown.laborResistanceUsed) {
@@ -1510,10 +1534,10 @@ function applyPressureCrisis(profile, runtime, female) {
       firstly: `${female}进入了产前阵痛`,
       secondly: `${female}子宫压力达到临界值，开始出现规律宫缩`,
     };
-    return true;
+    return { changed: true, warned: false };
   }
 
-  return false;
+  return { changed: false, warned: false };
 }
 
 function processLabor(profile, tick, female) {
@@ -2240,12 +2264,13 @@ function applyTimeToCharacter(character, tick) {
       applyOverduePressure(profile, tick, next.name);
       applyHourlyPregnancyMetabolism(profile, tick);
     }
-    if (isHere && applyPressureCrisis(profile, next.runtime || {}, next.name)) {
+    const pressureCrisis = isHere ? applyPressureCrisis(profile, next.runtime || {}, next.name) : { changed: false, warned: false };
+    if (pressureCrisis.changed) {
       stage = String(base.stage || stage);
       days = clampNumber(base.days, 1, 9999, 1);
       stageChanged = true;
     }
-    if (isHere && maybeStartLabor(profile, tick, next.name)) {
+    if (isHere && !pressureCrisis.warned && maybeStartLabor(profile, tick, next.name)) {
       stage = String(base.stage || stage);
       days = clampNumber(base.days, 1, 9999, 1);
       stageChanged = true;
@@ -2341,6 +2366,7 @@ function applyTimeToCharacter(character, tick) {
     ...cooldown,
     orgasmOvulationUsed: shouldResetOrgasmOvulation(stage) ? false : Boolean(cooldown.orgasmOvulationUsed),
     laborResistanceUsed: tick.passedDays > 0 ? false : Boolean(cooldown.laborResistanceUsed),
+    pregnancyPressureWarning: shouldKeepPregnancyPressureWarning(profile) ? Boolean((profile.cooldown || cooldown).pregnancyPressureWarning) : false,
   };
   updateAdvisoryNotify(profile, next.name);
   delete profile.__runtimeRef;

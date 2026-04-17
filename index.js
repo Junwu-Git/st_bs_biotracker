@@ -36,6 +36,7 @@ const MODAL_ID = 'bs-biotracker-modal';
 const MENU_ITEM_ID = 'bs-biotracker-menu-item';
 const MENU_API_ID = 'bs-biotracker-menu-api';
 const MAINFLOW_PROMPT_KEY = `${MODULE_NAME}_mainflow`;
+const LAST_VIEW_STORAGE_KEY = `${MODULE_NAME}_last_view`;
 const TRACK_SUBPAGES = ['overview', 'description', 'pregnancy', 'experience', 'debug'];
 const MAX_PROGRESS_BAR_CAP = 200;
 const MODAL_EDGE_GAP = 24;
@@ -50,6 +51,7 @@ const APP_READY_HANDLER_KEY = '__bs_biotracker_app_ready_handler__';
 const CHAT_DELETED_HANDLER_KEY = '__bs_biotracker_chat_deleted_handler__';
 const GROUP_CHAT_DELETED_HANDLER_KEY = '__bs_biotracker_group_chat_deleted_handler__';
 const GROUP_CHAT_CREATED_HANDLER_KEY = '__bs_biotracker_group_chat_created_handler__';
+const PENDING_CHAT_INHERIT_KEY = '__bs_biotracker_pending_chat_inherit__';
 const VITALITY_CAPS = { 1: 50, 2: 75, 3: 100, 4: 125, 5: 150, 6: 175, 7: 200 };
 const PSY_STRESS_CAPS = { 1: 20, 2: 50, 3: 80, 4: 110, 5: 140, 6: 170, 7: 200 };
 
@@ -1672,9 +1674,22 @@ function setView(view) {
   if (!root) return;
   const next = ['home', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'time-lapse', 'race-encyclopedia'].includes(view) ? view : 'home';
   root.dataset.view = next;
+  try {
+    globalThis.localStorage?.setItem(LAST_VIEW_STORAGE_KEY, next);
+  } catch {}
   document.querySelectorAll('#bs-biotracker-settings .bs-bt-view').forEach((node) => node.classList.toggle('is-active', node.dataset.view === next));
   const title = document.getElementById('bs-bt-title');
   if (title) title.textContent = next === 'system' ? 'SYSTEM' : next === 'register' ? 'REGISTRY' : next === 'worldbook-filter' ? 'WORLDBOOK' : next === 'track-list' ? 'TRACK LIST' : next === 'track-char' ? 'TRACK CHAR' : next === 'full-state' ? 'FULL STATE' : next === 'time-lapse' ? 'TIME LAPSE' : next === 'race-encyclopedia' ? 'RACE DATA' : 'HOME';
+}
+
+function getLastPagerView() {
+  try {
+    const value = String(globalThis.localStorage?.getItem(LAST_VIEW_STORAGE_KEY) || '').trim();
+    if (['home', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'time-lapse', 'race-encyclopedia'].includes(value)) {
+      return value;
+    }
+  } catch {}
+  return 'home';
 }
 
 function applySettingsToForm(ctx) {
@@ -1709,7 +1724,7 @@ function applySettingsToForm(ctx) {
   renderFullStatePage(ctx);
   renderRaceEncyclopediaPage();
   refreshRegisterRacePalette();
-  setView('home');
+  setView(getLastPagerView());
 }
 
 const trackerDeps = { renderStatusPanel, updateClock };
@@ -1796,6 +1811,52 @@ function setModalPosition(modal, left, top) {
   modal.dataset.positioned = 'true';
 }
 
+function clampFloatingSpherePositionForElement(sphere, left, top) {
+  const width = sphere?.offsetWidth || 56;
+  const height = sphere?.offsetHeight || 56;
+  const maxLeft = Math.max(0, window.innerWidth - width);
+  const maxTop = Math.max(0, window.innerHeight - height);
+  return {
+    left: Math.max(0, Math.min(left, maxLeft)),
+    top: Math.max(0, Math.min(top, maxTop)),
+  };
+}
+
+function setFloatingSpherePositionForElement(sphere, left, top, persist = true) {
+  if (!sphere) return;
+  const next = clampFloatingSpherePositionForElement(sphere, left, top);
+  sphere.style.left = `${next.left}px`;
+  sphere.style.top = `${next.top}px`;
+  if (!persist) return;
+  try {
+    globalThis.localStorage?.setItem(FLOATING_SPHERE_POSITION_KEY, JSON.stringify(next));
+  } catch {}
+}
+
+function restoreFloatingSpherePositionForElement(sphere, persist = false) {
+  if (!sphere) return false;
+  try {
+    const raw = globalThis.localStorage?.getItem(FLOATING_SPHERE_POSITION_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const left = Number(parsed?.left);
+      const top = Number(parsed?.top);
+      if (Number.isFinite(left) && Number.isFinite(top)) {
+        setFloatingSpherePositionForElement(sphere, left, top, persist);
+        return true;
+      }
+    }
+  } catch {}
+
+  const currentLeft = Number.parseFloat(sphere.style.left);
+  const currentTop = Number.parseFloat(sphere.style.top);
+  if (Number.isFinite(currentLeft) && Number.isFinite(currentTop)) {
+    setFloatingSpherePositionForElement(sphere, currentLeft, currentTop, persist);
+    return true;
+  }
+  return false;
+}
+
 function ensureModalPosition(modal) {
   const dialog = modal?.querySelector('.bs-bt-modal__dialog');
   if (!modal || !dialog) return;
@@ -1861,40 +1922,11 @@ function initDraggableSphere(sphere, ctx) {
     const left = Number.parseFloat(sphere.style.left);
     const top = Number.parseFloat(sphere.style.top);
     if (!Number.isFinite(left) || !Number.isFinite(top)) return;
-    try {
-      globalThis.localStorage?.setItem(FLOATING_SPHERE_POSITION_KEY, JSON.stringify({ left, top }));
-    } catch {}
-  };
-
-  const clampFloatingSpherePosition = (left, top) => {
-    const maxLeft = Math.max(0, window.innerWidth - sphere.offsetWidth);
-    const maxTop = Math.max(0, window.innerHeight - sphere.offsetHeight);
-    return {
-      left: Math.max(0, Math.min(left, maxLeft)),
-      top: Math.max(0, Math.min(top, maxTop)),
-    };
+    setFloatingSpherePositionForElement(sphere, left, top);
   };
 
   const setFloatingSpherePosition = (left, top, persist = true) => {
-    const next = clampFloatingSpherePosition(left, top);
-    sphere.style.left = `${next.left}px`;
-    sphere.style.top = `${next.top}px`;
-    if (persist) persistFloatingSpherePosition();
-  };
-
-  const restoreFloatingSpherePosition = () => {
-    try {
-      const raw = globalThis.localStorage?.getItem(FLOATING_SPHERE_POSITION_KEY);
-      if (!raw) return false;
-      const parsed = JSON.parse(raw);
-      const left = Number(parsed?.left);
-      const top = Number(parsed?.top);
-      if (!Number.isFinite(left) || !Number.isFinite(top)) return false;
-      setFloatingSpherePosition(left, top, false);
-      return true;
-    } catch {
-      return false;
-    }
+    setFloatingSpherePositionForElement(sphere, left, top, persist);
   };
 
   const onPointerMove = (event) => {
@@ -1944,7 +1976,7 @@ function initDraggableSphere(sphere, ctx) {
     event.preventDefault();
   });
 
-  if (!restoreFloatingSpherePosition()) {
+  if (!restoreFloatingSpherePositionForElement(sphere)) {
     const defaultLeft = window.innerWidth - sphere.offsetWidth - MODAL_EDGE_GAP;
     const defaultTop = Math.max(MODAL_EDGE_GAP, Math.round(window.innerHeight * 0.4));
     setFloatingSpherePosition(defaultLeft, defaultTop, false);
@@ -2250,6 +2282,7 @@ async function ensureModal(ctx) {
       dialog.classList.remove('is-shrinking');
       closeModal();
 
+      restoreFloatingSpherePositionForElement(sphere);
       sphere.style.display = 'flex';
       sphere.classList.add('is-appearing');
       setTimeout(() => sphere.classList.remove('is-appearing'), 300);
@@ -2326,6 +2359,9 @@ function cleanupOrphanedChatStateByKey(ctx, chatKey, reason = 'chat_deleted') {
 function tryInheritForkedChatState(ctx, reason = 'chat_changed') {
   const settings = getSettings(ctx);
   const result = inheritChatStateFromMatchingChat(ctx, settings);
+  if (result?.inherited || !['empty_chat'].includes(result?.reason || '')) {
+    globalThis[PENDING_CHAT_INHERIT_KEY] = false;
+  }
   if (!result?.inherited) return result;
   saveSettings(ctx);
   renderStatusPanel(ctx);
@@ -2439,7 +2475,9 @@ async function bootstrap() {
         eventSource.off(event_types.CHAT_CHANGED, globalThis[CHAT_CHANGED_HANDLER_KEY]);
       }
       globalThis[CHAT_CHANGED_HANDLER_KEY] = () => {
-        tryInheritForkedChatState(ctx, 'chat_changed');
+        if (globalThis[PENDING_CHAT_INHERIT_KEY]) {
+          tryInheritForkedChatState(ctx, 'chat_changed');
+        }
         renderStatusPanel(ctx);
         updateMainFlowPrompt(ctx);
       };
@@ -2450,6 +2488,7 @@ async function bootstrap() {
         eventSource.off(event_types.CHAT_CREATED, globalThis[CHAT_CREATED_HANDLER_KEY]);
       }
       globalThis[CHAT_CREATED_HANDLER_KEY] = () => {
+        globalThis[PENDING_CHAT_INHERIT_KEY] = true;
         tryInheritForkedChatState(ctx, 'chat_created');
       };
       eventSource.on(event_types.CHAT_CREATED, globalThis[CHAT_CREATED_HANDLER_KEY]);
@@ -2479,11 +2518,11 @@ async function bootstrap() {
         eventSource.off(event_types.GROUP_CHAT_CREATED, globalThis[GROUP_CHAT_CREATED_HANDLER_KEY]);
       }
       globalThis[GROUP_CHAT_CREATED_HANDLER_KEY] = () => {
+        globalThis[PENDING_CHAT_INHERIT_KEY] = true;
         tryInheritForkedChatState(ctx, 'group_chat_created');
       };
       eventSource.on(event_types.GROUP_CHAT_CREATED, globalThis[GROUP_CHAT_CREATED_HANDLER_KEY]);
     }
-    tryInheritForkedChatState(ctx, 'bootstrap');
   } catch (error) {
     globalThis[BOOTSTRAP_RUNTIME_KEY] = false;
     throw error;

@@ -12,6 +12,7 @@ import { LABOR_STAGES, MENSTRUAL_STAGES, MENSTRUAL_STAGE_DAYS, PREGNANCY_STAGE_D
 export const MODULE_NAME = 'bs_biotracker';
 const MAX_CHAT_STATE_SNAPSHOTS = 48;
 const MAX_RAW_RESULT_TEXT_LENGTH = 1200;
+const MIN_CHAT_INHERIT_MESSAGE_COUNT = 2;
 
 export const THEME_CONFIG = {
   retro: {},
@@ -326,9 +327,10 @@ function sanitizeChildrenList(value) {
 
 function sanitizeProfilePatch(profilePatch) {
   if (!profilePatch || typeof profilePatch !== 'object' || Array.isArray(profilePatch)) return null;
-  const cooldown = sanitizeObjectPatch(profilePatch.cooldown, ['orgasmOvulationUsed', 'laborResistanceUsed'], {
+  const cooldown = sanitizeObjectPatch(profilePatch.cooldown, ['orgasmOvulationUsed', 'laborResistanceUsed', 'pregnancyPressureWarning'], {
     orgasmOvulationUsed: (value) => Boolean(value),
     laborResistanceUsed: (value) => Boolean(value),
+    pregnancyPressureWarning: (value) => Boolean(value),
   });
   const base = sanitizeObjectPatch(
     profilePatch.base,
@@ -500,6 +502,7 @@ export function createDefaultFemaleState(name = '') {
       cooldown: {
         orgasmOvulationUsed: false,
         laborResistanceUsed: false,
+        pregnancyPressureWarning: false,
       },
       base: {
         isHere: true,
@@ -660,6 +663,7 @@ export function inheritChatStateFromMatchingChat(ctx, settings) {
   const chatKey = getChatKey(ctx);
   const currentChat = Array.isArray(ctx?.chat) ? ctx.chat : [];
   if (!chatKey || currentChat.length === 0) return { inherited: false, reason: 'empty_chat' };
+  if (currentChat.length < MIN_CHAT_INHERIT_MESSAGE_COUNT) return { inherited: false, reason: 'chat_too_short' };
 
   if (!settings.chatStates || typeof settings.chatStates !== 'object') settings.chatStates = {};
   if (!settings.chatStates[chatKey]) settings.chatStates[chatKey] = createEmptyChatState();
@@ -676,7 +680,7 @@ export function inheritChatStateFromMatchingChat(ctx, settings) {
       const count = Number.isInteger(snapshot?.messageCount)
         ? snapshot.messageCount
         : (Array.isArray(snapshot?.messageSignatures) ? snapshot.messageSignatures.length : 0);
-      if (count <= 0 || count > currentSignatures.length) continue;
+      if (count <= 0 || count !== currentSignatures.length) continue;
       const signatures = Array.isArray(snapshot?.messageSignatures) ? snapshot.messageSignatures : [];
       if (!isMessageSignaturePrefixMatch(signatures, currentSignatures, count)) continue;
       if (!bestMatch || count > bestMatch.count || (count === bestMatch.count && (snapshot.createdAt || 0) > (bestMatch.snapshot?.createdAt || 0))) {

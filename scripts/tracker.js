@@ -116,6 +116,7 @@ function buildPromptFacingCharacterState(item) {
 
   delete profile.bio;
   delete profile.immune;
+  delete profile.cooldown;
   if (immune.metabolism) delete profile.metabolism;
 
   delete next.updatedAt;
