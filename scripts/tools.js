@@ -1,6 +1,9 @@
 import {
   cloneValue,
   derivePregnancyStageState,
+  getGestationEffectiveSpeed,
+  getGestationSpeciesSpeed,
+  getGestationModifierMultiplier,
   getChatState,
   getPsyStressInitByLevel,
   getSettings,
@@ -490,12 +493,11 @@ function createSimpleFetus(profile, sperm, cycleStage) {
 
 function updateFetalEnergyDrain(profile) {
   const fetuses = Array.isArray(profile?.pregnant?.fetuses) ? profile.pregnant.fetuses : [];
-  const pregnantDays = clampNumber(profile?.pregnant?.pregnantDays, 0, 9999, 0);
-  const gestationSpeed = clampNumber(profile?.bio?.gestationSpeed, 0.1, 20, 1.0);
+  const effectivePregnantDays = clampNumber(profile?.pregnant?.effectivePregnantDays, 0, 9999, 0);
   const motherBreedTolerance = clampNumber(profile?.bio?.breedTolerance, 0.1, 100, 1.0);
   profile.pregnant.fetalEnergyDrain = fetuses.reduce((sum, fetus) => {
     const weight = clampNumber(fetus?.weight, 0.5, 2.0, 1.0);
-    const ageInDays = pregnantDays * gestationSpeed * weight;
+    const ageInDays = effectivePregnantDays * weight;
     const fetalAgeWeeks = ageInDays / 7;
     const fetalLoad = fetalAgeWeeks / 40;
     const fetusEnergyDrain = fetalLoad / motherBreedTolerance;
@@ -524,7 +526,7 @@ function snapshotOriginalPregnancyBio(character) {
   if (runtime.originalPregnancyBio) return runtime.originalPregnancyBio;
   const bio = character?.profile?.bio || {};
   const snapshot = {
-    gestationSpeed: clampNumber(bio.gestationSpeed, 0.1, 20, 1.0),
+    gestationSpeciesSpeed: clampNumber(getGestationSpeciesSpeed(character?.profile), 0.1, 20, 1.0),
     birthDifficulty: clampNumber(bio.birthDifficulty, 0.1, 100, 1.0),
     breedTolerance: clampNumber(bio.breedTolerance, 0.1, 100, 1.0),
     recoveryDays: Math.max(1, Math.round(clampNumber(bio.recoveryDays, 1, 9999, 56))),
@@ -540,7 +542,7 @@ function applyPregnancyPhysiology(profile, runtime) {
   if (fetuses.length === 0) return false;
 
   const originalBio = runtime?.originalPregnancyBio || {
-    gestationSpeed: clampNumber(profile?.bio?.gestationSpeed, 0.1, 20, 1.0),
+    gestationSpeciesSpeed: clampNumber(getGestationSpeciesSpeed(profile), 0.1, 20, 1.0),
     birthDifficulty: clampNumber(profile?.bio?.birthDifficulty, 0.1, 100, 1.0),
     breedTolerance: clampNumber(profile?.bio?.breedTolerance, 0.1, 100, 1.0),
     recoveryDays: Math.max(1, Math.round(clampNumber(profile?.bio?.recoveryDays, 1, 9999, 56))),
@@ -558,7 +560,7 @@ function applyPregnancyPhysiology(profile, runtime) {
     const raceProfile = getMergedRacePhysiologyProfile(fetus?.race) || {};
 
     totalWeight += weight;
-    gestationAccumulator += weight * clampNumber(raceProfile.gestationSpeed, 0.1, 20, 1.0);
+    gestationAccumulator += weight * clampNumber(raceProfile.gestationSpeciesSpeed, 0.1, 20, 1.0);
     birthAccumulator += weight * clampNumber(raceProfile.birthDifficulty, 0.1, 100, 1.0);
     toleranceAccumulator += weight * clampNumber(raceProfile.breedTolerance, 0.1, 100, 1.0);
     recoveryAccumulator += weight * embryoModifiers.recoveryCoefficient;
@@ -570,18 +572,21 @@ function applyPregnancyPhysiology(profile, runtime) {
   const averageRecoveryCoefficient = recoveryAccumulator / Math.max(totalWeight, 0.5);
   const fetusCountModifier = 1 + ((fetuses.length - 1) * 0.08);
   const toleranceCountModifier = Math.max(0.6, 1 - ((fetuses.length - 1) * 0.04));
+  const gestationModifierMultiplier = getGestationModifierMultiplier(profile);
 
-  const gestationSpeed = clampNumber(originalBio.gestationSpeed * averageGestation, 0.1, 20, originalBio.gestationSpeed);
+  const gestationEffectiveSpeed = clampNumber(originalBio.gestationSpeciesSpeed * gestationModifierMultiplier * averageGestation, 0, 20, originalBio.gestationSpeciesSpeed);
+  const recoveryGestationSpeed = Math.max(0.1, gestationEffectiveSpeed > 0 ? gestationEffectiveSpeed : (originalBio.gestationSpeciesSpeed * averageGestation));
   const birthDifficulty = clampNumber(originalBio.birthDifficulty * averageBirth * fetusCountModifier, 0.1, 100, originalBio.birthDifficulty);
   const breedTolerance = clampNumber(originalBio.breedTolerance * averageTolerance * toleranceCountModifier, 0.1, 100, originalBio.breedTolerance);
   const recoveryDays = Math.max(
     1,
-    Math.round(clampNumber(averageRecoveryCoefficient, 0.1, 2.0, 0.2) * (280 / gestationSpeed) * (birthDifficulty / Math.max(breedTolerance, 0.1))),
+    Math.round(clampNumber(averageRecoveryCoefficient, 0.1, 2.0, 0.2) * (280 / recoveryGestationSpeed) * (birthDifficulty / Math.max(breedTolerance, 0.1))),
   );
 
   profile.bio = {
     ...(profile.bio || {}),
-    gestationSpeed,
+    gestationSpeciesSpeed: clampNumber(originalBio.gestationSpeciesSpeed, 0.1, 20, 1.0),
+    gestationEffectiveSpeed,
     birthDifficulty,
     breedTolerance,
     recoveryDays,
@@ -592,9 +597,11 @@ function applyPregnancyPhysiology(profile, runtime) {
 function restorePregnancyPhysiology(profile, runtime) {
   const originalBio = runtime?.originalPregnancyBio;
   if (!originalBio) return false;
+  const gestationModifierMultiplier = getGestationModifierMultiplier(profile);
   profile.bio = {
     ...(profile.bio || {}),
-    gestationSpeed: clampNumber(originalBio.gestationSpeed, 0.1, 20, 1.0),
+    gestationSpeciesSpeed: clampNumber(originalBio.gestationSpeciesSpeed, 0.1, 20, 1.0),
+    gestationEffectiveSpeed: clampNumber(originalBio.gestationSpeciesSpeed * gestationModifierMultiplier, 0, 20, 1.0),
     birthDifficulty: clampNumber(originalBio.birthDifficulty, 0.1, 100, 1.0),
     breedTolerance: clampNumber(originalBio.breedTolerance, 0.1, 100, 1.0),
     recoveryDays: Math.max(1, Math.round(clampNumber(originalBio.recoveryDays, 1, 9999, 56))),
@@ -680,7 +687,7 @@ function updateFetalPositions(profile, tick, female) {
   const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
   if (fetuses.length === 0) return;
 
-  const gestationSpeed = clampNumber(profile?.bio?.gestationSpeed, 0.1, 20, 1);
+  const gestationSpeed = clampNumber(getGestationEffectiveSpeed(profile), 0, 20, 1);
   const iterations = Math.max(0, tick.passedDays);
   if (iterations <= 0 || !PREGNANCY_STAGES.includes(stage)) return;
 
@@ -934,6 +941,7 @@ function processSimpleConception(profile, tick, notify, name) {
         base.days = 1;
         base.fertilizationDays = 0;
         pregnant.pregnantDays = 0;
+        pregnant.effectivePregnantDays = 0;
         pregnant.amnionDurability = 100;
         profile.experience = {
           ...(profile.experience || {}),
@@ -959,7 +967,7 @@ function clearPsychologyTransitionState(profile, stage, days) {
   if (!psychology || typeof psychology !== 'object') return;
   const pregnant = profile?.pregnant || {};
 
-  if (isTruePregnancyStage(stage) && clampNumber(pregnant.pregnantDays, 0, 9999, 0) > 7) {
+  if (isTruePregnancyStage(stage) && clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0) > 7) {
     psychology.mens = buildEmptyPsychologyGroup(PSY_MENS_FIELDS, PSY_MENS_BOOL_FIELDS);
   }
 
@@ -990,9 +998,8 @@ function shouldResetOrgasmOvulation(stage) {
 function getLibidoCap(profile) {
   const stage = profile?.base?.stage;
   if (!isTruePregnancyStage(stage)) return 100;
-  const pregnantDays = clampNumber(profile?.pregnant?.pregnantDays, 0, 9999, 0);
-  const gestationSpeed = clampNumber(profile?.bio?.gestationSpeed, 0.1, 20, 1);
-  const months = Math.floor((pregnantDays * gestationSpeed) / 28);
+  const effectivePregnantDays = clampNumber(profile?.pregnant?.effectivePregnantDays, 0, 9999, 0);
+  const months = Math.floor(effectivePregnantDays / 28);
   const progress = Math.max(0, Math.min(10, months)) / 10;
   return Math.round(100 + (150 - 100) * progress);
 }
@@ -1000,9 +1007,8 @@ function getLibidoCap(profile) {
 function getUterinePressureCap(profile) {
   const stage = profile?.base?.stage;
   if (!isTruePregnancyStage(stage)) return 50;
-  const pregnantDays = clampNumber(profile?.pregnant?.pregnantDays, 0, 9999, 0);
-  const gestationSpeed = clampNumber(profile?.bio?.gestationSpeed, 0.1, 20, 1);
-  const months = Math.floor((pregnantDays * gestationSpeed) / 28);
+  const effectivePregnantDays = clampNumber(profile?.pregnant?.effectivePregnantDays, 0, 9999, 0);
+  const months = Math.floor(effectivePregnantDays / 28);
   const progress = Math.max(0, Math.min(10, months)) / 10;
   return Math.round(50 + (150 - 50) * progress);
 }
@@ -1040,9 +1046,8 @@ function applyOverduePressure(profile, tick, female) {
 
   const pregnant = profile?.pregnant || {};
   const fetalEnergyDrain = clampNumber(pregnant.fetalEnergyDrain, 0, 9999, 0);
-  const gestationSpeed = clampNumber(profile?.bio?.gestationSpeed, 0.1, 20, 1);
-  const pregnantDays = clampNumber(pregnant.pregnantDays, 0, 9999, 0);
-  const overdueDays = Math.max(0, (pregnantDays * gestationSpeed) - 280);
+  const effectivePregnantDays = clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0);
+  const overdueDays = Math.max(0, effectivePregnantDays - 280);
   const overdueMultiplier = 1 + Math.max(0, overdueDays / 28);
   const pressureCap = getUterinePressureCap(profile);
   const nextPressure = clampNumber(base.uterinePressure + (fetalEnergyDrain * overdueMultiplier * tick.passedDays), 0, pressureCap, base.uterinePressure || 0);
@@ -1324,6 +1329,7 @@ function clearPregnancyState(profile) {
   base.fertilizationDays = 0;
   base.uterinePressure = 0;
   pregnant.pregnantDays = 0;
+  pregnant.effectivePregnantDays = 0;
   pregnant.laborHours = 0;
   pregnant.effectiveLaborHours = 0;
   pregnant.fetuses = [];
@@ -1942,9 +1948,7 @@ function applyLaborResistance(profile, female) {
   profile.pregnant = pregnant;
 
   if (failedRound === -1) {
-    const pregnantDays = clampNumber(pregnant.pregnantDays, 0, 9999, 0);
-    const gestationSpeed = clampNumber(profile?.bio?.gestationSpeed, 0.1, 20, 1);
-    const adjustedDays = pregnantDays * gestationSpeed;
+    const adjustedDays = clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0);
     let targetStage = '孕晚期';
     if (adjustedDays >= 280) {
       targetStage = '逾期';
@@ -2248,12 +2252,14 @@ function applyTimeToCharacter(character, tick) {
       stage = '假孕期';
       days = 1;
       pregnant.pregnantDays = 0;
+      pregnant.effectivePregnantDays = 0;
       notify.secondly = `${next.name}因进入月经期时心理压力偏高、性欲偏高且近期有性接触记录，出现了假孕症状`;
     }
   } else if (PREGNANCY_STAGES.includes(stage)) {
     pregnant.pregnantDays = clampNumber(pregnant.pregnantDays, 0, 9999, 0) + deltaDays;
+    pregnant.effectivePregnantDays = clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0) + (deltaDays * clampNumber(getGestationEffectiveSpeed({ ...profile, bio }), 0, 20, 1));
     updateDerivedTypeProgress(profile, tick);
-    const derived = derivePregnancyStageState(pregnant.pregnantDays, bio.gestationSpeed);
+    const derived = derivePregnancyStageState(pregnant.effectivePregnantDays, 1);
     stage = derived.stage;
     days = derived.days;
     stageChanged = stage !== oldStage;
@@ -2283,6 +2289,7 @@ function applyTimeToCharacter(character, tick) {
       days = 1;
       stageChanged = true;
       pregnant.pregnantDays = 0;
+      pregnant.effectivePregnantDays = 0;
       pregnant.laborHours = 0;
       pregnant.effectiveLaborHours = 0;
       pregnant.fetuses = [];
@@ -2292,12 +2299,13 @@ function applyTimeToCharacter(character, tick) {
     }
   } else if (stage === '假孕期') {
     pregnant.pregnantDays = clampNumber(pregnant.pregnantDays, 0, 9999, 0) + deltaDays;
-    const pseudoLimit = Math.max(1, 84 * clampNumber(bio.gestationSpeed, 0.1, 20, 1));
+    const pseudoLimit = Math.max(1, 84 * clampNumber(getGestationEffectiveSpeed({ ...profile, bio }), 0.1, 20, 1));
     if (pregnant.pregnantDays >= pseudoLimit) {
       stage = '月经期';
       days = 1;
       stageChanged = true;
       pregnant.pregnantDays = 0;
+      pregnant.effectivePregnantDays = 0;
     }
   } else if (stage === '产前阵痛' || LABOR_STAGES.includes(stage)) {
     if (isHere) applyHourlyPregnancyMetabolism(profile, tick);
@@ -2335,8 +2343,8 @@ function applyTimeToCharacter(character, tick) {
     }));
   }
 
-  if (Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0 && clampNumber(pregnant.pregnantDays, 0, 9999, 0) > 0 && !isPregnancyStage(stage)) {
-    const derived = derivePregnancyStageState(pregnant.pregnantDays, bio.gestationSpeed);
+  if (Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0 && clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0) > 0 && !isPregnancyStage(stage)) {
+    const derived = derivePregnancyStageState(pregnant.effectivePregnantDays, 1);
     stage = derived.stage;
     days = derived.days;
     stageChanged = stage !== oldStage;
@@ -2676,7 +2684,8 @@ function applySetMenstrualPhases(chatState, args) {
   const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
   const hasConceptionState = fetuses.length > 0
     || clampNumber(base.fertilizationDays, 0, 9999, 0) > 0
-    || clampNumber(pregnant.pregnantDays, 0, 9999, 0) > 0;
+    || clampNumber(pregnant.pregnantDays, 0, 9999, 0) > 0
+    || clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0) > 0;
   const hasProtectedPregnancyState = PREGNANCY_STAGES.includes(currentStage)
     || currentStage === '产前阵痛'
     || LABOR_STAGES.includes(currentStage);
@@ -2704,6 +2713,7 @@ function applySetMenstrualPhases(chatState, args) {
 
   if (stage === '假孕期') {
     pregnant.pregnantDays = 0;
+    pregnant.effectivePregnantDays = 0;
   }
 
   profile.base = base;
@@ -2799,15 +2809,17 @@ function applyDebugInjectPregnancy(chatState, args) {
   pregnant.effectiveLaborHours = 0;
   pregnant.amnionDurability = equivalentDays === 0 ? 0 : 100;
   pregnant.pregnantDays = equivalentDays === 0 ? 0 : 1;
+  pregnant.effectivePregnantDays = equivalentDays === 0 ? 0 : equivalentDays;
 
   profile.base = base;
   if (equivalentDays === 0) {
     base.fertilizationDays = 0;
   } else {
     applyPregnancyPhysiology(profile, next.runtime || {});
-    const actualGestationSpeed = clampNumber(profile?.bio?.gestationSpeed, 0.1, 20, 1);
-    pregnant.pregnantDays = Math.max(1, Math.round(equivalentDays / actualGestationSpeed));
-    const derived = derivePregnancyStageState(pregnant.pregnantDays, actualGestationSpeed);
+    const actualGestationSpeed = clampNumber(getGestationEffectiveSpeed(profile), 0, 20, 1);
+    pregnant.pregnantDays = actualGestationSpeed > 0 ? Math.max(1, Math.round(equivalentDays / actualGestationSpeed)) : 1;
+    pregnant.effectivePregnantDays = Math.max(1, equivalentDays);
+    const derived = derivePregnancyStageState(pregnant.effectivePregnantDays, 1);
     base.stage = derived.stage;
     base.days = derived.days;
     base.fertilizationDays = 0;
@@ -2884,7 +2896,7 @@ function applyDebugClearContainers(chatState, args) {
     return { applied: false, message: `bsDebugClearContainers skipped for ${female}: no fetuses or conception state.` };
   }
 
-  const implantedPregnancy = isPregnancyStage(stage) || clampNumber(pregnant.pregnantDays, 0, 9999, 0) > 0;
+  const implantedPregnancy = isPregnancyStage(stage) || clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0) > 0;
   clearPregnancyState(profile);
   restorePregnancyPhysiology(profile, next.runtime || {});
   if (implantedPregnancy) {
@@ -2911,6 +2923,65 @@ function applyDebugClearContainers(chatState, args) {
   return { applied: true, message: `bsDebugClearContainers cleared pre-implantation conception for ${female}.` };
 }
 
+function applyDebugSetGestationModifier(chatState, args) {
+  const female = String(args?.female || '').trim();
+  const character = chatState.characters?.[female];
+  const clear = Boolean(args?.clear);
+  if (!female || !character) return { applied: false, message: `bsDebugSetGestationModifier skipped: unknown character ${female || '(empty)'}.` };
+
+  const next = cloneValue(character);
+  const profile = next.profile || {};
+  const bio = profile.bio || {};
+  const notify = profile.notify || {};
+  const stage = String(profile?.base?.stage || '');
+  const fetuses = Array.isArray(profile?.pregnant?.fetuses) ? profile.pregnant.fetuses : [];
+  const runtimeBaseSpeed = Number(next.runtime?.originalPregnancyBio?.gestationSpeciesSpeed);
+  const baseSpeed = clampNumber(
+    Number.isFinite(runtimeBaseSpeed) && runtimeBaseSpeed > 0 ? runtimeBaseSpeed : getGestationSpeciesSpeed(profile),
+    0.1,
+    20,
+    1.0,
+  );
+
+  bio.gestationSpeciesSpeed = baseSpeed;
+  if (clear) {
+    bio.gestationModifierMultiplier = 1.0;
+    bio.gestationModifierName = '';
+    bio.gestationModifierDescription = '';
+  } else {
+    const name = String(args?.name || '').trim();
+    const description = String(args?.description || '').trim();
+    const multiplier = clampNumber(args?.multiplier, 0, 20, 1.0);
+    if (!name) return { applied: false, message: `bsDebugSetGestationModifier skipped for ${female}: empty name.` };
+    bio.gestationModifierMultiplier = multiplier;
+    bio.gestationModifierName = name;
+    bio.gestationModifierDescription = description;
+  }
+
+  bio.gestationEffectiveSpeed = clampNumber(getGestationEffectiveSpeed({ ...profile, bio }), 0, 20, baseSpeed);
+  profile.bio = bio;
+
+  if (fetuses.length > 0 && isPregnancyStage(stage)) {
+    applyPregnancyPhysiology(profile, next.runtime || {});
+  }
+
+  profile.notify = {
+    ...notify,
+    firstly: clear
+      ? `${female}失去了妊娠变速效果`
+      : `${female}获得了妊娠变速效果「${bio.gestationModifierName}」x${Number(bio.gestationModifierMultiplier || 0).toFixed(2)}`,
+    secondly: clear
+      ? `${female}的妊娠变速效果已被清除`
+      : Number(bio.gestationModifierMultiplier || 0) === 0
+        ? `${female}的胎儿发育已被冻结`
+        : `${female}当前妊娠变速倍率为 x${Number(bio.gestationModifierMultiplier || 0).toFixed(2)}`,
+  };
+
+  next.profile = profile;
+  chatState.characters[female] = syncCharacterStageFromProfile(next);
+  return { applied: true, message: `bsDebugSetGestationModifier applied to ${female}.` };
+}
+
 export function applyToolCall(chatState, call) {
   const name = String(call?.name || '').trim();
   const args = call?.arguments && typeof call.arguments === 'object' ? call.arguments : {};
@@ -2931,6 +3002,7 @@ export function applyToolCall(chatState, call) {
   if (name === 'bsMaternalFetalInteraction') return applyMaternalFetalInteraction(chatState, args);
   if (name === 'bsDebugInjectPregnancy') return applyDebugInjectPregnancy(chatState, args);
   if (name === 'bsDebugClearContainers') return applyDebugClearContainers(chatState, args);
+  if (name === 'bsDebugSetGestationModifier') return applyDebugSetGestationModifier(chatState, args);
   return { applied: false, message: `Unsupported tool: ${name}` };
 }
 

@@ -12,10 +12,21 @@ function formatCycleDays(ratio) {
   return `${days}天左右`;
 }
 
+function formatYearMonthApprox(days) {
+  const safeDays = Math.max(0, Math.round(Number(days) || 0));
+  const totalMonths = Math.max(1, Math.round(safeDays / 30.4));
+  const years = Math.floor(totalMonths / 12);
+  const months = totalMonths % 12;
+  if (years <= 0) return `${totalMonths}个月`;
+  if (months <= 0) return `${years}年`;
+  return `${years}年${months}个月`;
+}
+
 function formatGestation(value) {
   const speed = Number(value || 1);
   if (!Number.isFinite(speed) || speed <= 0) return '未知';
   const days = Math.round(280 / speed);
+  if (days >= 365) return `${days}天左右（约${formatYearMonthApprox(days)}）`;
   const weeks = (days / 7).toFixed(1);
   return `${days}天左右（约${weeks}周）`;
 }
@@ -23,6 +34,7 @@ function formatGestation(value) {
 function formatRecoveryDays(value) {
   const days = Math.round(Number(value || 0));
   if (!Number.isFinite(days)) return '未知';
+  if (days >= 365) return `${days}天左右（约${formatYearMonthApprox(days)}）`;
   if (days >= 14) return `${days}天左右（约${formatNumber(days / 7, 1)}周）`;
   return `${days}天左右`;
 }
@@ -44,8 +56,10 @@ function getImpregnationDifficultyText(value) {
   if (num <= 0.33) return '极易受精，受孕门槛很低。';
   if (num <= 0.75) return '较易受精，成功受孕概率偏高。';
   if (num <= 1.25) return '受精难度中等，接近常规物种标准。';
-  if (num <= 3) return '受精难度偏高，需要更合适的条件才容易着床。';
-  return '受精难度极高，成功受孕属于相当困难的情况。';
+  if (num <= 2.5) return '受精难度偏高，需要更合适的条件才容易着床。';
+  if (num <= 4) return '受精难度很高，同族内尚可尝试，跨物种受孕会明显变难。';
+  if (num <= 6) return '受精难度极高，基本只在同族或高度相容的对象之间较有机会成功。';
+  return '受精难度近乎封闭，基本限制同族；跨物种受孕通常可视为极难甚至接近不可能。';
 }
 
 function getProlificacyText(orgasmOvulationAmount, identicalProbability) {
@@ -87,7 +101,7 @@ function getProlificacyText(orgasmOvulationAmount, identicalProbability) {
   else if (safeIdentical <= 50) identicalText = '同卵分裂倾向明显，受精后继续分裂形成同卵多胎并不罕见。';
   else identicalText = '同卵分裂倾向很高，单一受精卵扩增成复数胎儿的概率相当显著。';
 
-  return `${overall}（多胎评分 ${formatNumber(twinScore)}）。${summary} ${ovulationText} ${identicalText}`;
+  return `${overall}。${summary} ${ovulationText} ${identicalText}`;
 }
 
 function getGenderRatioText(value) {
@@ -161,10 +175,10 @@ function buildSingleRacePhysiologyBlock(race) {
   return [
     `【${race}】`,
     `- 经期长度: ${formatCycleDays(profile.menstrualLengthRatio)}`,
-    `- 妊娠长度: ${formatGestation(profile.gestationSpeed)}`,
+    `- 妊娠长度: ${formatGestation(profile.gestationSpeciesSpeed)}`,
     `- 产后恢复时间: ${formatRecoveryDays(profile.recoveryDays)}`,
-    `- 分娩难度: ${getBirthDifficultyText(profile.birthDifficulty)} (系数 ${formatNumber(profile.birthDifficulty)})`,
-    `- 受精难度: ${getImpregnationDifficultyText(profile.impregnationDifficulty)} (系数 ${formatNumber(profile.impregnationDifficulty)})`,
+    `- 分娩难度: ${getBirthDifficultyText(profile.birthDifficulty)}`,
+    `- 受精难度: ${getImpregnationDifficultyText(profile.impregnationDifficulty)}`,
     `- 多产性: ${getProlificacyText(profile.orgasmOvulationAmount, profile.identicalProbability)}；额外排卵倾向 ${formatNumber(profile.orgasmOvulationAmount)}，同卵多胎概率 ${formatNumber(profile.identicalProbability)}%`,
     `- 性别比: ${getGenderRatioText(profile.genderRatio)}`,
   ].join('\n');
@@ -181,10 +195,10 @@ function buildHybridAverageBlock(race) {
     '【混血平均参考】',
     '- 以下是系统层面的平均参考值，仅供综合判断；不要用它覆盖各族原始特征。',
     `- 平均经期长度: ${formatCycleDays(merged.menstrualLengthRatio)}`,
-    `- 平均妊娠长度: ${formatGestation(merged.gestationSpeed)}`,
+    `- 平均妊娠长度: ${formatGestation(merged.gestationSpeciesSpeed)}`,
     `- 平均产后恢复时间: ${formatRecoveryDays(merged.recoveryDays)}`,
-    `- 平均分娩难度: ${getBirthDifficultyText(merged.birthDifficulty)} (系数 ${formatNumber(merged.birthDifficulty)})`,
-    `- 平均受精难度: ${getImpregnationDifficultyText(merged.impregnationDifficulty)} (系数 ${formatNumber(merged.impregnationDifficulty)})`,
+    `- 平均分娩难度: ${getBirthDifficultyText(merged.birthDifficulty)}`,
+    `- 平均受精难度: ${getImpregnationDifficultyText(merged.impregnationDifficulty)}`,
     `- 平均多产性参考: ${getProlificacyText(merged.orgasmOvulationAmount, merged.identicalProbability)}；额外排卵倾向 ${formatNumber(merged.orgasmOvulationAmount)}，同卵多胎概率 ${formatNumber(merged.identicalProbability)}%`,
     `- 平均性别比参考: ${getGenderRatioText(merged.genderRatio)}`,
   ].join('\n');
@@ -295,7 +309,7 @@ function buildPregnancyShiftBlock(characterState) {
     const weight = Math.max(0.5, Math.min(2.0, Number(fetus?.weight) || 1.0));
     const raceProfile = getMergedRacePhysiologyProfile(fetus?.race) || {};
     totalWeight += weight;
-    gestationAccumulator += weight * Math.max(0.1, Math.min(20, Number(raceProfile?.gestationSpeed) || 1.0));
+    gestationAccumulator += weight * Math.max(0.1, Math.min(20, Number(raceProfile?.gestationSpeciesSpeed) || 1.0));
     birthAccumulator += weight * Math.max(0.1, Math.min(100, Number(raceProfile?.birthDifficulty) || 1.0));
     toleranceAccumulator += weight * Math.max(0.1, Math.min(100, Number(raceProfile?.breedTolerance) || 1.0));
     recoveryAccumulator += weight * getEmbryoRecoveryCoefficient(fetus?.embryoType);
@@ -309,21 +323,21 @@ function buildPregnancyShiftBlock(characterState) {
   const fetusCountModifier = 1 + ((fetuses.length - 1) * 0.08);
   const toleranceCountModifier = Math.max(0.6, 1 - ((fetuses.length - 1) * 0.04));
 
-  const baseGestationSpeed = Math.max(0.1, Math.min(20, Number(motherProfile.gestationSpeed) || 1.0));
+  const baseGestationSpeciesSpeed = Math.max(0.1, Math.min(20, Number(motherProfile.gestationSpeciesSpeed) || 1.0));
   const baseBirthDifficulty = Math.max(0.1, Math.min(100, Number(motherProfile.birthDifficulty) || 1.0));
   const baseBreedTolerance = Math.max(0.1, Math.min(100, Number(motherProfile.breedTolerance) || 1.0));
   const baseRecoveryDays = Math.max(1, Math.round(Number(motherProfile.recoveryDays) || 56));
 
-  const shiftedGestationSpeed = Math.max(0.1, Math.min(20, baseGestationSpeed * averageGestation));
+  const shiftedGestationSpeciesSpeed = Math.max(0.1, Math.min(20, baseGestationSpeciesSpeed * averageGestation));
   const shiftedBirthDifficulty = Math.max(0.1, Math.min(100, baseBirthDifficulty * averageBirth * fetusCountModifier));
   const shiftedBreedTolerance = Math.max(0.1, Math.min(100, baseBreedTolerance * averageTolerance * toleranceCountModifier));
   const shiftedRecoveryDays = Math.max(
     1,
-    Math.round(Math.max(0.1, Math.min(2.0, averageRecoveryCoefficient)) * (280 / shiftedGestationSpeed) * (shiftedBirthDifficulty / Math.max(shiftedBreedTolerance, 0.1))),
+    Math.round(Math.max(0.1, Math.min(2.0, averageRecoveryCoefficient)) * (280 / shiftedGestationSpeciesSpeed) * (shiftedBirthDifficulty / Math.max(shiftedBreedTolerance, 0.1))),
   );
 
-  const gestationBaseDays = 280 / baseGestationSpeed;
-  const gestationShiftedDays = 280 / shiftedGestationSpeed;
+  const gestationBaseDays = 280 / baseGestationSpeciesSpeed;
+  const gestationShiftedDays = 280 / shiftedGestationSpeciesSpeed;
   const hasGestationShift = Math.abs(gestationShiftedDays - gestationBaseDays) >= 0.0001;
   const hasBirthShift = Math.abs(shiftedBirthDifficulty - baseBirthDifficulty) >= 0.0001;
   const hasRecoveryShift = Math.abs(shiftedRecoveryDays - baseRecoveryDays) >= 1;

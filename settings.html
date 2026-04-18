@@ -76,7 +76,7 @@
 
             <div class="settings_section flex-container alignitemscenter">
               <input type="checkbox" id="bs-bt-use-st-preset" />
-              <label for="bs-bt-use-st-preset">套用 ST 当前预设参数</label>
+              <label for="bs-bt-use-st-preset">套用 ST 当前预设</label>
             </div>
 
             <div class="settings_section">
@@ -220,15 +220,27 @@
 
         <section id="bs-bt-view-worldbook-filter" class="bs-bt-view" data-view="worldbook-filter">
           <div class="bs-bt-panel">
-            <textarea id="bs-bt-tracker-worldbook-exclude-names" hidden></textarea>
+            <div class="settings_section">
+              <label for="bs-bt-tracker-worldbook-mode">传输模式</label>
+              <select id="bs-bt-tracker-worldbook-mode" class="text_pole">
+                <option value="exclude">正常模式：传输启用条目，可手动排除</option>
+                <option value="allowlist_all">参考模式：默认全排除，仅传输手动指定条目（可包含 disabled）</option>
+              </select>
+            </div>
 
             <div class="settings_section bs-bt-action-row">
-              <button id="bs-bt-worldbook-clear-all" class="menu_button" type="button">取消所有排除條目</button>
+              <button id="bs-bt-worldbook-clear-all" class="menu_button" type="button">清空当前文本框</button>
             </div>
 
             <div class="settings_section">
               <div class="bs-bt-status-title">可排除条目</div>
+              <input id="bs-bt-worldbook-entry-search" class="text_pole" type="text" placeholder="搜索条目名，缩小勾选范围" style="margin-bottom:8px;" />
               <div id="bs-bt-worldbook-entry-list" class="bs-bt-theme-list"></div>
+            </div>
+
+            <div class="settings_section">
+              <label for="bs-bt-worldbook-filter-input" id="bs-bt-worldbook-filter-input-label">可排除</label>
+              <textarea id="bs-bt-worldbook-filter-input" class="text_pole bs-bt-textarea" rows="6" placeholder="每行一个条目名。正常模式下，这些条目会从 worldbook 传输中排除。"></textarea>
             </div>
           </div>
         </section>
@@ -351,6 +363,18 @@
             <div class="settings_section">
               <div class="bs-bt-status-title">种族资料</div>
               <pre id="bs-bt-race-output" class="bs-bt-status-box">请选择种族查看资料。</pre>
+            </div>
+
+            <div class="settings_section">
+              <label for="bs-bt-derived-select">选择衍生</label>
+              <select id="bs-bt-derived-select" class="text_pole">
+                <option value="">请选择衍生</option>
+              </select>
+            </div>
+
+            <div class="settings_section">
+              <div class="bs-bt-status-title">衍生资料</div>
+              <pre id="bs-bt-derived-output" class="bs-bt-status-box">请选择衍生查看 Flux 资料。</pre>
             </div>
           </div>
         </section>

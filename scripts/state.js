@@ -61,7 +61,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   pollMs: 1800,
   contextSize: 12,
   targetNames: '',
+  trackerWorldbookMode: 'exclude',
   trackerWorldbookExcludeNames: '',
+  trackerWorldbookIncludeNames: '',
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   registryCustomNotes: '',
   registryDescriptionGuides: DEFAULT_REGISTRY_DESCRIPTION_GUIDES,
@@ -208,6 +210,29 @@ export function derivePregnancyStageState(pregnantDays, gestationSpeed = 1) {
   return { stage, days: currentStageDays };
 }
 
+export function getGestationSpeciesSpeed(profile) {
+  const baseSpeed = Number(profile?.bio?.gestationSpeciesSpeed);
+  if (Number.isFinite(baseSpeed) && baseSpeed > 0) return Math.max(0.1, Math.min(20, baseSpeed));
+  return 1;
+}
+
+export function getGestationModifierMultiplier(profile) {
+  const multiplier = Number(profile?.bio?.gestationModifierMultiplier);
+  if (Number.isFinite(multiplier) && multiplier >= 0) return Math.max(0, Math.min(20, multiplier));
+  return 1;
+}
+
+export function getGestationEffectiveSpeed(profile) {
+  const hasSpeciesSpeed = Number.isFinite(Number(profile?.bio?.gestationSpeciesSpeed));
+  const hasModifierMultiplier = Number.isFinite(Number(profile?.bio?.gestationModifierMultiplier));
+  if (hasSpeciesSpeed || hasModifierMultiplier) {
+    return Math.max(0, Math.min(20, getGestationSpeciesSpeed(profile) * getGestationModifierMultiplier(profile)));
+  }
+  const effectiveSpeed = Number(profile?.bio?.gestationEffectiveSpeed);
+  if (Number.isFinite(effectiveSpeed) && effectiveSpeed >= 0) return Math.max(0, Math.min(20, effectiveSpeed));
+  return 1;
+}
+
 export function syncCharacterStageFromProfile(characterState) {
   const next = characterState;
   const profile = next?.profile || {};
@@ -226,7 +251,7 @@ export function syncCharacterStageFromProfile(characterState) {
       return next;
     }
 
-    const derived = derivePregnancyStageState(pregnant.pregnantDays, bio.gestationSpeed);
+    const derived = derivePregnancyStageState(pregnant.effectivePregnantDays, 1);
     next.profile.base = {
       ...base,
       stage: derived.stage,
@@ -373,9 +398,10 @@ function sanitizeProfilePatch(profilePatch) {
   );
   const pregnant = sanitizeObjectPatch(
     profilePatch.pregnant,
-    ['pregnantDays', 'laborHours', 'effectiveLaborHours', 'fetusesCount', 'fetalEnergyDrain', 'fetuses'],
+    ['pregnantDays', 'effectivePregnantDays', 'laborHours', 'effectiveLaborHours', 'fetusesCount', 'fetalEnergyDrain', 'fetuses'],
     {
       pregnantDays: (value) => sanitizeInteger(value, { min: 0, max: 9999 }),
+      effectivePregnantDays: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
       laborHours: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
       effectiveLaborHours: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
       fetusesCount: (value) => sanitizeInteger(value, { min: 0, max: 99 }),
@@ -411,7 +437,11 @@ function sanitizeProfilePatch(profilePatch) {
     profilePatch.bio,
     [
       'menstrualLengthRatio',
-      'gestationSpeed',
+      'gestationSpeciesSpeed',
+      'gestationEffectiveSpeed',
+      'gestationModifierMultiplier',
+      'gestationModifierName',
+      'gestationModifierDescription',
       'birthDifficulty',
       'breedTolerance',
       'impregnationDifficulty',
@@ -421,7 +451,11 @@ function sanitizeProfilePatch(profilePatch) {
     ],
     {
       menstrualLengthRatio: (value) => sanitizeNumber(value, { min: 0.1, max: 20 }),
-      gestationSpeed: (value) => sanitizeNumber(value, { min: 0.1, max: 20 }),
+      gestationSpeciesSpeed: (value) => sanitizeNumber(value, { min: 0.1, max: 20 }),
+      gestationEffectiveSpeed: (value) => sanitizeNumber(value, { min: 0.1, max: 20 }),
+      gestationModifierMultiplier: (value) => sanitizeNumber(value, { min: 0, max: 20 }),
+      gestationModifierName: sanitizeString,
+      gestationModifierDescription: sanitizeString,
       birthDifficulty: (value) => sanitizeNumber(value, { min: 0, max: 100 }),
       breedTolerance: (value) => sanitizeNumber(value, { min: 0, max: 100 }),
       impregnationDifficulty: (value) => sanitizeNumber(value, { min: 0, max: 100 }),
@@ -524,6 +558,7 @@ export function createDefaultFemaleState(name = '') {
       },
       pregnant: {
         pregnantDays: 0,
+        effectivePregnantDays: 0,
         laborHours: 0,
         effectiveLaborHours: 0,
         fetusesCount: 0,
@@ -548,7 +583,11 @@ export function createDefaultFemaleState(name = '') {
       children: [],
       bio: {
         menstrualLengthRatio: 1.0,
-        gestationSpeed: 1.0,
+        gestationSpeciesSpeed: 1.0,
+        gestationEffectiveSpeed: 1.0,
+        gestationModifierMultiplier: 1.0,
+        gestationModifierName: '',
+        gestationModifierDescription: '',
         birthDifficulty: 1.0,
         breedTolerance: 1.0,
         impregnationDifficulty: 1.0,
@@ -915,7 +954,16 @@ export function buildSignature(ctx, endIndexExclusive = null) {
   const end = Number.isInteger(endIndexExclusive) ? Math.max(0, Math.min(chat.length, endIndexExclusive)) : chat.length;
   const last = chat[end - 1];
   if (!last) return '';
-  return [getChatKey(ctx), end, last.is_user ? 'user' : 'assistant', String(last.name || ''), String(last.mes || '').slice(0, 300)].join('|');
+  const content = String(last.mes || '');
+  return [
+    getChatKey(ctx),
+    end,
+    last.is_user ? 'user' : 'assistant',
+    String(last.name || ''),
+    content.length,
+    content.slice(0, 180),
+    content.slice(-120),
+  ].join('|');
 }
 
 export function shouldTriggerForMessage(settings, lastMessage) {

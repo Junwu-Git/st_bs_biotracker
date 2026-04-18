@@ -165,7 +165,7 @@ export const DERIVED_TYPE_FLUX_PROFILES = Object.freeze({
 export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   "人类": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 1,
+    "gestationSpeciesSpeed": 1,
     "birthDifficulty": 1,
     "breedTolerance": 1,
     "impregnationDifficulty": 1,
@@ -175,7 +175,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "精灵": {
     "menstrualLengthRatio": 3,
-    "gestationSpeed": 0.5,
+    "gestationSpeciesSpeed": 0.5,
     "birthDifficulty": 0.8,
     "breedTolerance": 0.33,
     "impregnationDifficulty": 3,
@@ -185,7 +185,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "兽耳族": {
     "menstrualLengthRatio": 0.75,
-    "gestationSpeed": 1.6,
+    "gestationSpeciesSpeed": 1.6,
     "birthDifficulty": 0.8,
     "breedTolerance": 3,
     "impregnationDifficulty": 0.5,
@@ -195,7 +195,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "袋兽族": {
     "menstrualLengthRatio": 0.75,
-    "gestationSpeed": 5,
+    "gestationSpeciesSpeed": 5,
     "birthDifficulty": 0.3,
     "breedTolerance": 0.01,
     "impregnationDifficulty": 1,
@@ -205,7 +205,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "哥布林": {
     "menstrualLengthRatio": 0.5,
-    "gestationSpeed": 2.5,
+    "gestationSpeciesSpeed": 2.5,
     "birthDifficulty": 2,
     "breedTolerance": 1,
     "impregnationDifficulty": 0.2,
@@ -215,7 +215,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "兽人": {
     "menstrualLengthRatio": 0.75,
-    "gestationSpeed": 1.25,
+    "gestationSpeciesSpeed": 1.25,
     "birthDifficulty": 1,
     "breedTolerance": 2,
     "impregnationDifficulty": 0.8,
@@ -225,7 +225,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "矮人": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 1,
+    "gestationSpeciesSpeed": 1,
     "birthDifficulty": 2,
     "breedTolerance": 1,
     "impregnationDifficulty": 1,
@@ -235,7 +235,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "半身人": {
     "menstrualLengthRatio": 0.75,
-    "gestationSpeed": 1.25,
+    "gestationSpeciesSpeed": 1.25,
     "birthDifficulty": 1.5,
     "breedTolerance": 2,
     "impregnationDifficulty": 0.8,
@@ -245,7 +245,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "魅魔": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 1,
+    "gestationSpeciesSpeed": 1,
     "birthDifficulty": 0.5,
     "breedTolerance": 3,
     "impregnationDifficulty": 1,
@@ -255,7 +255,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "半人马": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 0.8,
+    "gestationSpeciesSpeed": 0.8,
     "birthDifficulty": 1.5,
     "breedTolerance": 0.5,
     "impregnationDifficulty": 2,
@@ -265,7 +265,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "巨人": {
     "menstrualLengthRatio": 2,
-    "gestationSpeed": 0.4,
+    "gestationSpeciesSpeed": 0.4,
     "birthDifficulty": 3,
     "breedTolerance": 1,
     "impregnationDifficulty": 4,
@@ -275,7 +275,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "雪族": {
     "menstrualLengthRatio": 1.25,
-    "gestationSpeed": 1,
+    "gestationSpeciesSpeed": 1,
     "birthDifficulty": 1,
     "breedTolerance": 0.8,
     "impregnationDifficulty": 0.75,
@@ -285,7 +285,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "夜叉": {
     "menstrualLengthRatio": 0.75,
-    "gestationSpeed": 0.5,
+    "gestationSpeciesSpeed": 0.5,
     "birthDifficulty": 4,
     "breedTolerance": 0.8,
     "impregnationDifficulty": 0.5,
@@ -295,7 +295,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "妖狐": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 0.8,
+    "gestationSpeciesSpeed": 0.8,
     "birthDifficulty": 1.5,
     "breedTolerance": 0.5,
     "impregnationDifficulty": 3,
@@ -305,7 +305,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "貓又": {
     "menstrualLengthRatio": 0.75,
-    "gestationSpeed": 1,
+    "gestationSpeciesSpeed": 1,
     "birthDifficulty": 1,
     "breedTolerance": 1.5,
     "impregnationDifficulty": 2.5,
@@ -315,7 +315,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "鸟人": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 2,
+    "gestationSpeciesSpeed": 2,
     "birthDifficulty": 0.33,
     "breedTolerance": 1,
     "impregnationDifficulty": 0.5,
@@ -325,7 +325,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "植物亚人": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 2.5,
+    "gestationSpeciesSpeed": 2.5,
     "birthDifficulty": 0.25,
     "breedTolerance": 1,
     "impregnationDifficulty": 1,
@@ -335,7 +335,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "真菌亚人": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 3.3,
+    "gestationSpeciesSpeed": 3.3,
     "birthDifficulty": 0.25,
     "breedTolerance": 1,
     "impregnationDifficulty": 0.8,
@@ -345,7 +345,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "社会虫族": {
     "menstrualLengthRatio": 0.75,
-    "gestationSpeed": 2.5,
+    "gestationSpeciesSpeed": 2.5,
     "birthDifficulty": 0.2,
     "breedTolerance": 4,
     "impregnationDifficulty": 0.2,
@@ -355,7 +355,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "触手怪": {
     "menstrualLengthRatio": 0.25,
-    "gestationSpeed": 5,
+    "gestationSpeciesSpeed": 5,
     "birthDifficulty": 0.2,
     "breedTolerance": 5,
     "impregnationDifficulty": 0.25,
@@ -365,7 +365,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "妖精": {
     "menstrualLengthRatio": 3,
-    "gestationSpeed": 0.8,
+    "gestationSpeciesSpeed": 0.8,
     "birthDifficulty": 1,
     "breedTolerance": 1,
     "impregnationDifficulty": 3,
@@ -375,7 +375,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "龟族": {
     "menstrualLengthRatio": 2,
-    "gestationSpeed": 0.625,
+    "gestationSpeciesSpeed": 0.625,
     "birthDifficulty": 0.3,
     "breedTolerance": 0.8,
     "impregnationDifficulty": 2,
@@ -385,7 +385,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "甲壳族": {
     "menstrualLengthRatio": 3,
-    "gestationSpeed": 1.6,
+    "gestationSpeciesSpeed": 1.6,
     "birthDifficulty": 0.4,
     "breedTolerance": 1.6,
     "impregnationDifficulty": 2.5,
@@ -395,7 +395,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "蜥蜴人": {
     "menstrualLengthRatio": 0.75,
-    "gestationSpeed": 1.25,
+    "gestationSpeciesSpeed": 1.25,
     "birthDifficulty": 0.8,
     "breedTolerance": 2.5,
     "impregnationDifficulty": 1.5,
@@ -405,7 +405,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "海蛞蝓族": {
     "menstrualLengthRatio": 0.5,
-    "gestationSpeed": 3.3,
+    "gestationSpeciesSpeed": 3.3,
     "birthDifficulty": 0.25,
     "breedTolerance": 0.25,
     "impregnationDifficulty": 0.25,
@@ -415,7 +415,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "宝箱怪": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 1.67,
+    "gestationSpeciesSpeed": 1.67,
     "birthDifficulty": 0.6,
     "breedTolerance": 3.6,
     "impregnationDifficulty": 0.6,
@@ -425,7 +425,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "阿拉克涅": {
     "menstrualLengthRatio": 0.75,
-    "gestationSpeed": 2,
+    "gestationSpeciesSpeed": 2,
     "birthDifficulty": 1.5,
     "breedTolerance": 4,
     "impregnationDifficulty": 2,
@@ -435,7 +435,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "百足姬": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 2,
+    "gestationSpeciesSpeed": 2,
     "birthDifficulty": 3.5,
     "breedTolerance": 4,
     "impregnationDifficulty": 1.5,
@@ -445,7 +445,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "天狗": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 1,
+    "gestationSpeciesSpeed": 1,
     "birthDifficulty": 1,
     "breedTolerance": 1.5,
     "impregnationDifficulty": 1,
@@ -455,7 +455,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "深潜者": {
     "menstrualLengthRatio": 1.5,
-    "gestationSpeed": 1.25,
+    "gestationSpeciesSpeed": 1.25,
     "birthDifficulty": 1.2,
     "breedTolerance": 3,
     "impregnationDifficulty": 0.5,
@@ -465,7 +465,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "人鱼": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 0.8,
+    "gestationSpeciesSpeed": 0.8,
     "birthDifficulty": 1.5,
     "breedTolerance": 0.75,
     "impregnationDifficulty": 2,
@@ -475,7 +475,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "鱼人": {
     "menstrualLengthRatio": 2,
-    "gestationSpeed": 0.5,
+    "gestationSpeciesSpeed": 0.5,
     "birthDifficulty": 2,
     "breedTolerance": 1,
     "impregnationDifficulty": 3,
@@ -485,7 +485,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "海妖": {
     "menstrualLengthRatio": 0.5,
-    "gestationSpeed": 1,
+    "gestationSpeciesSpeed": 1,
     "birthDifficulty": 3,
     "breedTolerance": 0.3,
     "impregnationDifficulty": 1,
@@ -495,7 +495,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "水母族": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 1.25,
+    "gestationSpeciesSpeed": 1.25,
     "birthDifficulty": 0.2,
     "breedTolerance": 0.5,
     "impregnationDifficulty": 0.33,
@@ -505,7 +505,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "海龙人": {
     "menstrualLengthRatio": 1.5,
-    "gestationSpeed": 0.625,
+    "gestationSpeciesSpeed": 0.625,
     "birthDifficulty": 2,
     "breedTolerance": 0.4,
     "impregnationDifficulty": 4,
@@ -515,7 +515,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "河童": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 0.8,
+    "gestationSpeciesSpeed": 0.8,
     "birthDifficulty": 1.5,
     "breedTolerance": 1.5,
     "impregnationDifficulty": 2.5,
@@ -525,7 +525,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "蛇人": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 1,
+    "gestationSpeciesSpeed": 1,
     "birthDifficulty": 1.2,
     "breedTolerance": 2,
     "impregnationDifficulty": 1,
@@ -535,7 +535,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "蛙人": {
     "menstrualLengthRatio": 0.5,
-    "gestationSpeed": 3.3,
+    "gestationSpeciesSpeed": 3.3,
     "birthDifficulty": 0.25,
     "breedTolerance": 1,
     "impregnationDifficulty": 0.7,
@@ -545,7 +545,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "眼魔": {
     "menstrualLengthRatio": 2,
-    "gestationSpeed": 1.25,
+    "gestationSpeciesSpeed": 1.25,
     "birthDifficulty": 0.5,
     "breedTolerance": 0.75,
     "impregnationDifficulty": 3,
@@ -555,7 +555,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "独居虫族": {
     "menstrualLengthRatio": 0.5,
-    "gestationSpeed": 4,
+    "gestationSpeciesSpeed": 4,
     "birthDifficulty": 0.5,
     "breedTolerance": 1,
     "impregnationDifficulty": 0.5,
@@ -565,7 +565,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "龙族": {
     "menstrualLengthRatio": 4,
-    "gestationSpeed": 0.25,
+    "gestationSpeciesSpeed": 0.25,
     "birthDifficulty": 4,
     "breedTolerance": 10,
     "impregnationDifficulty": 5,
@@ -575,7 +575,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "狮鹫族": {
     "menstrualLengthRatio": 3.5,
-    "gestationSpeed": 0.33,
+    "gestationSpeciesSpeed": 0.33,
     "birthDifficulty": 3,
     "breedTolerance": 9,
     "impregnationDifficulty": 4,
@@ -585,7 +585,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "天使": {
     "menstrualLengthRatio": 1.25,
-    "gestationSpeed": 0.8,
+    "gestationSpeciesSpeed": 0.8,
     "birthDifficulty": 2.5,
     "breedTolerance": 7,
     "impregnationDifficulty": 3,
@@ -595,7 +595,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "恶魔": {
     "menstrualLengthRatio": 1.25,
-    "gestationSpeed": 0.8,
+    "gestationSpeciesSpeed": 0.8,
     "birthDifficulty": 2.5,
     "breedTolerance": 7,
     "impregnationDifficulty": 3,
@@ -605,7 +605,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "灯神": {
     "menstrualLengthRatio": 1.5,
-    "gestationSpeed": 0.66,
+    "gestationSpeciesSpeed": 0.66,
     "birthDifficulty": 2,
     "breedTolerance": 6,
     "impregnationDifficulty": 5,
@@ -615,7 +615,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "麒麟": {
     "menstrualLengthRatio": 1.75,
-    "gestationSpeed": 0.3,
+    "gestationSpeciesSpeed": 0.3,
     "birthDifficulty": 3,
     "breedTolerance": 0.8,
     "impregnationDifficulty": 4,
@@ -625,7 +625,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "凤凰": {
     "menstrualLengthRatio": 1.75,
-    "gestationSpeed": 0.4,
+    "gestationSpeciesSpeed": 0.4,
     "birthDifficulty": 5,
     "breedTolerance": 0.5,
     "impregnationDifficulty": 3.5,
@@ -635,7 +635,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "白泽": {
     "menstrualLengthRatio": 1.75,
-    "gestationSpeed": 0.35,
+    "gestationSpeciesSpeed": 0.35,
     "birthDifficulty": 4,
     "breedTolerance": 0.3,
     "impregnationDifficulty": 5,
@@ -645,7 +645,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "独角兽": {
     "menstrualLengthRatio": 1.5,
-    "gestationSpeed": 0.5,
+    "gestationSpeciesSpeed": 0.5,
     "birthDifficulty": 3.5,
     "breedTolerance": 8,
     "impregnationDifficulty": 5,
@@ -655,7 +655,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "空鲸": {
     "menstrualLengthRatio": 3,
-    "gestationSpeed": 0.2,
+    "gestationSpeciesSpeed": 0.2,
     "birthDifficulty": 5,
     "breedTolerance": 10,
     "impregnationDifficulty": 6,
@@ -665,7 +665,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "史萊姆": {
     "menstrualLengthRatio": 0.25,
-    "gestationSpeed": 0.5,
+    "gestationSpeciesSpeed": 0.5,
     "birthDifficulty": 0.25,
     "breedTolerance": 8,
     "impregnationDifficulty": 1,
@@ -675,7 +675,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "石像鬼": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 0.4,
+    "gestationSpeciesSpeed": 0.4,
     "birthDifficulty": 2.5,
     "breedTolerance": 4,
     "impregnationDifficulty": 6,
@@ -685,7 +685,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "烛灵": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 1.6,
+    "gestationSpeciesSpeed": 1.6,
     "birthDifficulty": 0.5,
     "breedTolerance": 2,
     "impregnationDifficulty": 6,
@@ -695,7 +695,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "人偶": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 0.8,
+    "gestationSpeciesSpeed": 0.8,
     "birthDifficulty": 1.5,
     "breedTolerance": 2,
     "impregnationDifficulty": 6,
@@ -705,7 +705,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "心魇": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 1,
+    "gestationSpeciesSpeed": 1,
     "birthDifficulty": 2.5,
     "breedTolerance": 0.8,
     "impregnationDifficulty": 1,
@@ -715,7 +715,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "元素灵": {
     "menstrualLengthRatio": 0.5,
-    "gestationSpeed": 1,
+    "gestationSpeciesSpeed": 1,
     "birthDifficulty": 0.5,
     "breedTolerance": 5,
     "impregnationDifficulty": 6,
@@ -725,7 +725,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "宝石人": {
     "menstrualLengthRatio": 3,
-    "gestationSpeed": 0.8,
+    "gestationSpeciesSpeed": 0.8,
     "birthDifficulty": 3,
     "breedTolerance": 2,
     "impregnationDifficulty": 7,
@@ -735,7 +735,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "奈米丛族": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 2,
+    "gestationSpeciesSpeed": 2,
     "birthDifficulty": 1,
     "breedTolerance": 6,
     "impregnationDifficulty": 7,
@@ -745,7 +745,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "奇美拉": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 0.4,
+    "gestationSpeciesSpeed": 0.4,
     "birthDifficulty": 4,
     "breedTolerance": 12,
     "impregnationDifficulty": 4,
@@ -755,7 +755,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   },
   "影魔": {
     "menstrualLengthRatio": 1,
-    "gestationSpeed": 0.75,
+    "gestationSpeciesSpeed": 0.75,
     "birthDifficulty": 0.6,
     "breedTolerance": 5,
     "impregnationDifficulty": 0.5,
@@ -767,7 +767,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
 
 export const RACE_PHYSIOLOGY_FIELDS = Object.freeze([
   "menstrualLengthRatio",
-  "gestationSpeed",
+  "gestationSpeciesSpeed",
   "birthDifficulty",
   "breedTolerance",
   "impregnationDifficulty",
@@ -797,15 +797,15 @@ function resolveRecoveryDays(profile, embryoType) {
   const explicit = Number(profile?.recoveryDays);
   if (Number.isFinite(explicit) && explicit >= 0) return explicit;
 
-  const gestationSpeed = Number(profile?.gestationSpeed);
+  const gestationSpeciesSpeed = Number(profile?.gestationSpeciesSpeed);
   const birthDifficulty = Number(profile?.birthDifficulty);
   const breedTolerance = Number(profile?.breedTolerance);
-  if (!Number.isFinite(gestationSpeed) || gestationSpeed <= 0) return 56;
+  if (!Number.isFinite(gestationSpeciesSpeed) || gestationSpeciesSpeed <= 0) return 56;
   if (!Number.isFinite(birthDifficulty) || birthDifficulty <= 0) return 56;
   if (!Number.isFinite(breedTolerance) || breedTolerance <= 0) return 56;
 
   const coefficient = getEmbryoRecoveryCoefficientByType(embryoType);
-  return Math.max(1, Math.round(coefficient * (280 / gestationSpeed) * (birthDifficulty / breedTolerance)));
+  return Math.max(1, Math.round(coefficient * (280 / gestationSpeciesSpeed) * (birthDifficulty / breedTolerance)));
 }
 
 export function getRacePhysiologyProfile(race) {
@@ -915,12 +915,12 @@ export function getEmbryoTypeByRace(race) {
   if (parts.length === 0) return '胎生';
 
   let dominantRace = parts[0];
-  let lowestGestationSpeed = Number.POSITIVE_INFINITY;
+  let lowestGestationSpeciesSpeed = Number.POSITIVE_INFINITY;
   for (const part of parts) {
     const profile = RACE_PHYSIOLOGY_PROFILES[String(part || '')] || null;
-    const gestationSpeed = Number(profile?.gestationSpeed);
-    if (Number.isFinite(gestationSpeed) && gestationSpeed < lowestGestationSpeed) {
-      lowestGestationSpeed = gestationSpeed;
+    const gestationSpeciesSpeed = Number(profile?.gestationSpeciesSpeed);
+    if (Number.isFinite(gestationSpeciesSpeed) && gestationSpeciesSpeed < lowestGestationSpeciesSpeed) {
+      lowestGestationSpeciesSpeed = gestationSpeciesSpeed;
       dominantRace = part;
     }
   }

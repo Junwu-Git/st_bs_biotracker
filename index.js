@@ -4,6 +4,7 @@ import {
   AMORPHOUS_RACES,
   DERIVED_TYPE_RACES,
   getEmbryoTypeByRace,
+  getDerivedTypeFluxProfile,
   METOVIVIPAROUS_RACES,
   OVIPAROUS_RACES,
   OVOVIVIPAROUS_RACES,
@@ -19,6 +20,8 @@ import {
   DEFAULT_SYSTEM_PROMPT,
   getCharacterWorldBookName,
   getCharacterWorldBookNameViaSTscript,
+  getGestationEffectiveSpeed,
+  getGestationSpeciesSpeed,
   getChatKey,
   getChatState,
   getContextSafe,
@@ -60,6 +63,9 @@ let selectedTrackName = '';
 let selectedTrackSubpage = 'overview';
 let selectedTrackCardIndexes = {};
 let selectedRaceEncyclopedia = '';
+let selectedDerivedEncyclopedia = '';
+let worldbookEntrySearch = '';
+let latestWorldbookEntries = [];
 let racePaletteState = {
   targetInputId: '',
   isOpen: false,
@@ -75,6 +81,12 @@ let debugInjectDraft = {
   fetusCount: '1',
   genders: '女',
   equivalentDays: '0',
+};
+let debugGestationModifierDraft = {
+  owner: '',
+  name: '',
+  multiplier: '',
+  description: '',
 };
 
 const RACE_PALETTE_GROUPS = [
@@ -97,6 +109,7 @@ const RACE_ENCYCLOPEDIA_GROUPS = RACE_PALETTE_GROUPS.map((group) => ({
   label: group.label,
   races: Array.from(new Set(group.races)),
 })).filter((group) => group.races.length > 0);
+const DERIVED_ENCYCLOPEDIA_LIST = Array.from(new Set(DERIVED_TYPE_RACES)).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
 
 function setConnectStatus(message, isError = false) {
   const el = document.getElementById('bs-bt-connect-status');
@@ -112,35 +125,71 @@ function setRegisterStatus(message, isError = false) {
   el.dataset.state = isError ? 'error' : 'normal';
 }
 
-function syncWorldbookExcludeTextarea(names) {
-  const textarea = document.getElementById('bs-bt-tracker-worldbook-exclude-names');
-  if (!textarea) return;
-  textarea.value = Array.isArray(names) ? names.join('\n') : '';
+function getWorldbookFilterInputNames(ctx) {
+  const settings = getSettings(ctx);
+  const mode = String(settings.trackerWorldbookMode || 'exclude').trim();
+  if (mode === 'allowlist_all') return parseWorldbookExcludeNamesInput(settings.trackerWorldbookIncludeNames);
+  return parseWorldbookExcludeNamesInput(settings.trackerWorldbookExcludeNames);
+}
+
+function syncWorldbookFilterInput(ctx) {
+  const settings = getSettings(ctx);
+  const mode = String(settings.trackerWorldbookMode || 'exclude').trim();
+  const label = document.getElementById('bs-bt-worldbook-filter-input-label');
+  const input = document.getElementById('bs-bt-worldbook-filter-input');
+  const names = getWorldbookFilterInputNames(ctx);
+  if (label) label.textContent = mode === 'allowlist_all' ? '可参考' : '可排除';
+  if (input) {
+    input.value = names.join('\n');
+    input.placeholder = mode === 'allowlist_all'
+      ? '每行一个条目名。参考模式下，仅这些条目会传给 tracker；即使它们目前是 disabled 也会保留。'
+      : '每行一个条目名。正常模式下，这些条目会从 worldbook 传输中排除。';
+  }
 }
 
 function saveWorldbookExcludeNamesFromList(ctx, names) {
   const normalized = Array.from(new Set((Array.isArray(names) ? names : []).map((item) => String(item || '').trim()).filter(Boolean)));
   const settings = getSettings(ctx);
   settings.trackerWorldbookExcludeNames = normalized.join('\n');
-  syncWorldbookExcludeTextarea(normalized);
+  syncWorldbookFilterInput(ctx);
+  saveSettings(ctx);
+  updateMainFlowPrompt(ctx);
+  resetPoller(ctx, trackerDeps);
+}
+
+function saveWorldbookIncludeNamesFromList(ctx, names) {
+  const normalized = Array.from(new Set((Array.isArray(names) ? names : []).map((item) => String(item || '').trim()).filter(Boolean)));
+  const settings = getSettings(ctx);
+  settings.trackerWorldbookIncludeNames = normalized.join('\n');
+  syncWorldbookFilterInput(ctx);
   saveSettings(ctx);
   updateMainFlowPrompt(ctx);
   resetPoller(ctx, trackerDeps);
 }
 
 function applyWorldbookFilterSelection(ctx, entries = [], selectedNames = []) {
-  syncWorldbookExcludeTextarea(selectedNames);
-  renderWorldbookEntryList(ctx, entries, selectedNames);
+  latestWorldbookEntries = Array.isArray(entries) ? entries : [];
+  const settings = getSettings(ctx);
+  if (String(settings.trackerWorldbookMode || 'exclude').trim() === 'exclude') {
+    settings.trackerWorldbookExcludeNames = parseWorldbookExcludeNamesInput(selectedNames.join('\n')).join('\n');
+  }
+  syncWorldbookFilterInput(ctx);
+  renderWorldbookEntryList(ctx, latestWorldbookEntries, selectedNames);
 }
 
 function renderWorldbookEntryList(ctx, entries = [], selectedNames = null) {
   const container = document.getElementById('bs-bt-worldbook-entry-list');
+  const title = document.querySelector('#bs-bt-view-worldbook-filter .bs-bt-status-title');
+  const clearButton = document.getElementById('bs-bt-worldbook-clear-all');
+  const searchInput = document.getElementById('bs-bt-worldbook-entry-search');
   if (!container) return;
   const settings = getSettings(ctx);
+  const mode = String(settings.trackerWorldbookMode || 'exclude').trim();
+  if (searchInput && searchInput.value !== worldbookEntrySearch) searchInput.value = worldbookEntrySearch;
   const selected = new Set(
     Array.isArray(selectedNames)
       ? parseWorldbookExcludeNamesInput(selectedNames.join('\n'))
-      : parseWorldbookExcludeNamesInput(settings.trackerWorldbookExcludeNames),
+      : getWorldbookFilterInputNames(ctx),
   );
 
   const normalizedEntries = [];
@@ -154,8 +203,16 @@ function renderWorldbookEntryList(ctx, entries = [], selectedNames = null) {
       if (name && !normalizedEntries.find((e) => e.name === name)) normalizedEntries.push({ name, mode: item.mode || '' });
     }
   }
+  const keyword = String(worldbookEntrySearch || '').trim().toLowerCase();
+  const filteredEntries = keyword
+    ? normalizedEntries.filter((entry) =>
+      String(entry?.name || '').toLowerCase().includes(keyword)
+      || String(entry?.mode || '').toLowerCase().includes(keyword))
+    : normalizedEntries;
 
   container.innerHTML = '';
+  if (title) title.textContent = mode === 'allowlist_all' ? '当前世界书条目（仅供参考）' : '可排除条目';
+  if (clearButton) clearButton.textContent = '清空当前文本框';
 
   if (normalizedEntries.length === 0) {
     const empty = document.createElement('div');
@@ -165,7 +222,15 @@ function renderWorldbookEntryList(ctx, entries = [], selectedNames = null) {
     return;
   }
 
-  for (const entryObj of normalizedEntries) {
+  if (filteredEntries.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'bs-bt-connect-status';
+    empty.textContent = '没有匹配当前搜索条件的条目';
+    container.appendChild(empty);
+    return;
+  }
+
+  for (const entryObj of filteredEntries) {
     const { name, mode } = entryObj;
     const label = document.createElement('label');
     label.className = 'bs-bt-theme-option';
@@ -178,10 +243,14 @@ function renderWorldbookEntryList(ctx, entries = [], selectedNames = null) {
     checkbox.type = 'checkbox';
     checkbox.checked = selected.has(name);
     checkbox.addEventListener('change', async () => {
-      const nextSelected = new Set(parseWorldbookExcludeNamesInput(getSettings(ctx).trackerWorldbookExcludeNames));
+      const nextSelected = new Set(getWorldbookFilterInputNames(ctx));
       if (checkbox.checked) nextSelected.add(name);
       else nextSelected.delete(name);
-      saveWorldbookExcludeNamesFromList(ctx, Array.from(nextSelected));
+      if (String(getSettings(ctx).trackerWorldbookMode || 'exclude').trim() === 'allowlist_all') {
+        saveWorldbookIncludeNamesFromList(ctx, Array.from(nextSelected));
+      } else {
+        saveWorldbookExcludeNamesFromList(ctx, Array.from(nextSelected));
+      }
       try {
         await refreshWorldbookFilterPage(ctx);
       } catch (error) {
@@ -229,11 +298,16 @@ function renderRaceEncyclopediaPage() {
   const countNode = document.getElementById('bs-bt-race-count');
   const selectNode = document.getElementById('bs-bt-race-select');
   const outputNode = document.getElementById('bs-bt-race-output');
-  if (!countNode || !selectNode || !outputNode) return;
+  const derivedSelectNode = document.getElementById('bs-bt-derived-select');
+  const derivedOutputNode = document.getElementById('bs-bt-derived-output');
+  if (!countNode || !selectNode || !outputNode || !derivedSelectNode || !derivedOutputNode) return;
 
-  countNode.textContent = `当前内置种族数量：${RACE_ENCYCLOPEDIA_LIST.length}`;
+  countNode.innerHTML = `当前内置种族数量：${RACE_ENCYCLOPEDIA_LIST.length}<br>衍生类型数量：${DERIVED_ENCYCLOPEDIA_LIST.length}`;
   if (!selectedRaceEncyclopedia || !RACE_ENCYCLOPEDIA_LIST.includes(selectedRaceEncyclopedia)) {
     selectedRaceEncyclopedia = RACE_ENCYCLOPEDIA_LIST[0] || '';
+  }
+  if (!selectedDerivedEncyclopedia || !DERIVED_ENCYCLOPEDIA_LIST.includes(selectedDerivedEncyclopedia)) {
+    selectedDerivedEncyclopedia = DERIVED_ENCYCLOPEDIA_LIST[0] || '';
   }
 
   selectNode.innerHTML = '';
@@ -249,16 +323,37 @@ function renderRaceEncyclopediaPage() {
     }
     selectNode.appendChild(optgroup);
   }
+  derivedSelectNode.innerHTML = '';
+  for (const derivedType of DERIVED_ENCYCLOPEDIA_LIST) {
+    const option = document.createElement('option');
+    option.value = derivedType;
+    option.textContent = derivedType;
+    option.selected = derivedType === selectedDerivedEncyclopedia;
+    derivedSelectNode.appendChild(option);
+  }
 
   if (!selectedRaceEncyclopedia) {
     outputNode.textContent = '暂无可显示的种族资料。';
+  } else {
+    const embryoType = getEmbryoTypeByRace(selectedRaceEncyclopedia);
+    const embryoText = getEmbryoTypeReferenceText(embryoType);
+    const physiologyText = buildSingleRacePhysiologyText(selectedRaceEncyclopedia);
+    outputNode.textContent = [physiologyText, embryoText].filter(Boolean).join('\n\n');
+  }
+
+  if (!selectedDerivedEncyclopedia) {
+    derivedOutputNode.textContent = '暂无可显示的衍生资料。';
     return;
   }
 
-  const embryoType = getEmbryoTypeByRace(selectedRaceEncyclopedia);
-  const embryoText = getEmbryoTypeReferenceText(embryoType);
-  const physiologyText = buildSingleRacePhysiologyText(selectedRaceEncyclopedia);
-  outputNode.textContent = [physiologyText, embryoText].filter(Boolean).join('\n\n');
+  const fluxProfile = getDerivedTypeFluxProfile(selectedDerivedEncyclopedia);
+  const fluxName = String(fluxProfile?.fluxName || '未知').trim() || '未知';
+  const fluxDefinition = String(fluxProfile?.fluxDefinition || '').trim();
+  derivedOutputNode.textContent = [
+    `【${selectedDerivedEncyclopedia}】`,
+    `- Flux: ${fluxName}`,
+    fluxDefinition || '- 暂无额外说明。',
+  ].join('\n\n');
 }
 
 function escapeHtml(value) {
@@ -339,6 +434,7 @@ function parseWorldbookExcludeNamesInput(value) {
 }
 
 function collectWorldbookEntryNames(value) {
+  const includeDisabled = Boolean(arguments[1]?.includeDisabled);
   if (!value || typeof value !== 'object') return [];
 
   let entryList = [];
@@ -364,8 +460,7 @@ function collectWorldbookEntryNames(value) {
 
   for (const entry of entryList) {
     if (!entry || typeof entry !== 'object') continue;
-    // 忽略被禁用的條目
-    if (entry.enabled === false || entry.disable === true) continue;
+    if (!includeDisabled && (entry.enabled === false || entry.disable === true)) continue;
 
     // 匹配 filterTrackerWorldbookEntries 的擷取邏輯
     const name = String(entry.name || entry.comment || entry.title || entry.displayName || entry.uid || '').trim();
@@ -452,12 +547,14 @@ async function getCurrentCharacterWorldbook(ctx) {
 
 async function inspectCurrentCharacterWorldbook(ctx) {
   const worldBook = await getCurrentCharacterWorldbook(ctx);
-  const foundEntries = collectWorldbookEntryNames(worldBook);
+  const settings = getSettings(ctx);
+  const mode = String(settings.trackerWorldbookMode || 'exclude').trim();
+  const foundEntries = collectWorldbookEntryNames(worldBook, { includeDisabled: mode === 'allowlist_all' });
   const foundNames = foundEntries.map(e => e.name);
-  const excludeNames = parseWorldbookExcludeNamesInput(document.getElementById('bs-bt-tracker-worldbook-exclude-names')?.value ?? '');
+  const trackedNames = parseWorldbookExcludeNamesInput(document.getElementById('bs-bt-worldbook-filter-input')?.value ?? '');
   const foundSet = new Set(foundNames);
-  const matched = excludeNames.filter((name) => foundSet.has(name));
-  const missing = excludeNames.filter((name) => !foundSet.has(name));
+  const matched = trackedNames.filter((name) => foundSet.has(name));
+  const missing = trackedNames.filter((name) => !foundSet.has(name));
   const resolvedCharacter = getResolvedCharacter(ctx);
   const characterName = String(resolvedCharacter?.card?.name || '').trim() || '当前角色';
   const characterId = ctx?.characterId;
@@ -488,7 +585,7 @@ async function inspectCurrentCharacterWorldbook(ctx) {
     `STscript(/getcharbook)：${stscriptWorldBookName || '无'}`,
     `世界书来源：${worldBook ? '已取得' : '未取得'}`,
     `找到的条目名数量：${foundNames.length}`,
-    `排除名单数量：${excludeNames.length}`,
+    `${mode === 'allowlist_all' ? '白名单数量' : '排除名单数量'}：${trackedNames.length}`,
     `世界书顶层键：${topLevelKeys.length > 0 ? topLevelKeys.join(', ') : '无'}`,
     '',
     '[候选路径概览]',
@@ -497,10 +594,10 @@ async function inspectCurrentCharacterWorldbook(ctx) {
     '[ST_API.worldBook.get(character) 概览]',
     apiSourceSummary,
     '',
-    '[排除名单命中]',
+    mode === 'allowlist_all' ? '[白名单命中]' : '[排除名单命中]',
     matched.length > 0 ? matched.join('\n') : '无',
     '',
-    '[排除名单未命中]',
+    mode === 'allowlist_all' ? '[白名单未命中]' : '[排除名单未命中]',
     missing.length > 0 ? missing.join('\n') : '无',
     '',
     '[世界书内抓到的全部条目名]',
@@ -616,9 +713,8 @@ function getStageProgress(profile) {
 function getLibidoCap(stage, profile = null) {
   const isTruePregnancy = ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产前阵痛', '第一产程', '第二产程', '第三产程'].includes(stage);
   if (isTruePregnancy && profile) {
-    const pregnantDays = Number(profile.pregnant?.pregnantDays) || 0;
-    const gestationSpeed = Number(profile.bio?.gestationSpeed) || 1.0;
-    const months = Math.floor((pregnantDays * gestationSpeed) / 28);
+    const effectivePregnantDays = Number(profile.pregnant?.effectivePregnantDays) || 0;
+    const months = Math.floor(effectivePregnantDays / 28);
     const progress = Math.max(0, Math.min(10, months)) / 10;
     return Math.round(100 + (150 - 100) * progress);
   }
@@ -628,9 +724,8 @@ function getLibidoCap(stage, profile = null) {
 function getUterinePressureCap(stage, profile = null) {
   const isTruePregnancy = ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产前阵痛', '第一产程', '第二产程', '第三产程'].includes(stage);
   if (isTruePregnancy && profile) {
-    const pregnantDays = Number(profile.pregnant?.pregnantDays) || 0;
-    const gestationSpeed = Number(profile.bio?.gestationSpeed) || 1.0;
-    const months = Math.floor((pregnantDays * gestationSpeed) / 28);
+    const effectivePregnantDays = Number(profile.pregnant?.effectivePregnantDays) || 0;
+    const months = Math.floor(effectivePregnantDays / 28);
     const progress = Math.max(0, Math.min(10, months)) / 10;
     return Math.round(50 + (150 - 50) * progress);
   }
@@ -780,6 +875,10 @@ function buildTrackCharacterViewModel(character) {
   const experience = profile.experience || {};
   const descriptions = profile.descriptions || {};
   const immune = profile.immune || {};
+  const bio = profile.bio || {};
+  const gestationSpeciesSpeed = getGestationSpeciesSpeed(profile);
+  const gestationEffectiveSpeed = getGestationEffectiveSpeed(profile);
+  const gestationModifierMultiplier = Number.isFinite(Number(bio.gestationModifierMultiplier)) ? Number(bio.gestationModifierMultiplier) : 1;
   const stage = String(base.stage || '未设定');
   const totalSperm = (Array.isArray(base.sperms) ? base.sperms : []).reduce((sum, item) => sum + (Number(item?.value) || 0), 0);
   return {
@@ -815,12 +914,20 @@ function buildTrackCharacterViewModel(character) {
       totalSperm,
       sperms: Array.isArray(base.sperms) ? base.sperms : [],
       pregnantDays: Number(pregnant.pregnantDays) || 0,
+      effectivePregnantDays: Number(pregnant.effectivePregnantDays) || 0,
       laborHours: Number(pregnant.laborHours) || 0,
       amnionDurability: Number(pregnant.amnionDurability) || 0,
       fetuses: Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [],
       pregnantBlocks: parseDescriptionBlocks(descriptions.pregnantDescription),
       showPregnantFields: isPregnantStage(stage) || (Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0),
       showLaborFields: LABOR_STAGES.includes(stage),
+      gestationModifier: {
+        name: String(bio.gestationModifierName || '').trim(),
+        multiplier: gestationModifierMultiplier,
+        description: String(bio.gestationModifierDescription || '').trim(),
+        effectiveSpeed: gestationEffectiveSpeed,
+        speciesSpeed: gestationSpeciesSpeed,
+      },
     },
     experience: {
       items: [
@@ -839,6 +946,13 @@ function buildTrackCharacterViewModel(character) {
       immune: {
         metabolism: Boolean(immune.metabolism),
         miscarriage: Boolean(immune.miscarriage),
+      },
+      gestationModifier: {
+        name: String(bio.gestationModifierName || '').trim(),
+        multiplier: gestationModifierMultiplier,
+        description: String(bio.gestationModifierDescription || '').trim(),
+        effectiveSpeed: gestationEffectiveSpeed,
+        speciesSpeed: gestationSpeciesSpeed,
       },
       counts: {
         sperms: Array.isArray(base.sperms) ? base.sperms.length : 0,
@@ -980,6 +1094,12 @@ function renderTrackDescription(viewModel) {
 
 function renderTrackPregnancy(viewModel) {
   const data = viewModel.pregnancy;
+  const gestationModifier = data.gestationModifier || {};
+  const hasGestationModifier = Boolean(
+    String(gestationModifier.name || '').trim()
+    || String(gestationModifier.description || '').trim()
+    || Math.abs(Number(gestationModifier.multiplier ?? 1) - 1) > 0.000001,
+  );
   return `
     <div class="bs-bt-track-section">
       <div class="bs-bt-track-section-title">孕育概况</div>
@@ -997,6 +1117,14 @@ function renderTrackPregnancy(viewModel) {
     }
       </div>
     </div>
+    ${hasGestationModifier ? `<div class="bs-bt-track-section">
+      <div class="bs-bt-track-section-title">妊娠变速效果</div>
+      <div class="bs-bt-track-meta">
+        <div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">效果名称</span><span class="bs-bt-track-meta-value">${escapeHtml(gestationModifier.name || '无')}</span></div>
+        <div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">当前倍率</span><span class="bs-bt-track-meta-value">${Number(gestationModifier.multiplier || 0).toFixed(3)}x</span></div>
+        <div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">说明</span><span class="bs-bt-track-meta-value">${escapeHtml(gestationModifier.description || '无')}</span></div>
+      </div>
+    </div>` : ''}
     ${renderCardCarouselSection(
       '精液来源',
       data.sperms,
@@ -1066,6 +1194,7 @@ function renderTrackDebug(viewModel) {
   const immune = viewModel.debug?.immune || {};
   const counts = viewModel.debug?.counts || {};
   const hasConceptionState = Boolean(viewModel.debug?.hasConceptionState);
+  const gestationModifier = viewModel.debug?.gestationModifier || {};
 
   const currentStage = viewModel.base?.stage || '';
   const hasProtectedPregnancyState = hasConceptionState || ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产前阵痛', '第一产程', '第二产程', '第三产程'].includes(currentStage);
@@ -1080,6 +1209,10 @@ function renderTrackDebug(viewModel) {
   const countValue = escapeHtml(debugInjectDraft.fetusCount || '1');
   const gendersValue = escapeHtml(debugInjectDraft.genders || '女');
   const daysValue = escapeHtml(debugInjectDraft.equivalentDays || '0');
+  const modifierDraftActive = debugGestationModifierDraft.owner === selectedTrackName;
+  const modifierNameValue = escapeHtml(modifierDraftActive ? debugGestationModifierDraft.name : (gestationModifier.name || ''));
+  const modifierMultiplierValue = escapeHtml(modifierDraftActive ? debugGestationModifierDraft.multiplier : String(gestationModifier.multiplier ?? 1));
+  const modifierDescriptionValue = escapeHtml(modifierDraftActive ? debugGestationModifierDraft.description : (gestationModifier.description || ''));
   const palette = racePaletteState.targetInputId === 'bs-bt-debug-race' && racePaletteState.isOpen
     ? `<div class="bs-bt-race-popover">${renderRacePaletteBody()}</div>`
     : '';
@@ -1155,6 +1288,28 @@ function renderTrackDebug(viewModel) {
       </fieldset>
       <div class="bs-bt-track-debug-hint">${hasConceptionState ? '当前角色已有受精或妊娠状态，已禁用此操作。' : '父亲名字、父亲种族、性别都可用逗号逐胎填写；填一位父亲 + 胎数 > 1 = 同父多胎；填多位父亲 = 异父妊娠。'}</div>
     </div>
+    <div class="bs-bt-track-section" style="margin-top: 10px;">
+      <div class="bs-bt-track-section-title">妊娠变速效果</div>
+      <fieldset class="bs-bt-track-debug-form">
+        <label class="bs-bt-track-debug-field">
+          <span class="bs-bt-track-debug-label">效果名称</span>
+          <input id="bs-bt-debug-gestation-name" class="text_pole" type="text" value="${modifierNameValue}" placeholder="例如：地母神的祝福" />
+        </label>
+        <label class="bs-bt-track-debug-field">
+          <span class="bs-bt-track-debug-label">倍率</span>
+          <input id="bs-bt-debug-gestation-multiplier" class="text_pole" type="number" min="0" max="20" step="0.1" value="${modifierMultiplierValue}" />
+        </label>
+        <label class="bs-bt-track-debug-field">
+          <span class="bs-bt-track-debug-label">说明</span>
+          <textarea id="bs-bt-debug-gestation-description" class="text_pole bs-bt-textarea" rows="3" placeholder="例如：地母神赐与女性冒险者的祝福，使妊娠速度变为 0.5 倍；若倍率为 0，则代表胎儿发育冻结">${modifierDescriptionValue}</textarea>
+        </label>
+        <div class="bs-bt-track-inline-action bs-bt-track-inline-action-equal">
+          <button type="button" class="menu_button bs-bt-inline-button" data-debug-action="set-gestation-modifier">应用效果</button>
+          <button type="button" class="menu_button bs-bt-inline-button" data-debug-action="clear-gestation-modifier">清除效果</button>
+        </div>
+      </fieldset>
+      <div class="bs-bt-track-debug-hint">当前倍率 ${Number(gestationModifier.multiplier || 0).toFixed(3)}x，物种妊娠速度 ${Number(gestationModifier.speciesSpeed || 1).toFixed(3)}，当前生效速度 ${Number(gestationModifier.effectiveSpeed || 0).toFixed(3)}。倍率为 0 代表胎儿发育冻结。</div>
+    </div>
   `;
 }
 
@@ -1217,6 +1372,51 @@ function injectSelectedTrackPregnancy(ctx) {
   saveSettings(ctx);
   renderStatusPanel(ctx);
   globalThis.toastr?.success?.(`[BS BioTracker] 已为 ${selectedTrackName} 注入调试妊娠状态`);
+}
+
+function applySelectedTrackGestationModifier(ctx, clear = false) {
+  if (!selectedTrackName) return;
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const name = String(document.getElementById('bs-bt-debug-gestation-name')?.value || '').trim();
+  const multiplier = String(document.getElementById('bs-bt-debug-gestation-multiplier')?.value || '').trim();
+  const description = String(document.getElementById('bs-bt-debug-gestation-description')?.value || '').trim();
+  debugGestationModifierDraft = {
+    owner: selectedTrackName,
+    name,
+    multiplier,
+    description,
+  };
+  const result = applyToolCall(chatState, {
+    name: 'bsDebugSetGestationModifier',
+    arguments: {
+      female: selectedTrackName,
+      clear,
+      name,
+      multiplier: Number(multiplier || 1),
+      description,
+    },
+  });
+  if (!result?.applied) {
+    globalThis.toastr?.warning?.(result?.message || '[BS BioTracker] 妊娠变速效果设置失败');
+    return;
+  }
+  if (clear) {
+    debugGestationModifierDraft = {
+      owner: selectedTrackName,
+      name: '',
+      multiplier: '',
+      description: '',
+    };
+  }
+  recordChatStateSnapshot(ctx, chatState, { reason: clear ? 'debug_clear_gestation_modifier' : 'debug_set_gestation_modifier' });
+  saveSettings(ctx);
+  renderStatusPanel(ctx);
+  globalThis.toastr?.success?.(
+    clear
+      ? `[BS BioTracker] 已清除 ${selectedTrackName} 的妊娠变速效果`
+      : `[BS BioTracker] 已为 ${selectedTrackName} 设置妊娠变速效果`,
+  );
 }
 
 function clearSelectedTrackContainer(ctx, container) {
@@ -1405,6 +1605,16 @@ function renderStatusPanel(ctx) {
       injectSelectedTrackPregnancy(ctx);
     }),
   );
+  content.querySelectorAll('[data-debug-action="set-gestation-modifier"]').forEach((node) =>
+    node.addEventListener('click', () => {
+      applySelectedTrackGestationModifier(ctx, false);
+    }),
+  );
+  content.querySelectorAll('[data-debug-action="clear-gestation-modifier"]').forEach((node) =>
+    node.addEventListener('click', () => {
+      applySelectedTrackGestationModifier(ctx, true);
+    }),
+  );
   content.querySelectorAll('[data-debug-action="set-phase"]').forEach((node) =>
     node.addEventListener('click', () => {
       const stage = content.querySelector('#bs-bt-debug-phase-select')?.value;
@@ -1444,6 +1654,18 @@ function renderStatusPanel(ctx) {
   });
   content.querySelector('#bs-bt-debug-days')?.addEventListener('input', (event) => {
     debugInjectDraft.equivalentDays = String(event.target?.value || '0');
+  });
+  content.querySelector('#bs-bt-debug-gestation-name')?.addEventListener('input', (event) => {
+    debugGestationModifierDraft.owner = selectedTrackName;
+    debugGestationModifierDraft.name = String(event.target?.value || '');
+  });
+  content.querySelector('#bs-bt-debug-gestation-multiplier')?.addEventListener('input', (event) => {
+    debugGestationModifierDraft.owner = selectedTrackName;
+    debugGestationModifierDraft.multiplier = String(event.target?.value || '');
+  });
+  content.querySelector('#bs-bt-debug-gestation-description')?.addEventListener('input', (event) => {
+    debugGestationModifierDraft.owner = selectedTrackName;
+    debugGestationModifierDraft.description = String(event.target?.value || '');
   });
   content.querySelectorAll('[data-race-picker-target]').forEach((node) =>
     node.addEventListener('click', () => {
@@ -1709,7 +1931,7 @@ function applySettingsToForm(ctx) {
   setValue('bs-bt-poll-ms', settings.pollMs);
   setValue('bs-bt-context-size', settings.contextSize);
   setValue('bs-bt-targets', settings.targetNames);
-  setValue('bs-bt-tracker-worldbook-exclude-names', settings.trackerWorldbookExcludeNames);
+  setValue('bs-bt-tracker-worldbook-mode', settings.trackerWorldbookMode);
   setValue('bs-bt-system-prompt', settings.systemPrompt);
   setValue('bs-bt-register-custom-notes', settings.registryCustomNotes);
   setValue('bs-bt-registry-normal-description', settings.registryDescriptionGuides?.normalDescription);
@@ -1718,6 +1940,7 @@ function applySettingsToForm(ctx) {
   populateModelList(settings);
   setConnectStatus(settings.modelOptions.length > 0 ? `已缓存 ${settings.modelOptions.length} 个模型` : '尚未连接');
   setRegisterStatus('输入名字与 Description 规则后发送注册请求，完成后可在“角色追踪”查看该角色状态变量。');
+  syncWorldbookFilterInput(ctx);
   renderWorldbookEntryList(ctx, parseWorldbookExcludeNamesInput(settings.trackerWorldbookExcludeNames));
   applyTheme(settings);
   renderStatusPanel(ctx);
@@ -1741,10 +1964,14 @@ async function refreshWorldbookFilterPage(ctx) {
 
 async function clearCurrentWorldbookExcludeSelections(ctx) {
   const result = await inspectCurrentCharacterWorldbook(ctx);
-  const currentEntryNames = new Set((Array.isArray(result?.foundEntries) ? result.foundEntries : []).map((entry) => String(entry?.name || '').trim()).filter(Boolean));
   const settings = getSettings(ctx);
-  const preserved = parseWorldbookExcludeNamesInput(settings.trackerWorldbookExcludeNames).filter((name) => !currentEntryNames.has(name));
-  saveWorldbookExcludeNamesFromList(ctx, preserved);
+  if (String(settings.trackerWorldbookMode || 'exclude').trim() === 'allowlist_all') {
+    saveWorldbookIncludeNamesFromList(ctx, []);
+  } else {
+    const currentEntryNames = new Set((Array.isArray(result?.foundEntries) ? result.foundEntries : []).map((entry) => String(entry?.name || '').trim()).filter(Boolean));
+    const preserved = parseWorldbookExcludeNamesInput(settings.trackerWorldbookExcludeNames).filter((name) => !currentEntryNames.has(name));
+    saveWorldbookExcludeNamesFromList(ctx, preserved);
+  }
   await refreshWorldbookFilterPage(ctx);
 }
 
@@ -1770,6 +1997,10 @@ function readSettingsFromForm(ctx) {
   settings.pollMs = Math.max(800, Number(getValue('bs-bt-poll-ms')) || 1800);
   settings.contextSize = Math.max(2, Number(getValue('bs-bt-context-size')) || 12);
   settings.targetNames = String(getValue('bs-bt-targets')).trim();
+  settings.trackerWorldbookMode = String(getValue('bs-bt-tracker-worldbook-mode')).trim() || 'exclude';
+  const filterNames = String(getValue('bs-bt-worldbook-filter-input')).trim();
+  if (settings.trackerWorldbookMode === 'allowlist_all') settings.trackerWorldbookIncludeNames = filterNames;
+  else settings.trackerWorldbookExcludeNames = filterNames;
   settings.systemPrompt = String(getValue('bs-bt-system-prompt')).trim() || DEFAULT_SYSTEM_PROMPT;
   settings.registryCustomNotes = String(getValue('bs-bt-register-custom-notes')).trim();
   settings.registryDescriptionGuides = {
@@ -2115,6 +2346,33 @@ async function ensureModal(ctx) {
     selectedRaceEncyclopedia = String(event.target?.value || '');
     renderRaceEncyclopediaPage();
   });
+  document.getElementById('bs-bt-tracker-worldbook-mode')?.addEventListener('change', async () => {
+    readSettingsFromForm(ctx);
+    syncWorldbookFilterInput(ctx);
+    try {
+      await refreshWorldbookFilterPage(ctx);
+    } catch (error) {
+      console.error('[BS BioTracker] refreshWorldbookFilterPage after mode change failed', error);
+    }
+  });
+  document.getElementById('bs-bt-worldbook-filter-input')?.addEventListener('change', async (event) => {
+    const names = parseWorldbookExcludeNamesInput(String(event.target?.value || ''));
+    if (String(getSettings(ctx).trackerWorldbookMode || 'exclude').trim() === 'allowlist_all') saveWorldbookIncludeNamesFromList(ctx, names);
+    else saveWorldbookExcludeNamesFromList(ctx, names);
+    try {
+      await refreshWorldbookFilterPage(ctx);
+    } catch (error) {
+      console.error('[BS BioTracker] refreshWorldbookFilterPage after filter change failed', error);
+    }
+  });
+  document.getElementById('bs-bt-worldbook-entry-search')?.addEventListener('input', (event) => {
+    worldbookEntrySearch = String(event.target?.value || '').trim();
+    renderWorldbookEntryList(ctx, latestWorldbookEntries);
+  });
+  document.getElementById('bs-bt-derived-select')?.addEventListener('change', (event) => {
+    selectedDerivedEncyclopedia = String(event.target?.value || '');
+    renderRaceEncyclopediaPage();
+  });
   document.getElementById('bs-bt-connect')?.addEventListener('click', async () => {
     readSettingsFromForm(ctx);
     await connectAndLoadModels(ctx);
@@ -2126,7 +2384,11 @@ async function ensureModal(ctx) {
   document.getElementById('bs-bt-worldbook-clear-all')?.addEventListener('click', async () => {
     try {
       await clearCurrentWorldbookExcludeSelections(ctx);
-      globalThis.toastr?.success?.('[BS BioTracker] 已取消当前角色的所有排除条目');
+      syncWorldbookFilterInput(ctx);
+      const mode = String(getSettings(ctx).trackerWorldbookMode || 'exclude').trim();
+      globalThis.toastr?.success?.(mode === 'allowlist_all'
+        ? '[BS BioTracker] 已清空当前角色的可参考条目文本框'
+        : '[BS BioTracker] 已清空当前角色的可排除条目文本框');
     } catch (error) {
       console.error('[BS BioTracker] clearCurrentWorldbookExcludeSelections failed', error);
       globalThis.toastr?.error?.(String(error?.message || error), '[BS BioTracker]');

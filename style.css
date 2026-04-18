@@ -914,6 +914,15 @@
   white-space: nowrap;
 }
 
+#bs-biotracker-settings .bs-bt-track-inline-action-equal {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+#bs-biotracker-settings .bs-bt-track-inline-action-equal .bs-bt-inline-button {
+  width: 100%;
+  min-width: 0;
+}
+
 #bs-biotracker-settings .bs-bt-race-picker-wrap {
   position: relative;
   min-width: 0;

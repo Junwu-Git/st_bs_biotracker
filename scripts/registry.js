@@ -20,6 +20,8 @@ import {
   buildRecentMessages,
   createDefaultFemaleState,
   getCharacterCard,
+  getGestationEffectiveSpeed,
+  getGestationSpeciesSpeed,
   getCharacterWorldBookName,
   getCharacterWorldBookNameViaSTscript,
   getChatKey,
@@ -55,6 +57,58 @@ async function getCharacterWorldBook(ctx) {
   return null;
 }
 
+function parseRegistryWorldbookExcludeNames(settings) {
+  return new Set(
+    String(settings?.trackerWorldbookExcludeNames || '')
+      .split(/[\r\n,]+/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+}
+
+function parseRegistryWorldbookIncludeNames(settings) {
+  return new Set(
+    String(settings?.trackerWorldbookIncludeNames || '')
+      .split(/[\r\n,]+/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+}
+
+function filterRegistryWorldbookEntries(value, excludedNames, settings = null) {
+  if (!value || typeof value !== 'object') return value;
+  const mode = String(settings?.trackerWorldbookMode || 'exclude').trim();
+  const includedNames = parseRegistryWorldbookIncludeNames(settings);
+
+  const normalizeEntryName = (entry) => String(entry?.name || entry?.comment || entry?.title || entry?.displayName || entry?.uid || '').trim();
+
+  const keepEntry = (entry) => {
+    const name = normalizeEntryName(entry);
+    if (mode === 'allowlist_all') return Boolean(name) && includedNames.has(name);
+    if (entry?.enabled === false || entry?.disable === true) return false;
+    if (!excludedNames || excludedNames.size === 0) return true;
+    return !name || !excludedNames.has(name);
+  };
+
+  if (Array.isArray(value.entries)) {
+    return {
+      ...value,
+      entries: value.entries.filter(keepEntry),
+    };
+  }
+
+  if (value.entries && typeof value.entries === 'object') {
+    return {
+      ...value,
+      entries: Object.fromEntries(
+        Object.entries(value.entries).filter(([, entry]) => keepEntry(entry)),
+      ),
+    };
+  }
+
+  return value;
+}
+
 
 export function buildRegistrySystemPrompt(settings, options = {}) {
   const guides = {
@@ -88,7 +142,7 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '2. 情感与妊娠经验：experience',
     '3. 繁育心理：psychology.mens 或 psychology.preg（二选一，互斥）',
     '4. 既有孩子记录：children',
-    '5. 初登场即怀孕：pregnant.pregnantDays、pregnant.fetusesCount、pregnant.fetuses',
+    '5. 初登场即怀孕：pregnant.pregnantDays、pregnant.effectivePregnantDays、pregnant.fetusesCount、pregnant.fetuses',
     '6. 文字描述栏位：descriptions',
     '如果资料不足，可以省略字段或给 null；不要为了凑完整而编造。',
     embryoTypeLorePrompt,
@@ -150,14 +204,25 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '- [{"name":"冬月 露花","fathers":"前夫","gender":"女","race":"人类","age":5}]',
     '【5. 初登场即怀孕】',
     '参数说明：',
-    '- pregnant.pregnantDays: 这次妊娠天数，必须按天数填写',
+    '- pregnant.pregnantDays: 这次妊娠在现实中已持续的天数，必须按天数填写。',
+    '- pregnant.effectivePregnantDays: 真正计入胎儿发育与阶段推进的有效妊娠天数。若存在时间冻结、祝福加速、缓慢孕育、闭关多年但胎儿仅成长数月等情况，必须单独填写，不可默认等同于 pregnantDays。',
     '- pregnant.fetusesCount: 这次怀孕的怀胎数',
     '- pregnant.fetuses: 每个胎儿包含 fathers、provider、race、gender、embryoType',
     '- provider: 代孕母方、寄生等提供者名称，正常情况下为 null',
     '示例：',
-    '- 人类怀单胎8周: {"pregnant":{"pregnantDays":56,"fetusesCount":1,"fetuses":[{"fathers":"丈夫","provider":null,"race":"人类","gender":"男","embryoType":"胎生"}]}}',
-    '- 妖怪猫又怀双胎20周: {"pregnant":{"pregnantDays":140,"fetusesCount":2,"fetuses":[{"fathers":"监狱囚犯","provider":null,"race":"[妖怪]兽耳族-猫又x蜥蜴人","gender":"女","embryoType":"胎生"},{"fathers":"监狱囚犯","provider":null,"race":"[妖怪]兽耳族-猫又x蜥蜴人","gender":"女","embryoType":"胎生"}]}}',
-    '- 代孕情节: {"pregnant":{"pregnantDays":84,"fetusesCount":1,"fetuses":[{"fathers":"委托人","provider":"代孕者A","race":"人类","gender":"女","embryoType":"胎生"}]}}',
+    '- 人类怀单胎8周: {"pregnant":{"pregnantDays":56,"effectivePregnantDays":56,"fetusesCount":1,"fetuses":[{"fathers":"丈夫","provider":null,"race":"人类","gender":"男","embryoType":"胎生"}]}}',
+    '- 妖怪猫又怀双胎20周: {"pregnant":{"pregnantDays":140,"effectivePregnantDays":140,"fetusesCount":2,"fetuses":[{"fathers":"监狱囚犯","provider":null,"race":"[妖怪]兽耳族-猫又x蜥蜴人","gender":"女","embryoType":"胎生"},{"fathers":"监狱囚犯","provider":null,"race":"[妖怪]兽耳族-猫又x蜥蜴人","gender":"女","embryoType":"胎生"}]}}',
+    '- 代孕情节: {"pregnant":{"pregnantDays":84,"effectivePregnantDays":84,"fetusesCount":1,"fetuses":[{"fathers":"委托人","provider":"代孕者A","race":"人类","gender":"女","embryoType":"胎生"}]}}',
+    '- 女散修闭关三年、胎儿仅成长三个月: {"pregnant":{"pregnantDays":1095,"effectivePregnantDays":90,"fetusesCount":1,"fetuses":[{"fathers":"道侣","provider":null,"race":"人类","gender":"女","embryoType":"胎生"}]}}',
+    '【5.1 妊娠變速类补充设定（注册自订补充设定可直接体现到 bio）】',
+    '参数说明：',
+    '- bio.gestationModifierMultiplier: 妊娠速度倍率。1 为正常，大于 1 为加速，小于 1 为减速，可与 pregnant.effectivePregnantDays 同时出现。',
+    '- bio.gestationModifierName: 该倍率效果的名称，例如祝福、诅咒、体质、术式。',
+    '- bio.gestationModifierDescription: 对该倍率来源与表现的简短说明。',
+    '- 注意：未怀孕角色也可以填写这组 bio 字段；是否怀孕只影响 pregnant，不影响该 buff 是否存在。',
+    '示例：',
+    '- 被祝福的冒险者妊娠加快: {"bio":{"gestationModifierMultiplier":1.5,"gestationModifierName":"丰饶祝福","gestationModifierDescription":"受女神祝福后，妊娠期间胎儿发育明显加快，孕期反应也会更早显现。"}}',
+    '- 红尘之力导致孕期极端延长，即使当前未怀孕也应保留: {"bio":{"gestationModifierMultiplier":0.001,"gestationModifierName":"红尘织命","gestationModifierDescription":"受红尘之力影响，若进入妊娠，孕期推进速度仅为常规人类的千分之一，整体妊娠期会被极度拉长。"}}',
     '【6. 文字描述栏位】',
     '参数说明：descriptions 包含 normalDescription、closeupDescription、pregnantDescription。',
     '三个 descriptions 字段都必须使用旧版格式：字段名|描述内容;;字段名|描述内容;;...字段名|描述内容;;',
@@ -174,6 +239,7 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '【7. 用户自订补充设定】',
     customNotes ? customNotes : '无',
     '若提供了自订补充设定，必须优先视为该角色已明确声明的特征，并在相关字段中如实体现；不要忽略，也不要擅自扩写超出原意的内容。',
+    '若用户自订补充设定描述的是一种未来也会持续生效的妊娠体质、祝福、诅咒、冻结或延长效果，即使角色当前未怀孕，也必须写入 bio.gestationModifierMultiplier、bio.gestationModifierName、bio.gestationModifierDescription。',
     '注意：未怀孕角色不要硬填 pregnantDescription；描述内容应遵守旧系统文字栏位语义，不要换行。',
     '只输出 JSON，不要输出额外解释。',
     'JSON 结构必须是：',
@@ -192,6 +258,7 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '    },',
     '    "pregnant": {',
     '      "pregnantDays": 0,',
+    '      "effectivePregnantDays": 0,',
     '      "fetusesCount": 0,',
     '      "fetuses": []',
     '    },',
@@ -232,6 +299,11 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '      "stool": 0,',
     '      "hunger": 0,',
     '      "sleep": 0',
+    '    },',
+    '    "bio": {',
+    '      "gestationModifierMultiplier": 1,',
+    '      "gestationModifierName": "string",',
+    '      "gestationModifierDescription": "string"',
     '    },',
     '    "children": [],',
     '    "descriptions": {',
@@ -346,9 +418,26 @@ function sanitizePregnant(value) {
     : [];
   return {
     pregnantDays: Number.isFinite(Number(value.pregnantDays)) ? Number(value.pregnantDays) : 0,
+    effectivePregnantDays: Number.isFinite(Number(value.effectivePregnantDays)) ? Number(value.effectivePregnantDays) : null,
     fetusesCount: Number.isFinite(Number(value.fetusesCount)) ? Number(value.fetusesCount) : fetuses.length,
     fetuses,
   };
+}
+
+function sanitizeRegistryBio(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const nextBio = {};
+  if (value.gestationModifierMultiplier !== undefined) {
+    const multiplier = Number(value.gestationModifierMultiplier);
+    if (Number.isFinite(multiplier)) nextBio.gestationModifierMultiplier = clampNumber(multiplier, 0, 20, 1);
+  }
+  if (value.gestationModifierName !== undefined) {
+    nextBio.gestationModifierName = value.gestationModifierName === null ? '' : String(value.gestationModifierName || '').trim();
+  }
+  if (value.gestationModifierDescription !== undefined) {
+    nextBio.gestationModifierDescription = value.gestationModifierDescription === null ? '' : String(value.gestationModifierDescription || '').trim();
+  }
+  return Object.keys(nextBio).length > 0 ? nextBio : null;
 }
 
 function getRegistryEmbryoTypeRecoveryCoefficient(embryoType) {
@@ -400,14 +489,17 @@ function normalizeRegisteredPregnancy(profile) {
   });
   pregnant.fetusesCount = pregnant.fetuses.length;
   pregnant.pregnantDays = Math.max(1, Math.floor(Number(pregnant.pregnantDays) || 1));
+  const gestationSpeed = clampNumber(getGestationEffectiveSpeed(profile), 0.1, 20, 1.0);
+  pregnant.effectivePregnantDays = Number.isFinite(Number(pregnant.effectivePregnantDays))
+    ? Math.max(1, Number(pregnant.effectivePregnantDays))
+    : Math.max(1, pregnant.pregnantDays * gestationSpeed);
   pregnant.amnionDurability = 100;
 
   const bio = profile.bio || {};
-  const gestationSpeed = clampNumber(bio.gestationSpeed, 0.1, 20, 1.0);
   const motherBreedTolerance = clampNumber(bio.breedTolerance, 0.1, 100, 1.0);
   pregnant.fetalEnergyDrain = pregnant.fetuses.reduce((sum, fetus) => {
     const weight = clampNumber(fetus?.weight, 0.5, 2.0, 1.0);
-    const ageInDays = pregnant.pregnantDays * gestationSpeed * weight;
+    const ageInDays = pregnant.effectivePregnantDays * weight;
     const fetalAgeWeeks = ageInDays / 7;
     const fetalLoad = fetalAgeWeeks / 40;
     return sum + (fetalLoad / motherBreedTolerance);
@@ -511,6 +603,11 @@ function sanitizeRegistryProfile(profile, baseProfile) {
 
   if (profile.pregnant !== undefined) sanitized.pregnant = sanitizePregnant(profile.pregnant);
 
+  if (profile.bio !== undefined) {
+    const bio = sanitizeRegistryBio(profile.bio);
+    if (bio) sanitized.bio = bio;
+  }
+
   const descriptions = pickObjectFields(profile.descriptions, DESCRIPTION_FIELDS);
   if (Object.keys(descriptions).length > 0) sanitized.descriptions = descriptions;
 
@@ -570,6 +667,7 @@ export function applyRegistryResult(chatState, result) {
       bio: {
         ...base.profile.bio,
         ...(mergedRaceProfile || {}),
+        ...(sanitizedProfile.bio || {}),
       },
       metabolism: {
         ...base.profile.metabolism,
@@ -581,6 +679,15 @@ export function applyRegistryResult(chatState, result) {
   if (Array.isArray(nextCharacter.profile?.pregnant?.fetuses) && nextCharacter.profile.pregnant.fetuses.length > 0) {
     normalizeRegisteredPregnancy(nextCharacter.profile);
   }
+  nextCharacter.profile.bio = {
+    ...nextCharacter.profile.bio,
+    gestationEffectiveSpeed: clampNumber(
+      getGestationEffectiveSpeed(nextCharacter.profile),
+      0,
+      20,
+      getGestationSpeciesSpeed(nextCharacter.profile),
+    ),
+  };
   const latestSexDays = Number(nextCharacter.profile?.base?.latestSexDays);
   if (Number.isFinite(latestSexDays) && latestSexDays >= 0) {
     const cycleLength = getRegistryMenstrualCycleLength(nextCharacter.profile);
@@ -600,11 +707,19 @@ export async function runRegistry(ctx, options = {}) {
   const declaredRace = String(options.declaredRace || '').trim();
   if (!targetName) throw new Error('runRegistry 需要 targetName');
   const currentCharacter = getCharacterCard(ctx);
-  const characterWorldBook = await getCharacterWorldBook(ctx);
+  const rawCharacterWorldBook = await getCharacterWorldBook(ctx);
+  const characterWorldBook = filterRegistryWorldbookEntries(
+    rawCharacterWorldBook,
+    parseRegistryWorldbookExcludeNames(settings),
+    settings,
+  );
   const payload = {
     reason: options.reason || 'manual_registry',
     chat_id: getChatKey(ctx),
-    current_character: currentCharacter,
+    current_character: {
+      ...currentCharacter,
+      worldBook: characterWorldBook,
+    },
     character_description: currentCharacter.description || '',
     character_worldbook: characterWorldBook,
     target_character: targetName,
@@ -614,6 +729,25 @@ export async function runRegistry(ctx, options = {}) {
     declared_race: declaredRace || null,
     user_instruction: String(options.userInstruction || '').trim(),
   };
+  try {
+    const currentCharacterText = JSON.stringify(currentCharacter) || '';
+    const characterWorldBookText = JSON.stringify(characterWorldBook) || '';
+    const recentMessagesText = JSON.stringify(payload.recent_messages) || '';
+    const payloadText = JSON.stringify(payload) || '';
+    const worldbookEntries = Array.isArray(characterWorldBook?.entries)
+      ? characterWorldBook.entries.length
+      : (Array.isArray(characterWorldBook?.worldBook?.entries) ? characterWorldBook.worldBook.entries.length : 0);
+    console.log('[BS BioTracker][registry] payload size', {
+      target_character: targetName,
+      current_character_chars: currentCharacterText.length,
+      character_worldbook_chars: characterWorldBookText.length,
+      character_worldbook_entries: worldbookEntries,
+      recent_messages_chars: recentMessagesText.length,
+      payload_chars: payloadText.length,
+    });
+  } catch (error) {
+    console.warn('[BS BioTracker][registry] payload size debug failed', error);
+  }
   const result = await callOpenAICompatible(
     settings,
     payload,

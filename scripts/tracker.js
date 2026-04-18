@@ -24,6 +24,7 @@ import {
 export const POLL_RUNTIME_KEY = '__bs_biotracker_poll__';
 export const RUN_RUNTIME_KEY = '__bs_biotracker_running__';
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
+const AFTER_AI_SETTLE_MS = 1400;
 
 function getVitalityLevelText(level) {
   const levels = {
@@ -82,6 +83,7 @@ function buildPromptFacingCharacterState(item) {
   if (Array.isArray(pregnant.fetuses)) {
     profile.pregnant = {
       pregnantDays: Number.isFinite(Number(pregnant.pregnantDays)) ? Number(pregnant.pregnantDays) : 0,
+      effectivePregnantDays: Number.isFinite(Number(pregnant.effectivePregnantDays)) ? Number(pregnant.effectivePregnantDays) : 0,
       laborHours: Number.isFinite(Number(pregnant.laborHours)) ? Number(pregnant.laborHours) : 0,
       effectiveLaborHours: Number.isFinite(Number(pregnant.effectiveLaborHours)) ? Number(pregnant.effectiveLaborHours) : 0,
       amnionDurability: Number.isFinite(Number(pregnant.amnionDurability)) ? Number(pregnant.amnionDurability) : 0,
@@ -94,6 +96,7 @@ function buildPromptFacingCharacterState(item) {
   } else {
     profile.pregnant = {
       pregnantDays: Number.isFinite(Number(pregnant.pregnantDays)) ? Number(pregnant.pregnantDays) : 0,
+      effectivePregnantDays: Number.isFinite(Number(pregnant.effectivePregnantDays)) ? Number(pregnant.effectivePregnantDays) : 0,
       laborHours: Number.isFinite(Number(pregnant.laborHours)) ? Number(pregnant.laborHours) : 0,
       effectiveLaborHours: Number.isFinite(Number(pregnant.effectiveLaborHours)) ? Number(pregnant.effectiveLaborHours) : 0,
       amnionDurability: Number.isFinite(Number(pregnant.amnionDurability)) ? Number(pregnant.amnionDurability) : 0,
@@ -145,6 +148,7 @@ function buildOffscreenCharacterState(item) {
       },
       pregnant: {
         pregnantDays: pregnant.pregnantDays ?? 0,
+        effectivePregnantDays: pregnant.effectivePregnantDays ?? 0,
         laborHours: pregnant.laborHours ?? 0,
         effectiveLaborHours: pregnant.effectiveLaborHours ?? 0,
       },
@@ -170,16 +174,27 @@ function parseTrackerWorldbookExcludeNames(settings) {
   );
 }
 
-function filterTrackerWorldbookEntries(value, excludedNames) {
+function parseTrackerWorldbookIncludeNames(settings) {
+  return new Set(
+    String(settings?.trackerWorldbookIncludeNames || '')
+      .split(/[\r\n,]+/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+}
+
+function filterTrackerWorldbookEntries(value, excludedNames, settings = null) {
   if (!value || typeof value !== 'object') return value;
+  const mode = String(settings?.trackerWorldbookMode || 'exclude').trim();
+  const includedNames = parseTrackerWorldbookIncludeNames(settings);
 
   const normalizeEntryName = (entry) => String(entry?.name || entry?.comment || entry?.title || entry?.displayName || entry?.uid || '').trim();
 
-  // always filter disabled entries, regardless of excludedNames
   const keepEntry = (entry) => {
+    const name = normalizeEntryName(entry);
+    if (mode === 'allowlist_all') return Boolean(name) && includedNames.has(name);
     if (entry?.enabled === false || entry?.disable === true) return false;
     if (!excludedNames || excludedNames.size === 0) return true;
-    const name = normalizeEntryName(entry);
     return !name || !excludedNames.has(name);
   };
 
@@ -210,6 +225,7 @@ export function buildTrackerPayload(ctx, settings, reason = 'manual', endIndexEx
   const filteredWorldBook = filterTrackerWorldbookEntries(
     currentCharacter.worldBook || null,
     parseTrackerWorldbookExcludeNames(settings),
+    settings,
   );
   return {
     reason,
@@ -276,6 +292,46 @@ function emitTrackerUpdateCue(detail = {}) {
   globalThis.dispatchEvent?.(new CustomEvent(UPDATE_CUE_EVENT, { detail }));
 }
 
+function buildStreamingGuardSignature(ctx) {
+  const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+  const last = chat[chat.length - 1];
+  if (!last) return '';
+  const content = String(last.mes || '');
+  return [
+    getChatKey(ctx),
+    chat.length,
+    last.is_user ? 'user' : 'assistant',
+    String(last.name || ''),
+    content.length,
+    content.slice(0, 180),
+    content.slice(-120),
+  ].join('|');
+}
+
+function isAfterAiMessageSettled(ctx, settings, chatState) {
+  if (settings.triggerTiming !== 'after_ai') return true;
+  const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+  const lastMessage = chat[chat.length - 1];
+  if (!lastMessage || lastMessage.is_user) {
+    delete chatState.pendingAssistantSignature;
+    delete chatState.pendingAssistantUpdatedAt;
+    return true;
+  }
+
+  const signature = buildStreamingGuardSignature(ctx);
+  const now = Date.now();
+  if (chatState.pendingAssistantSignature !== signature) {
+    chatState.pendingAssistantSignature = signature;
+    chatState.pendingAssistantUpdatedAt = now;
+    saveSettings(ctx);
+    return false;
+  }
+
+  const updatedAt = Number(chatState.pendingAssistantUpdatedAt || 0);
+  if (!Number.isFinite(updatedAt) || now - updatedAt < AFTER_AI_SETTLE_MS) return false;
+  return true;
+}
+
 async function processTrackerMessage(ctx, settings, chatState, deps, reason, messageIndex) {
   const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
   const message = chat[messageIndex];
@@ -296,6 +352,7 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
       payload.character_worldbook = filterTrackerWorldbookEntries(
         loadedWorldBook || null,
         parseTrackerWorldbookExcludeNames(settings),
+        settings,
       );
     } catch (error) {
       console.warn('[BS BioTracker] loadWorldInfo for tracker failed', error);
@@ -391,6 +448,7 @@ export async function poll(ctx, deps) {
   if (chat.length === 0) return;
   const chatState = getChatState(ctx, settings);
   if (getRegisteredTargetNames(ctx, settings, chatState).length === 0) return;
+  if (!isAfterAiMessageSettled(ctx, settings, chatState)) return;
   if (!hasPendingChatHistory(ctx, chatState)) return;
   await runTracker(ctx, deps, 'poll');
 }
