@@ -13,6 +13,7 @@ export const MODULE_NAME = 'bs_biotracker';
 const MAX_CHAT_STATE_SNAPSHOTS = 48;
 const MAX_RAW_RESULT_TEXT_LENGTH = 1200;
 const MIN_CHAT_INHERIT_MESSAGE_COUNT = 2;
+const MESSAGE_DIGEST_SEED = 2166136261;
 
 export const THEME_CONFIG = {
   retro: {},
@@ -668,6 +669,7 @@ export function getChatState(ctx, settings) {
   if (!settings.chatStates[chatKey]) settings.chatStates[chatKey] = createEmptyChatState();
   const chatState = settings.chatStates[chatKey];
   if (!Array.isArray(chatState.snapshots)) chatState.snapshots = [];
+  compactChatStateSnapshots(chatState);
   restoreChatStateFromSnapshot(chatState, getLatestMatchingSnapshot(ctx, chatState));
   const characters = chatState.characters;
   if (characters && typeof characters === 'object') {
@@ -688,16 +690,6 @@ function isChatStateEffectivelyEmpty(chatState) {
   return !(hasCharacters || hasSnapshots || hasSceneSummary || hasMinutesPassed || hasAttemptedSignature || hasProcessedSignature || hasRawResult);
 }
 
-function isMessageSignaturePrefixMatch(sourceSignatures, targetSignatures, count) {
-  if (!Array.isArray(sourceSignatures) || !Array.isArray(targetSignatures)) return false;
-  if (!Number.isInteger(count) || count < 0) return false;
-  if (count > sourceSignatures.length || count > targetSignatures.length) return false;
-  for (let index = 0; index < count; index += 1) {
-    if (sourceSignatures[index] !== targetSignatures[index]) return false;
-  }
-  return true;
-}
-
 export function inheritChatStateFromMatchingChat(ctx, settings) {
   const chatKey = getChatKey(ctx);
   const currentChat = Array.isArray(ctx?.chat) ? ctx.chat : [];
@@ -709,19 +701,22 @@ export function inheritChatStateFromMatchingChat(ctx, settings) {
   const currentState = settings.chatStates[chatKey];
   if (!isChatStateEffectivelyEmpty(currentState)) return { inherited: false, reason: 'state_exists' };
 
-  const currentSignatures = buildMessageSignatures(ctx);
+  const currentMessageCount = currentChat.length;
+  const digestCache = new Map();
+  const getDigestForCount = (count) => {
+    if (!digestCache.has(count)) digestCache.set(count, buildMessageDigest(ctx, count));
+    return digestCache.get(count);
+  };
   let bestMatch = null;
 
   for (const [candidateKey, candidateState] of Object.entries(settings.chatStates)) {
     if (candidateKey === chatKey || !candidateState || typeof candidateState !== 'object') continue;
+    compactChatStateSnapshots(candidateState);
     const candidateSnapshots = Array.isArray(candidateState.snapshots) ? candidateState.snapshots : [];
     for (const snapshot of candidateSnapshots) {
-      const count = Number.isInteger(snapshot?.messageCount)
-        ? snapshot.messageCount
-        : (Array.isArray(snapshot?.messageSignatures) ? snapshot.messageSignatures.length : 0);
-      if (count <= 0 || count !== currentSignatures.length) continue;
-      const signatures = Array.isArray(snapshot?.messageSignatures) ? snapshot.messageSignatures : [];
-      if (!isMessageSignaturePrefixMatch(signatures, currentSignatures, count)) continue;
+      const count = Number.isInteger(snapshot?.messageCount) ? snapshot.messageCount : 0;
+      if (count <= 0 || count !== currentMessageCount) continue;
+      if (String(snapshot?.messageDigest || '') !== getDigestForCount(count)) continue;
       if (!bestMatch || count > bestMatch.count || (count === bestMatch.count && (snapshot.createdAt || 0) > (bestMatch.snapshot?.createdAt || 0))) {
         bestMatch = { candidateKey, candidateState, snapshot, count };
       }
@@ -732,11 +727,9 @@ export function inheritChatStateFromMatchingChat(ctx, settings) {
 
   const inheritedSnapshots = (Array.isArray(bestMatch.candidateState.snapshots) ? bestMatch.candidateState.snapshots : [])
     .filter((snapshot) => {
-      const count = Number.isInteger(snapshot?.messageCount)
-        ? snapshot.messageCount
-        : (Array.isArray(snapshot?.messageSignatures) ? snapshot.messageSignatures.length : 0);
-      const signatures = Array.isArray(snapshot?.messageSignatures) ? snapshot.messageSignatures : [];
-      return count > 0 && count <= currentSignatures.length && isMessageSignaturePrefixMatch(signatures, currentSignatures, count);
+      const count = Number.isInteger(snapshot?.messageCount) ? snapshot.messageCount : 0;
+      if (count <= 0 || count > currentMessageCount) return false;
+      return String(snapshot?.messageDigest || '') === getDigestForCount(count);
     })
     .map((snapshot) => cloneValue(snapshot));
 
@@ -860,10 +853,47 @@ export function buildMessageSignature(ctx, message) {
   ].join('|');
 }
 
+function hashStringFNV1a(value, seed = MESSAGE_DIGEST_SEED) {
+  let hash = seed >>> 0;
+  const text = String(value || '');
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+function foldMessageSignatureDigest(seed, signature) {
+  let hash = seed >>> 0;
+  hash ^= hashStringFNV1a(signature, MESSAGE_DIGEST_SEED);
+  hash = Math.imul(hash, 16777619) >>> 0;
+  return hash >>> 0;
+}
+
 export function buildMessageSignatures(ctx, endIndexExclusive = null) {
   const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
   const end = Number.isInteger(endIndexExclusive) ? Math.max(0, Math.min(chat.length, endIndexExclusive)) : chat.length;
   return chat.slice(0, end).map((message) => buildMessageSignature(ctx, message));
+}
+
+export function buildMessageDigest(ctx, endIndexExclusive = null) {
+  const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+  const end = Number.isInteger(endIndexExclusive) ? Math.max(0, Math.min(chat.length, endIndexExclusive)) : chat.length;
+  let hash = MESSAGE_DIGEST_SEED;
+  for (let index = 0; index < end; index += 1) {
+    hash = foldMessageSignatureDigest(hash, buildMessageSignature(ctx, chat[index]));
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
+function buildMessageDigestFromSignatures(signatures, endIndexExclusive = null) {
+  const list = Array.isArray(signatures) ? signatures : [];
+  const end = Number.isInteger(endIndexExclusive) ? Math.max(0, Math.min(list.length, endIndexExclusive)) : list.length;
+  let hash = MESSAGE_DIGEST_SEED;
+  for (let index = 0; index < end; index += 1) {
+    hash = foldMessageSignatureDigest(hash, list[index]);
+  }
+  return hash.toString(16).padStart(8, '0');
 }
 
 function exportChatStateSnapshotPayload(chatState) {
@@ -901,6 +931,20 @@ function trimChatStateSnapshots(chatState) {
   chatState.snapshots.splice(0, chatState.snapshots.length - MAX_CHAT_STATE_SNAPSHOTS);
 }
 
+function compactChatStateSnapshots(chatState) {
+  if (!Array.isArray(chatState?.snapshots)) return;
+  for (const snapshot of chatState.snapshots) {
+    if (!snapshot || typeof snapshot !== 'object') continue;
+    if (!Number.isInteger(snapshot.messageCount)) {
+      snapshot.messageCount = Array.isArray(snapshot.messageSignatures) ? snapshot.messageSignatures.length : 0;
+    }
+    if (!snapshot.messageDigest && Array.isArray(snapshot.messageSignatures)) {
+      snapshot.messageDigest = buildMessageDigestFromSignatures(snapshot.messageSignatures, snapshot.messageCount);
+    }
+    delete snapshot.messageSignatures;
+  }
+}
+
 export function restoreChatStateFromSnapshot(chatState, snapshot) {
   const payload = snapshot?.stateSnapshot ? cloneValue(snapshot.stateSnapshot) : createEmptyChatState();
   chatState.lastAttemptedSignature = payload.lastAttemptedSignature || '';
@@ -919,7 +963,7 @@ export function recordChatStateSnapshot(ctx, chatState, options = {}) {
     : (Array.isArray(ctx.chat) ? ctx.chat.length : 0);
   const snapshot = {
     messageCount,
-    messageSignatures: buildMessageSignatures(ctx, messageCount),
+    messageDigest: buildMessageDigest(ctx, messageCount),
     reason: String(options.reason || 'state'),
     createdAt: Date.now(),
     stateSnapshot: cloneValue(exportChatStateSnapshotPayload(chatState)),
@@ -930,21 +974,26 @@ export function recordChatStateSnapshot(ctx, chatState, options = {}) {
 }
 
 export function getLatestMatchingSnapshot(ctx, chatState, messageCount = null) {
-  const currentSignatures = buildMessageSignatures(ctx, messageCount);
+  compactChatStateSnapshots(chatState);
+  const chatLength = Array.isArray(ctx.chat) ? ctx.chat.length : 0;
+  const requestedCount = Number.isInteger(messageCount)
+    ? Math.max(0, Math.min(chatLength, messageCount))
+    : null;
+  const digestCache = new Map();
+  const getDigestForCount = (count) => {
+    if (!digestCache.has(count)) digestCache.set(count, buildMessageDigest(ctx, count));
+    return digestCache.get(count);
+  };
   const snapshots = Array.isArray(chatState.snapshots) ? chatState.snapshots : [];
   for (let index = snapshots.length - 1; index >= 0; index -= 1) {
     const snapshot = snapshots[index];
-    const signatures = Array.isArray(snapshot?.messageSignatures) ? snapshot.messageSignatures : [];
-    const count = Number.isInteger(snapshot?.messageCount) ? snapshot.messageCount : signatures.length;
-    if (count > currentSignatures.length) continue;
-    let matched = true;
-    for (let sigIndex = 0; sigIndex < count; sigIndex += 1) {
-      if (signatures[sigIndex] !== currentSignatures[sigIndex]) {
-        matched = false;
-        break;
-      }
+    const count = Number.isInteger(snapshot?.messageCount) ? snapshot.messageCount : 0;
+    if (requestedCount !== null) {
+      if (count !== requestedCount) continue;
+    } else if (count > chatLength) {
+      continue;
     }
-    if (matched) return snapshot;
+    if (String(snapshot?.messageDigest || '') === getDigestForCount(count)) return snapshot;
   }
   return null;
 }

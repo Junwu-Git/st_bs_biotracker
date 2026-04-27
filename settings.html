@@ -277,7 +277,12 @@
 
             <div class="settings_section">
               <div class="bs-bt-status-title">变量内容</div>
-              <pre id="bs-bt-full-state-output" class="bs-bt-status-box">请选择角色查看完整变量。</pre>
+              <textarea id="bs-bt-full-state-output" class="text_pole bs-bt-textarea" rows="18" spellcheck="false">请选择角色查看完整变量。</textarea>
+              <div id="bs-bt-full-state-edit-status" class="bs-bt-inline-status">可直接编辑 JSON，应用前会检查格式与基础结构。</div>
+              <div class="settings_section bs-bt-action-row">
+                <button id="bs-bt-full-state-apply" class="menu_button" type="button" disabled>应用修改</button>
+                <button id="bs-bt-full-state-reset" class="menu_button" type="button" disabled>重置显示</button>
+              </div>
             </div>
 
             <div class="settings_section bs-bt-action-row">
@@ -350,7 +355,7 @@
         <section id="bs-bt-view-race-encyclopedia" class="bs-bt-view" data-view="race-encyclopedia">
           <div class="bs-bt-panel">
             <div class="settings_section">
-              <div id="bs-bt-race-count" class="bs-bt-status-title">当前内置种族数量：0</div>
+              <div id="bs-bt-race-count" class="bs-bt-status-title">内置种族数量：0</div>
             </div>
 
             <div class="settings_section">

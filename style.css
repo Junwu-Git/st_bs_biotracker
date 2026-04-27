@@ -629,6 +629,28 @@
   word-break: break-word;
 }
 
+#bs-biotracker-settings .bs-bt-inline-status {
+  margin-top: 8px;
+  min-height: 1.4em;
+  white-space: pre-wrap;
+  color: var(--bs-bt-text-dim, currentColor);
+  font-size: 0.9em;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+#bs-biotracker-settings .bs-bt-inline-status[data-kind='error'] {
+  color: #8a1f1f;
+}
+
+#bs-biotracker-settings.theme-wasteland .bs-bt-inline-status[data-kind='error'] {
+  color: #f9a3a3;
+}
+
+#bs-biotracker-settings .bs-bt-inline-status[data-kind='success'] {
+  color: #0c6b4f;
+}
+
 #bs-biotracker-settings .bs-bt-home-tile {
   position: relative;
   display: grid;

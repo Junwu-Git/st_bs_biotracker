@@ -29,6 +29,7 @@ import {
   getResolvedCharacter,
   getSettings,
   MODULE_NAME,
+  normalizeCharacterPsychologyState,
   recordChatStateSnapshot,
   saveSettings,
   THEME_CONFIG,
@@ -55,6 +56,7 @@ const CHAT_DELETED_HANDLER_KEY = '__bs_biotracker_chat_deleted_handler__';
 const GROUP_CHAT_DELETED_HANDLER_KEY = '__bs_biotracker_group_chat_deleted_handler__';
 const GROUP_CHAT_CREATED_HANDLER_KEY = '__bs_biotracker_group_chat_created_handler__';
 const PENDING_CHAT_INHERIT_KEY = '__bs_biotracker_pending_chat_inherit__';
+const WORLDBOOK_RELOAD_TIMER_KEY = '__bs_biotracker_worldbook_reload_timer__';
 const VITALITY_CAPS = { 1: 50, 2: 75, 3: 100, 4: 125, 5: 150, 6: 175, 7: 200 };
 const PSY_STRESS_CAPS = { 1: 20, 2: 50, 3: 80, 4: 110, 5: 140, 6: 170, 7: 200 };
 
@@ -170,7 +172,10 @@ function saveWorldbookIncludeNamesFromList(ctx, names) {
 function applyWorldbookFilterSelection(ctx, entries = [], selectedNames = []) {
   latestWorldbookEntries = Array.isArray(entries) ? entries : [];
   const settings = getSettings(ctx);
-  if (String(settings.trackerWorldbookMode || 'exclude').trim() === 'exclude') {
+  const mode = String(settings.trackerWorldbookMode || 'exclude').trim();
+  if (mode === 'allowlist_all') {
+    settings.trackerWorldbookIncludeNames = parseWorldbookExcludeNamesInput(selectedNames.join('\n')).join('\n');
+  } else {
     settings.trackerWorldbookExcludeNames = parseWorldbookExcludeNamesInput(selectedNames.join('\n')).join('\n');
   }
   syncWorldbookFilterInput(ctx);
@@ -302,7 +307,7 @@ function renderRaceEncyclopediaPage() {
   const derivedOutputNode = document.getElementById('bs-bt-derived-output');
   if (!countNode || !selectNode || !outputNode || !derivedSelectNode || !derivedOutputNode) return;
 
-  countNode.innerHTML = `当前内置种族数量：${RACE_ENCYCLOPEDIA_LIST.length}<br>衍生类型数量：${DERIVED_ENCYCLOPEDIA_LIST.length}`;
+  countNode.innerHTML = `内置种族数量：${RACE_ENCYCLOPEDIA_LIST.length}<br>衍生类型数量：${DERIVED_ENCYCLOPEDIA_LIST.length}`;
   if (!selectedRaceEncyclopedia || !RACE_ENCYCLOPEDIA_LIST.includes(selectedRaceEncyclopedia)) {
     selectedRaceEncyclopedia = RACE_ENCYCLOPEDIA_LIST[0] || '';
   }
@@ -420,6 +425,12 @@ function getCharacterStateForDisplay(character) {
     delete metabolism.flux;
   }
   return cloned;
+}
+
+function cloneJsonValue(value) {
+  return typeof globalThis.structuredClone === 'function'
+    ? globalThis.structuredClone(value)
+    : JSON.parse(JSON.stringify(value));
 }
 
 function parseWorldbookExcludeNamesInput(value) {
@@ -551,7 +562,10 @@ async function inspectCurrentCharacterWorldbook(ctx) {
   const mode = String(settings.trackerWorldbookMode || 'exclude').trim();
   const foundEntries = collectWorldbookEntryNames(worldBook, { includeDisabled: mode === 'allowlist_all' });
   const foundNames = foundEntries.map(e => e.name);
-  const trackedNames = parseWorldbookExcludeNamesInput(document.getElementById('bs-bt-worldbook-filter-input')?.value ?? '');
+  const filterInputValue = document.getElementById('bs-bt-worldbook-filter-input')?.value;
+  const trackedNames = filterInputValue === undefined
+    ? getWorldbookFilterInputNames(ctx)
+    : parseWorldbookExcludeNamesInput(filterInputValue);
   const foundSet = new Set(foundNames);
   const matched = trackedNames.filter((name) => foundSet.has(name));
   const missing = trackedNames.filter((name) => !foundSet.has(name));
@@ -1741,16 +1755,150 @@ function closeFullStateConfirm() {
   if (textEl) textEl.textContent = '请选择角色。';
 }
 
+function setFullStateEditStatus(message, kind = 'info') {
+  const status = document.getElementById('bs-bt-full-state-edit-status');
+  if (!status) return;
+  status.textContent = message;
+  status.dataset.kind = kind;
+}
+
 function updateFullStateControls() {
   const button = document.getElementById('bs-bt-full-state-unregister');
-  if (!button) return;
+  const applyButton = document.getElementById('bs-bt-full-state-apply');
+  const resetButton = document.getElementById('bs-bt-full-state-reset');
   if (!selectedFullStateName) {
-    button.disabled = true;
-    button.textContent = '注销当前角色';
+    if (button) {
+      button.disabled = true;
+      button.textContent = '注销当前角色';
+    }
+    if (applyButton) applyButton.disabled = true;
+    if (resetButton) resetButton.disabled = true;
     return;
   }
-  button.disabled = false;
-  button.textContent = `注销当前角色：${selectedFullStateName}`;
+  if (button) {
+    button.disabled = false;
+    button.textContent = `注销当前角色：${selectedFullStateName}`;
+  }
+  if (applyButton) applyButton.disabled = false;
+  if (resetButton) resetButton.disabled = false;
+}
+
+function getFullStateEditorText(character) {
+  return JSON.stringify(cloneJsonValue(character), null, 2);
+}
+
+function renderSelectedFullStateEditor(ctx) {
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const output = document.getElementById('bs-bt-full-state-output');
+  if (!output) return;
+  if (selectedFullStateName && chatState.characters?.[selectedFullStateName]) {
+    output.value = getFullStateEditorText(chatState.characters[selectedFullStateName]);
+    setFullStateEditStatus('可直接编辑 JSON，应用前会检查格式与基础结构。');
+  } else {
+    output.value = '请选择角色查看完整变量。';
+    setFullStateEditStatus('请选择角色后再编辑。');
+  }
+  updateFullStateControls();
+}
+
+function isPlainObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validateManualCharacterState(next, currentName) {
+  const errors = [];
+  if (!isPlainObject(next)) errors.push('顶层必须是 JSON 对象。');
+  if (!errors.length && String(next.name || '').trim() !== currentName) errors.push('不能在这里修改角色 name；请保持与当前选中角色一致。');
+  if (!isPlainObject(next.profile)) errors.push('profile 必须是对象。');
+
+  const profile = isPlainObject(next.profile) ? next.profile : {};
+  for (const path of ['base', 'pregnant', 'experience', 'bio', 'metabolism', 'notify', 'immune', 'psychology', 'descriptions', 'cooldown']) {
+    if (profile[path] !== undefined && !isPlainObject(profile[path])) errors.push(`profile.${path} 必须是对象。`);
+  }
+  if (profile.children !== undefined && !Array.isArray(profile.children)) errors.push('profile.children 必须是数组。');
+  if (profile.base?.sperms !== undefined && !Array.isArray(profile.base.sperms)) errors.push('profile.base.sperms 必须是数组。');
+  if (profile.pregnant?.fetuses !== undefined && !Array.isArray(profile.pregnant.fetuses)) errors.push('profile.pregnant.fetuses 必须是数组。');
+  if (profile.base?.stage !== undefined && typeof profile.base.stage !== 'string') errors.push('profile.base.stage 必须是文字。');
+
+  const numericPaths = [
+    ['profile', 'base', 'days'],
+    ['profile', 'base', 'age'],
+    ['profile', 'base', 'vitality'],
+    ['profile', 'base', 'vitalityLevel'],
+    ['profile', 'base', 'psyStress'],
+    ['profile', 'base', 'psyStressLevel'],
+    ['profile', 'base', 'libido'],
+    ['profile', 'base', 'fertilizationDays'],
+    ['profile', 'base', 'uterinePressure'],
+    ['profile', 'pregnant', 'pregnantDays'],
+    ['profile', 'pregnant', 'effectivePregnantDays'],
+    ['profile', 'pregnant', 'laborHours'],
+    ['profile', 'pregnant', 'effectiveLaborHours'],
+    ['profile', 'pregnant', 'fetusesCount'],
+    ['profile', 'pregnant', 'fetalEnergyDrain'],
+    ['profile', 'pregnant', 'amnionDurability'],
+  ];
+  for (const path of numericPaths) {
+    let current = next;
+    for (const key of path) current = current?.[key];
+    if (current !== undefined && (typeof current !== 'number' || !Number.isFinite(current))) errors.push(`${path.join('.')} 必须是有限数字。`);
+  }
+
+  if (typeof profile.base?.days === 'number' && profile.base.days < 1) errors.push('profile.base.days 必须大于等于 1。');
+  if (typeof profile.base?.vitalityLevel === 'number' && (profile.base.vitalityLevel < 1 || profile.base.vitalityLevel > 7)) errors.push('profile.base.vitalityLevel 必须在 1 到 7 之间。');
+  if (typeof profile.base?.psyStressLevel === 'number' && (profile.base.psyStressLevel < 1 || profile.base.psyStressLevel > 7)) errors.push('profile.base.psyStressLevel 必须在 1 到 7 之间。');
+
+  if (errors.length > 0) return { ok: false, errors };
+
+  const normalized = normalizeCharacterPsychologyState(cloneJsonValue(next));
+  if (Array.isArray(normalized.profile?.pregnant?.fetuses)) {
+    normalized.profile.pregnant.fetusesCount = normalized.profile.pregnant.fetuses.length;
+  }
+  return { ok: true, value: normalized };
+}
+
+function applyFullStateManualEdit(ctx) {
+  if (!selectedFullStateName) {
+    globalThis.toastr?.warning?.('[BS BioTracker] 请先选择角色');
+    return;
+  }
+  const output = document.getElementById('bs-bt-full-state-output');
+  if (!output) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(String(output.value || ''));
+  } catch (error) {
+    const message = `JSON 格式错误：${String(error?.message || error)}`;
+    setFullStateEditStatus(message, 'error');
+    globalThis.toastr?.error?.(`[BS BioTracker] ${message}`);
+    return;
+  }
+
+  const result = validateManualCharacterState(parsed, selectedFullStateName);
+  if (!result.ok) {
+    const message = `无法应用修改：\n${result.errors.map((item) => `- ${item}`).join('\n')}`;
+    setFullStateEditStatus(message, 'error');
+    globalThis.toastr?.error?.('[BS BioTracker] 变量检查未通过');
+    return;
+  }
+
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  if (!chatState.characters?.[selectedFullStateName]) {
+    globalThis.toastr?.warning?.(`[BS BioTracker] 找不到角色 ${selectedFullStateName}`);
+    renderFullStatePage(ctx);
+    return;
+  }
+  chatState.characters[selectedFullStateName] = result.value;
+  recordChatStateSnapshot(ctx, chatState, { reason: 'manual_full_state_edit' });
+  saveSettings(ctx);
+  renderStatusPanel(ctx);
+  renderFullStatePage(ctx);
+  updateMainFlowPrompt(ctx);
+  resetPoller(ctx, trackerDeps);
+  setFullStateEditStatus(`已应用 ${selectedFullStateName} 的变量修改。`, 'success');
+  globalThis.toastr?.success?.(`[BS BioTracker] 已应用 ${selectedFullStateName} 的变量修改`);
 }
 
 function showFullState(ctx, name) {
@@ -1762,8 +1910,7 @@ function showFullState(ctx, name) {
     return;
   }
   selectedFullStateName = name;
-  const panel = document.getElementById('bs-bt-full-state-output');
-  if (panel) panel.textContent = JSON.stringify(getCharacterStateForDisplay(target), null, 2);
+  renderSelectedFullStateEditor(ctx);
   updateFullStateControls();
   closeFullStateConfirm();
   setView('full-state');
@@ -1814,7 +1961,8 @@ function renderFullStatePage(ctx) {
     empty.textContent = '当前聊天没有已注册角色';
     list.appendChild(empty);
     selectedFullStateName = '';
-    output.textContent = '请选择角色查看完整变量。';
+    output.value = '请选择角色查看完整变量。';
+    setFullStateEditStatus('请选择角色后再编辑。');
     updateFullStateControls();
     closeFullStateConfirm();
     return;
@@ -1834,9 +1982,11 @@ function renderFullStatePage(ctx) {
   }
 
   if (selectedFullStateName && chatState.characters[selectedFullStateName]) {
-    output.textContent = JSON.stringify(getCharacterStateForDisplay(chatState.characters[selectedFullStateName]), null, 2);
+    output.value = getFullStateEditorText(chatState.characters[selectedFullStateName]);
+    setFullStateEditStatus('可直接编辑 JSON，应用前会检查格式与基础结构。');
   } else {
-    output.textContent = '请选择角色查看完整变量。';
+    output.value = '请选择角色查看完整变量。';
+    setFullStateEditStatus('请选择角色后再编辑。');
   }
   updateFullStateControls();
   closeFullStateConfirm();
@@ -1952,14 +2102,43 @@ function applySettingsToForm(ctx) {
 
 const trackerDeps = { renderStatusPanel, updateClock };
 
+function getWorldbookFilterSnapshot(ctx) {
+  const settings = getSettings(ctx);
+  const mode = String(settings.trackerWorldbookMode || 'exclude').trim();
+  const names = mode === 'allowlist_all'
+    ? settings.trackerWorldbookIncludeNames
+    : settings.trackerWorldbookExcludeNames;
+  return `${mode}\n${String(names || '').trim()}`;
+}
+
+function persistWorldbookFilterIfChanged(ctx, beforeSnapshot) {
+  if (getWorldbookFilterSnapshot(ctx) === beforeSnapshot) return;
+  saveSettings(ctx);
+  updateMainFlowPrompt(ctx);
+  resetPoller(ctx, trackerDeps);
+}
+
 async function refreshWorldbookFilterPage(ctx) {
+  const beforeSnapshot = getWorldbookFilterSnapshot(ctx);
   try {
     const result = await inspectCurrentCharacterWorldbook(ctx);
     applyWorldbookFilterSelection(ctx, result.foundEntries, result.matched);
+    persistWorldbookFilterIfChanged(ctx, beforeSnapshot);
   } catch (error) {
     applyWorldbookFilterSelection(ctx, [], []);
     throw error;
   }
+}
+
+function scheduleWorldbookFilterReload(ctx, reason = 'chat_changed') {
+  globalThis.clearTimeout?.(globalThis[WORLDBOOK_RELOAD_TIMER_KEY]);
+  globalThis[WORLDBOOK_RELOAD_TIMER_KEY] = globalThis.setTimeout?.(async () => {
+    try {
+      await refreshWorldbookFilterPage(ctx);
+    } catch (error) {
+      console.error(`[BS BioTracker] refreshWorldbookFilterPage after ${reason} failed`, error);
+    }
+  }, 250);
 }
 
 async function clearCurrentWorldbookExcludeSelections(ctx) {
@@ -2512,6 +2691,12 @@ async function ensureModal(ctx) {
     if (!selectedFullStateName) return;
     openFullStateConfirm();
   });
+  document.getElementById('bs-bt-full-state-apply')?.addEventListener('click', () => {
+    applyFullStateManualEdit(ctx);
+  });
+  document.getElementById('bs-bt-full-state-reset')?.addEventListener('click', () => {
+    renderSelectedFullStateEditor(ctx);
+  });
   document.getElementById('bs-bt-full-state-confirm-yes')?.addEventListener('click', () => {
     if (!selectedFullStateName) return;
     unregisterCharacter(ctx, selectedFullStateName);
@@ -2742,6 +2927,7 @@ async function bootstrap() {
         }
         renderStatusPanel(ctx);
         updateMainFlowPrompt(ctx);
+        scheduleWorldbookFilterReload(ctx, 'chat_changed');
       };
       eventSource.on(event_types.CHAT_CHANGED, globalThis[CHAT_CHANGED_HANDLER_KEY]);
     }
@@ -2752,6 +2938,7 @@ async function bootstrap() {
       globalThis[CHAT_CREATED_HANDLER_KEY] = () => {
         globalThis[PENDING_CHAT_INHERIT_KEY] = true;
         tryInheritForkedChatState(ctx, 'chat_created');
+        scheduleWorldbookFilterReload(ctx, 'chat_created');
       };
       eventSource.on(event_types.CHAT_CREATED, globalThis[CHAT_CREATED_HANDLER_KEY]);
     }
@@ -2782,6 +2969,7 @@ async function bootstrap() {
       globalThis[GROUP_CHAT_CREATED_HANDLER_KEY] = () => {
         globalThis[PENDING_CHAT_INHERIT_KEY] = true;
         tryInheritForkedChatState(ctx, 'group_chat_created');
+        scheduleWorldbookFilterReload(ctx, 'group_chat_created');
       };
       eventSource.on(event_types.GROUP_CHAT_CREATED, globalThis[GROUP_CHAT_CREATED_HANDLER_KEY]);
     }
