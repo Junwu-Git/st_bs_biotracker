@@ -1543,9 +1543,16 @@ function renderStatusPanel(ctx) {
   list.innerHTML = '';
   if (latestCall) {
     const toolCalls = Array.isArray(chatState.lastRawResult?.tool_calls) ? chatState.lastRawResult.tool_calls : [];
+    const operationLogs = Array.isArray(chatState.lastOperationLogs) ? chatState.lastOperationLogs : [];
+    const lastCallView = {
+      tool_calls: toolCalls,
+      operation_logs: operationLogs,
+    };
+    if (chatState.lastRawResult?.message) lastCallView.message = chatState.lastRawResult.message;
+    if (chatState.lastRawResult?.error) lastCallView.error = chatState.lastRawResult.error;
     latestCall.textContent =
-      toolCalls.length > 0
-        ? JSON.stringify(toolCalls, null, 2)
+      toolCalls.length > 0 || operationLogs.length > 0
+        ? JSON.stringify(lastCallView, null, 2)
         : chatState.lastRawResult
           ? JSON.stringify(chatState.lastRawResult, null, 2)
           : '尚无数据';

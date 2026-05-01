@@ -919,7 +919,7 @@ function processSimpleConception(profile, tick, notify, name) {
       eggs -= 1;
       break;
     }
-    eggs -= 1;
+    break;
   }
 
   base.eggs = eggs;
@@ -956,6 +956,17 @@ function processSimpleConception(profile, tick, notify, name) {
 
   pregnant.fetusesCount = Array.isArray(pregnant.fetuses) ? pregnant.fetuses.length : 0;
   updateFetalEnergyDrain(profile);
+}
+
+function normalizeToolCallArguments(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function isPregnancyStage(stage) {
@@ -2984,7 +2995,7 @@ function applyDebugSetGestationModifier(chatState, args) {
 
 export function applyToolCall(chatState, call) {
   const name = String(call?.name || '').trim();
-  const args = call?.arguments && typeof call.arguments === 'object' ? call.arguments : {};
+  const args = normalizeToolCallArguments(call?.arguments);
   if (!name) return { applied: false, message: 'Empty tool call name.' };
   if (name === 'bsPassedTime') return applyPassedTime(chatState, args);
   if (name === 'bsUpdateCharacterStatus') return applyCharacterStatus(chatState, args);
@@ -3012,10 +3023,20 @@ export function applyToolCallsResult(ctx, result) {
   const toolCalls = Array.isArray(result?.tool_calls) ? result.tool_calls : [];
   const logs = [];
   for (const call of toolCalls) {
-    logs.push(applyToolCall(chatState, call));
+    const normalizedCall = {
+      name: String(call?.name || '').trim(),
+      arguments: normalizeToolCallArguments(call?.arguments),
+    };
+    const appliedResult = applyToolCall(chatState, normalizedCall);
+    logs.push({
+      ...appliedResult,
+      name: normalizedCall.name,
+      arguments: cloneValue(normalizedCall.arguments),
+    });
   }
   if (result?.scene_summary !== undefined) chatState.sceneSummary = String(result.scene_summary || '');
   chatState.lastRawResult = result;
+  chatState.lastOperationLogs = logs;
   saveSettings(ctx);
   return { chatState, logs };
 }

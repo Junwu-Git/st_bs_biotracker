@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Playfair+Display:wght@700&family=Audiowide&family=Silkscreen&family=Montserrat:wght@300;600&family=DotGothic16&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Chewy&family=Ma+Shan+Zheng&family=Long+Cang&family=Noto+Serif+TC:wght@400;700&family=Special+Elite&family=UnifrakturCook:wght@700&family=Zhi+Mang+Xing&family=Audiowide&family=Silkscreen&family=DotGothic16&family=ZCOOL+KuaiLe&family=ZCOOL+QingKe+HuangYou&family=ZCOOL+XiaoWei&display=swap');
 
 :root {
   --bsbt-pager-bg: #2d3436;
@@ -62,7 +62,7 @@
   --bsbt-lcd-bg: #f5e6c8;
   --bsbt-lcd-text: #3e2723;
   --bsbt-border-color: #795548;
-  --bsbt-font-main: 'Playfair Display', 'Noto Serif TC', 'Microsoft JhengHei', 'PingFang TC', serif;
+  --bsbt-font-main: 'Long Cang', 'Noto Serif TC', 'Microsoft JhengHei', 'PingFang TC', serif;
   --bsbt-btn-grad-1: #8d6e63;
   --bsbt-btn-grad-2: #3e2723;
   --bsbt-btn-text: #efebe9;
@@ -80,7 +80,7 @@
   --bsbt-pager-bg: linear-gradient(45deg, #d4af37, #f1c40f, #d4af37);
   --bsbt-lcd-bg: #00f2ff;
   --bsbt-lcd-text: #002b2b;
-  --bsbt-border-color: #8b7320;
+  --bsbt-border-color: #002b2b;
   --bsbt-font-main: 'Audiowide', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', cursive;
   --bsbt-btn-grad-1: #daa520;
   --bsbt-btn-grad-2: #8b4513;
@@ -89,7 +89,7 @@
   --bsbt-off-text: #00f2ff;
   --bsbt-case-radius: 30px;
   --bsbt-case-shadow: 0 0 50px rgba(212, 175, 55, 0.4);
-  --bsbt-case-border: 6px solid #8b7320;
+  --bsbt-case-border: 6px solid #002b2b;
   --bsbt-home-tile-bg: rgba(0, 242, 255, 0.12);
   --bsbt-home-tile-glow: rgba(0, 242, 255, 0.35);
   --bsbt-home-tile-shadow: rgba(84, 67, 0, 0.38);
@@ -119,7 +119,7 @@
   --bsbt-lcd-bg: #ffffff;
   --bsbt-lcd-text: #ff4081;
   --bsbt-border-color: #f8bbd0;
-  --bsbt-font-main: 'Montserrat', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', sans-serif;
+  --bsbt-font-main: 'Chewy', 'ZCOOL KuaiLe', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', sans-serif;
   --bsbt-btn-grad-1: #ffffff;
   --bsbt-btn-grad-2: #f48fb1;
   --bsbt-btn-text: #ad1457;
@@ -131,6 +131,105 @@
   --bsbt-home-tile-bg: rgba(255, 255, 255, 0.45);
   --bsbt-home-tile-glow: rgba(255, 255, 255, 0.55);
   --bsbt-home-tile-shadow: rgba(173, 20, 87, 0.18);
+}
+
+#bs-biotracker-settings.theme-holo, .bs-bt-floating-sphere.theme-holo {
+  --bsbt-pager-bg: rgba(2, 18, 36, 0.18);
+  --bsbt-lcd-bg: rgba(3, 28, 52, 0.22);
+  --bsbt-lcd-text: #8df7ff;
+  --bsbt-border-color: rgba(74, 223, 255, 0.74);
+  --bsbt-font-main: 'ZCOOL QingKe HuangYou', 'Microsoft JhengHei UI', 'PingFang TC', 'Noto Sans TC', sans-serif;
+  --bsbt-btn-grad-1: rgba(22, 198, 255, 0.16);
+  --bsbt-btn-grad-2: rgba(10, 82, 155, 0.1);
+  --bsbt-btn-text: #b8fbff;
+  --bsbt-off-bg: rgba(2, 14, 28, 0.14);
+  --bsbt-off-text: #8df7ff;
+  --bsbt-case-radius: 18px;
+  --bsbt-case-shadow:
+    0 0 0 1px rgba(141, 247, 255, 0.28),
+    0 0 24px rgba(52, 204, 255, 0.24),
+    inset 0 0 26px rgba(65, 217, 255, 0.1);
+  --bsbt-case-border: 2px solid rgba(141, 247, 255, 0.58);
+  --bsbt-home-tile-bg: rgba(47, 202, 255, 0.08);
+  --bsbt-home-tile-glow: rgba(141, 247, 255, 0.32);
+  --bsbt-home-tile-shadow: rgba(17, 197, 255, 0.22);
+}
+
+#bs-biotracker-settings.theme-gothic, .bs-bt-floating-sphere.theme-gothic {
+  --bsbt-pager-bg:
+    radial-gradient(circle at 50% 0%, rgba(137, 60, 76, 0.34), transparent 34%),
+    linear-gradient(155deg, #22141f 0%, #110911 46%, #2b1119 100%);
+  --bsbt-lcd-bg: #1a1016;
+  --bsbt-lcd-text: #e8d8cf;
+  --bsbt-border-color: #8f3f4b;
+  --bsbt-font-main: 'ZCOOL XiaoWei', 'Noto Serif TC', 'Microsoft JhengHei', 'PingFang TC', serif;
+  --bsbt-btn-grad-1: #5c2734;
+  --bsbt-btn-grad-2: #160a10;
+  --bsbt-btn-text: #eadbd2;
+  --bsbt-off-bg: #0d070b;
+  --bsbt-off-text: #c9aaa4;
+  --bsbt-case-radius: 0;
+  --bsbt-case-shadow:
+    0 18px 34px rgba(4, 0, 4, 0.72),
+    0 0 0 1px rgba(222, 198, 174, 0.18),
+    inset 0 0 0 2px rgba(181, 106, 114, 0.28),
+    inset 0 0 34px rgba(4, 0, 4, 0.52);
+  --bsbt-case-border: 0;
+  --bsbt-home-tile-bg: rgba(91, 40, 52, 0.22);
+  --bsbt-home-tile-glow: rgba(181, 106, 114, 0.2);
+  --bsbt-home-tile-shadow: rgba(8, 3, 8, 0.56);
+}
+
+#bs-biotracker-settings.theme-steampunk, .bs-bt-floating-sphere.theme-steampunk {
+  --bsbt-pager-bg:
+    radial-gradient(circle at 12% 10%, rgba(209, 168, 90, 0.22), transparent 28%),
+    radial-gradient(circle at 88% 90%, rgba(138, 75, 45, 0.22), transparent 26%),
+    linear-gradient(145deg, #3b2a1e 0%, #211711 48%, #4a2f1f 100%);
+  --bsbt-lcd-bg: #ead8b4;
+  --bsbt-lcd-text: #2a1b12;
+  --bsbt-border-color: #8a4b2d;
+  --bsbt-font-main: 'Special Elite', 'Noto Serif TC', 'Courier New', serif;
+  --bsbt-btn-grad-1: #b88a3d;
+  --bsbt-btn-grad-2: #4a2f1f;
+  --bsbt-btn-text: #f4e4c2;
+  --bsbt-off-bg: #1d1b18;
+  --bsbt-off-text: #d1a85a;
+  --bsbt-case-radius: 14px;
+  --bsbt-case-shadow:
+    0 20px 0 rgba(21, 13, 8, 0.62),
+    0 24px 38px rgba(0, 0, 0, 0.48),
+    inset 0 0 0 2px rgba(209, 168, 90, 0.24),
+    inset 0 0 28px rgba(21, 13, 8, 0.5);
+  --bsbt-case-border: 6px solid #1d1b18;
+  --bsbt-home-tile-bg: rgba(138, 75, 45, 0.18);
+  --bsbt-home-tile-glow: rgba(209, 168, 90, 0.22);
+  --bsbt-home-tile-shadow: rgba(42, 27, 18, 0.42);
+}
+
+#bs-biotracker-settings.theme-eldritch, .bs-bt-floating-sphere.theme-eldritch {
+  --bsbt-pager-bg:
+    radial-gradient(circle at 16% 12%, rgba(91, 59, 115, 0.28), transparent 30%),
+    radial-gradient(circle at 84% 86%, rgba(104, 214, 194, 0.16), transparent 28%),
+    linear-gradient(145deg, #101714 0%, #18221f 48%, #3b2430 100%);
+  --bsbt-lcd-bg: #12302f;
+  --bsbt-lcd-text: #d7efe8;
+  --bsbt-border-color: #5c8f83;
+  --bsbt-font-main: 'UnifrakturCook', 'Zhi Mang Xing', 'Noto Serif TC', 'Microsoft JhengHei', 'PingFang TC', serif;
+  --bsbt-btn-grad-1: #3b2430;
+  --bsbt-btn-grad-2: #101714;
+  --bsbt-btn-text: #d7efe8;
+  --bsbt-off-bg: #070b0a;
+  --bsbt-off-text: #68d6c2;
+  --bsbt-case-radius: 44px 18px 46px 20px;
+  --bsbt-case-shadow:
+    0 18px 34px rgba(3, 7, 6, 0.72),
+    0 0 34px rgba(104, 214, 194, 0.16),
+    inset 0 0 0 2px rgba(185, 168, 138, 0.24),
+    inset 0 0 38px rgba(91, 59, 115, 0.34);
+  --bsbt-case-border: 0;
+  --bsbt-home-tile-bg: rgba(18, 48, 47, 0.34);
+  --bsbt-home-tile-glow: rgba(104, 214, 194, 0.2);
+  --bsbt-home-tile-shadow: rgba(3, 7, 6, 0.58);
 }
 
 .bs-bt-modal {
@@ -332,6 +431,16 @@
   background: #b8860b;
 }
 
+#bs-biotracker-settings.theme-fantasy .bs-bt-screw-bl,
+#bs-biotracker-settings.theme-fantasy .bs-bt-screw-br {
+  opacity: 1;
+  width: 40px;
+  height: 40px;
+  border: 4px solid #daa520;
+  background: #b8860b;
+  box-shadow: 0 0 10px rgba(218, 165, 32, 0.2), inset 0 0 0 1px rgba(245, 230, 200, 0.18);
+}
+
 #bs-biotracker-settings .bs-bt-corner-tl {
   top: -5px;
   left: -5px;
@@ -357,6 +466,55 @@
 #bs-biotracker-settings .bs-bt-screw-tr { top: 10px; right: 10px; }
 #bs-biotracker-settings .bs-bt-screw-bl { bottom: 100px; left: 10px; }
 #bs-biotracker-settings .bs-bt-screw-br { bottom: 100px; right: 10px; }
+
+#bs-biotracker-settings.theme-fantasy .bs-bt-screw-bl {
+  bottom: -5px;
+  left: -5px;
+  border-radius: 0 0 0 10px;
+}
+
+#bs-biotracker-settings.theme-fantasy .bs-bt-screw-br {
+  right: -5px;
+  bottom: -5px;
+  border-radius: 0 0 10px 0;
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-metal-corner {
+  opacity: 1;
+  width: 18px;
+  height: 18px;
+  border: 2px solid #6f3c22;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 30%, #f4e4c2 0 14%, #d1a85a 15% 48%, #8a4b2d 49% 100%);
+  box-shadow:
+    0 0 0 1px rgba(42, 27, 18, 0.78),
+    inset 2px 2px 4px rgba(244, 228, 194, 0.26),
+    inset -2px -2px 4px rgba(42, 27, 18, 0.46);
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-corner-tl {
+  top: 10px;
+  left: 10px;
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-corner-tr {
+  top: 10px;
+  right: 10px;
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-screw {
+  opacity: 1;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 30%, #f4e4c2 0 12%, #d1a85a 13% 42%, #8a4b2d 43% 100%);
+  box-shadow:
+    0 0 0 1px rgba(42, 27, 18, 0.85),
+    inset 2px 2px 4px rgba(244, 228, 194, 0.24),
+    inset -2px -2px 4px rgba(42, 27, 18, 0.45);
+}
 
 #bs-biotracker-settings .bs-bt-brand {
   color: rgba(0, 0, 0, 0.42);
@@ -1355,6 +1513,602 @@
   width: 26px;
   height: 26px;
   stroke-width: 2.5;
+}
+
+#bs-biotracker-settings.theme-cyber-egypt.bs-bt-device {
+  background:
+    linear-gradient(180deg,
+      #f1c40f 0 49.5%,
+      #002b2b 49.5% 50.5%,
+      #8f7b28 50.5% 100%),
+    linear-gradient(45deg, #d4af37, #f1c40f, #d4af37);
+  box-shadow:
+    0 0 50px rgba(212, 175, 55, 0.4),
+    inset 0 0 0 1px rgba(0, 43, 43, 0.28),
+    inset 18px 0 0 rgba(0, 43, 43, 0.12),
+    inset -18px 0 0 rgba(139, 69, 19, 0.16);
+}
+
+#bs-biotracker-settings.theme-cyber-egypt.bs-bt-device::before,
+#bs-biotracker-settings.theme-cyber-egypt.bs-bt-device::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  z-index: 0;
+}
+
+#bs-biotracker-settings.theme-cyber-egypt.bs-bt-device::before {
+  left: 18px;
+  right: 50%;
+  top: 70%;
+  height: 4px;
+  transform: none;
+  background: #002b2b;
+  box-shadow:
+    0 0 10px rgba(0, 43, 43, 0.42);
+}
+
+#bs-biotracker-settings.theme-cyber-egypt.bs-bt-device::after {
+  left: 50%;
+  right: 18px;
+  top: 30%;
+  height: 4px;
+  background: #002b2b;
+  box-shadow:
+    0 0 10px rgba(0, 43, 43, 0.42);
+}
+
+#bs-biotracker-settings.theme-cyber-egypt > :not(.bs-bt-hardware-detail) {
+  position: relative;
+  z-index: 1;
+}
+
+#bs-biotracker-settings.theme-holo.bs-bt-device {
+  backdrop-filter: blur(12px) saturate(1.2);
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-brand {
+  color: rgba(141, 247, 255, 0.74);
+  text-shadow: 0 0 10px rgba(78, 222, 255, 0.56);
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-screen {
+  background:
+    linear-gradient(rgba(141, 247, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(141, 247, 255, 0.08) 1px, transparent 1px),
+    var(--bsbt-lcd-bg);
+  background-size: 18px 18px, 18px 18px, auto;
+  border-width: 2px;
+  box-shadow:
+    0 0 18px rgba(78, 222, 255, 0.34),
+    inset 0 0 28px rgba(78, 222, 255, 0.16);
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-screen::after {
+  background:
+    linear-gradient(rgba(141, 247, 255, 0) 50%, rgba(141, 247, 255, 0.08) 50%);
+  background-size: 100% 4px;
+  opacity: 0.42;
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-menu-card,
+#bs-biotracker-settings.theme-holo .bs-bt-theme-option,
+#bs-biotracker-settings.theme-holo .bs-bt-status-box,
+#bs-biotracker-settings.theme-holo .text_pole,
+#bs-biotracker-settings.theme-holo select,
+#bs-biotracker-settings.theme-holo textarea,
+#bs-biotracker-settings.theme-holo input[type='text'],
+#bs-biotracker-settings.theme-holo input[type='password'],
+#bs-biotracker-settings.theme-holo input[type='number'],
+#bs-biotracker-settings.theme-holo .menu_button {
+  border-color: rgba(141, 247, 255, 0.52);
+  background: rgba(5, 31, 61, 0.18);
+  box-shadow: inset 0 0 14px rgba(78, 222, 255, 0.08);
+  text-shadow: 0 0 8px rgba(141, 247, 255, 0.42);
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-theme-option.is-active {
+  background: rgba(141, 247, 255, 0.18);
+  color: #d9fdff;
+  box-shadow:
+    inset 0 0 16px rgba(141, 247, 255, 0.18),
+    0 0 14px rgba(78, 222, 255, 0.28);
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-home-tile {
+  border: 1px solid rgba(141, 247, 255, 0.28);
+  background: rgba(47, 202, 255, 0.06);
+  box-shadow: inset 0 0 18px rgba(78, 222, 255, 0.08);
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-home-tile:hover,
+#bs-biotracker-settings.theme-holo .bs-bt-home-tile:focus-visible {
+  background: rgba(47, 202, 255, 0.12);
+  box-shadow:
+    inset 0 0 22px rgba(78, 222, 255, 0.12),
+    0 0 16px rgba(78, 222, 255, 0.2);
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-physical-button,
+#bs-biotracker-settings.theme-holo .bs-bt-physical-button-off {
+  border: 1px solid rgba(141, 247, 255, 0.52);
+  box-shadow:
+    0 0 16px rgba(78, 222, 255, 0.22),
+    inset 0 0 18px rgba(141, 247, 255, 0.14);
+}
+
+.bs-bt-floating-sphere.theme-holo {
+  border-color: rgba(141, 247, 255, 0.7);
+  backdrop-filter: blur(8px) saturate(1.3);
+  box-shadow:
+    0 0 0 1px rgba(141, 247, 255, 0.28),
+    0 0 22px rgba(78, 222, 255, 0.38),
+    inset 0 0 18px rgba(141, 247, 255, 0.18);
+  text-shadow: 0 0 10px rgba(141, 247, 255, 0.72);
+}
+
+#bs-biotracker-settings.theme-gothic.bs-bt-device {
+  --bsbt-gothic-crystal-shape: polygon(0 0, 50% 2.2%, 100% 0, 97.8% 50%, 100% 100%, 50% 97.8%, 0 100%, 2.2% 50%);
+  clip-path: polygon(0 0, 50% 2.2%, 100% 0, 97.8% 50%, 100% 100%, 50% 97.8%, 0 100%, 2.2% 50%);
+  padding: 25px;
+  outline: 1px solid rgba(48, 21, 32, 0.9);
+  background:
+    linear-gradient(120deg, rgba(232, 216, 207, 0.14), transparent 24%),
+    linear-gradient(240deg, rgba(181, 106, 114, 0.18), transparent 28%),
+    linear-gradient(300deg, rgba(232, 216, 207, 0.08), transparent 24%),
+    var(--bsbt-pager-bg);
+  box-shadow:
+    0 18px 34px rgba(4, 0, 4, 0.72),
+    0 0 26px rgba(143, 63, 75, 0.2),
+    inset 0 0 0 2px rgba(214, 186, 164, 0.48),
+    inset 0 0 0 6px rgba(143, 63, 75, 0.18),
+    inset 0 0 34px rgba(4, 0, 4, 0.52);
+}
+
+#bs-biotracker-settings.theme-gothic.bs-bt-device::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  clip-path: var(--bsbt-gothic-crystal-shape);
+  pointer-events: none;
+  background:
+    linear-gradient(135deg, rgba(232, 216, 207, 0.55), rgba(143, 63, 75, 0.48) 48%, rgba(232, 216, 207, 0.3));
+  z-index: 0;
+}
+
+#bs-biotracker-settings.theme-gothic.bs-bt-device::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  clip-path: var(--bsbt-gothic-crystal-shape);
+  pointer-events: none;
+  background: var(--bsbt-pager-bg);
+  z-index: 0;
+}
+
+#bs-biotracker-settings.theme-gothic > :not(.bs-bt-hardware-detail) {
+  position: relative;
+  z-index: 1;
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-brand {
+  color: rgba(232, 216, 207, 0.76);
+  text-shadow: 0 1px 0 #070305, 0 0 12px rgba(181, 106, 114, 0.24);
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-screen {
+  background:
+    radial-gradient(circle at 50% 12%, rgba(181, 106, 114, 0.16), transparent 34%),
+    linear-gradient(180deg, rgba(232, 216, 207, 0.05), transparent 26%),
+    var(--bsbt-lcd-bg);
+  border-width: 4px;
+  box-shadow:
+    inset 0 0 34px rgba(0, 0, 0, 0.74),
+    inset 0 0 0 1px rgba(232, 216, 207, 0.15),
+    0 0 22px rgba(91, 40, 52, 0.36);
+  text-shadow: 0 0 7px rgba(232, 216, 207, 0.18);
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-screen-header {
+  border-bottom-color: rgba(181, 106, 114, 0.58);
+  color: #eadbd2;
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-screen::after {
+  background:
+    linear-gradient(rgba(232, 216, 207, 0) 50%, rgba(181, 106, 114, 0.045) 50%);
+  background-size: 100% 4px;
+  opacity: 0.34;
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-menu-card,
+#bs-biotracker-settings.theme-gothic .bs-bt-theme-option,
+#bs-biotracker-settings.theme-gothic .bs-bt-status-box,
+#bs-biotracker-settings.theme-gothic .text_pole,
+#bs-biotracker-settings.theme-gothic select,
+#bs-biotracker-settings.theme-gothic textarea,
+#bs-biotracker-settings.theme-gothic input[type='text'],
+#bs-biotracker-settings.theme-gothic input[type='password'],
+#bs-biotracker-settings.theme-gothic input[type='number'],
+#bs-biotracker-settings.theme-gothic .menu_button {
+  border-color: rgba(181, 106, 114, 0.5);
+  background: rgba(21, 9, 15, 0.58);
+  box-shadow:
+    inset 0 0 0 1px rgba(232, 216, 207, 0.06),
+    inset 0 0 16px rgba(0, 0, 0, 0.24);
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-theme-option.is-active {
+  background: rgba(143, 63, 75, 0.42);
+  color: #f0e3d8;
+  border-color: rgba(214, 186, 164, 0.68);
+  box-shadow:
+    inset 0 0 18px rgba(18, 7, 12, 0.45),
+    0 0 14px rgba(143, 63, 75, 0.22);
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-home-tile {
+  border: 1px solid rgba(181, 106, 114, 0.34);
+  border-radius: 7px;
+  background:
+    linear-gradient(160deg, rgba(232, 216, 207, 0.05), transparent 38%),
+    var(--bsbt-home-tile-bg);
+  box-shadow:
+    0 2px 8px var(--bsbt-home-tile-shadow),
+    inset 0 0 0 1px rgba(232, 216, 207, 0.05);
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-home-tile:hover,
+#bs-biotracker-settings.theme-gothic .bs-bt-home-tile:focus-visible {
+  background:
+    linear-gradient(160deg, rgba(232, 216, 207, 0.08), transparent 38%),
+    rgba(91, 40, 52, 0.3);
+  box-shadow:
+    0 0 14px rgba(181, 106, 114, 0.16),
+    inset 0 0 0 1px rgba(214, 186, 164, 0.14);
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-physical-button,
+#bs-biotracker-settings.theme-gothic .bs-bt-physical-button-off {
+  border: 1px solid rgba(214, 186, 164, 0.34);
+  box-shadow:
+    0 6px 0 rgba(6, 2, 5, 0.68),
+    inset 0 1px 0 rgba(232, 216, 207, 0.12),
+    inset 0 0 16px rgba(0, 0, 0, 0.34);
+}
+
+.bs-bt-floating-sphere.theme-gothic {
+  clip-path: none;
+  border: 2px double rgba(214, 186, 164, 0.58);
+  border-radius: 50%;
+  background:
+    linear-gradient(145deg, rgba(232, 216, 207, 0.16), transparent 32%),
+    linear-gradient(315deg, var(--bsbt-btn-grad-1), var(--bsbt-btn-grad-2));
+  box-shadow:
+    0 10px 18px rgba(4, 0, 4, 0.58),
+    0 0 18px rgba(143, 63, 75, 0.32),
+    inset 0 0 0 2px rgba(214, 186, 164, 0.42),
+    inset 0 0 18px rgba(232, 216, 207, 0.08);
+  text-shadow: 0 0 8px rgba(232, 216, 207, 0.28);
+}
+
+#bs-biotracker-settings.theme-steampunk.bs-bt-device {
+  background:
+    linear-gradient(90deg, rgba(209, 168, 90, 0.08), transparent 18%, transparent 82%, rgba(209, 168, 90, 0.08)),
+    var(--bsbt-pager-bg);
+  box-shadow:
+    0 28px 0 rgba(21, 13, 8, 0.78),
+    0 34px 42px rgba(0, 0, 0, 0.52),
+    inset 0 0 0 2px rgba(209, 168, 90, 0.24),
+    inset 0 0 28px rgba(21, 13, 8, 0.5);
+}
+
+#bs-biotracker-settings.theme-steampunk.bs-bt-device::before {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 6px;
+  height: 108px;
+  pointer-events: none;
+  opacity: 0.24;
+  background:
+    radial-gradient(circle at 50% 50%, transparent 0 24px, rgba(209, 168, 90, 0.62) 25px 29px, transparent 30px),
+    repeating-conic-gradient(from 0deg, rgba(209, 168, 90, 0.5) 0 10deg, transparent 10deg 20deg);
+  background-repeat: no-repeat;
+  background-size: 156px 108px, 156px 108px;
+  background-position: center, center;
+  mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent);
+}
+
+#bs-biotracker-settings.theme-steampunk > :not(.bs-bt-hardware-detail) {
+  position: relative;
+  z-index: 1;
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-brand {
+  color: rgba(244, 228, 194, 0.72);
+  text-shadow: 0 1px 0 #1d1b18;
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-screen {
+  background:
+    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.24), transparent 26%),
+    linear-gradient(rgba(138, 75, 45, 0.06) 1px, transparent 1px),
+    var(--bsbt-lcd-bg);
+  background-size: auto, 100% 5px, auto;
+  border-width: 8px;
+  box-shadow:
+    inset 0 0 26px rgba(42, 27, 18, 0.32),
+    inset 0 0 0 1px rgba(244, 228, 194, 0.34),
+    0 0 16px rgba(209, 168, 90, 0.14);
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-screen-header {
+  border-bottom-color: rgba(42, 27, 18, 0.5);
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-screen::after {
+  background:
+    linear-gradient(rgba(42, 27, 18, 0) 50%, rgba(42, 27, 18, 0.045) 50%);
+  background-size: 100% 4px;
+  opacity: 0.36;
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-menu-card,
+#bs-biotracker-settings.theme-steampunk .bs-bt-theme-option,
+#bs-biotracker-settings.theme-steampunk .bs-bt-status-box,
+#bs-biotracker-settings.theme-steampunk .text_pole,
+#bs-biotracker-settings.theme-steampunk select,
+#bs-biotracker-settings.theme-steampunk textarea,
+#bs-biotracker-settings.theme-steampunk input[type='text'],
+#bs-biotracker-settings.theme-steampunk input[type='password'],
+#bs-biotracker-settings.theme-steampunk input[type='number'],
+#bs-biotracker-settings.theme-steampunk .menu_button {
+  border-color: rgba(138, 75, 45, 0.58);
+  background: rgba(234, 216, 180, 0.34);
+  box-shadow:
+    inset 0 0 0 1px rgba(244, 228, 194, 0.18),
+    inset 0 0 16px rgba(138, 75, 45, 0.12);
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-theme-option.is-active {
+  background: rgba(138, 75, 45, 0.72);
+  color: #f4e4c2;
+  border-color: rgba(209, 168, 90, 0.78);
+  box-shadow:
+    inset 0 0 16px rgba(42, 27, 18, 0.26),
+    0 0 12px rgba(209, 168, 90, 0.18);
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-home-tile {
+  border: 1px solid rgba(138, 75, 45, 0.38);
+  background:
+    linear-gradient(150deg, rgba(244, 228, 194, 0.1), transparent 38%),
+    var(--bsbt-home-tile-bg);
+  box-shadow:
+    0 2px 8px var(--bsbt-home-tile-shadow),
+    inset 0 0 0 1px rgba(244, 228, 194, 0.1);
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-physical-button,
+#bs-biotracker-settings.theme-steampunk .bs-bt-physical-button-off {
+  border: 2px solid rgba(42, 27, 18, 0.62);
+  box-shadow:
+    0 6px 0 rgba(21, 13, 8, 0.76),
+    inset 0 2px 0 rgba(244, 228, 194, 0.2),
+    inset 0 0 14px rgba(42, 27, 18, 0.32);
+}
+
+.bs-bt-floating-sphere.theme-steampunk {
+  border: 3px solid rgba(42, 27, 18, 0.7);
+  box-shadow:
+    0 8px 16px rgba(21, 13, 8, 0.56),
+    0 0 18px rgba(209, 168, 90, 0.22),
+    inset 0 0 0 2px rgba(244, 228, 194, 0.16),
+    inset 0 0 16px rgba(42, 27, 18, 0.32);
+}
+
+#bs-biotracker-settings.theme-eldritch.bs-bt-device {
+  --bsbt-eldritch-shell-shape: polygon(
+    8% 1.5%,
+    26% 0,
+    44% 1.2%,
+    61% 0.2%,
+    82% 2%,
+    98% 9%,
+    100% 28%,
+    98.2% 48%,
+    100% 69%,
+    96% 91%,
+    82% 99%,
+    61% 97.8%,
+    43% 100%,
+    24% 98.4%,
+    6% 94%,
+    0 76%,
+    1.8% 54%,
+    0 33%,
+    2.8% 12%
+  );
+  clip-path: polygon(
+    8% 1.5%,
+    26% 0,
+    44% 1.2%,
+    61% 0.2%,
+    82% 2%,
+    98% 9%,
+    100% 28%,
+    98.2% 48%,
+    100% 69%,
+    96% 91%,
+    82% 99%,
+    61% 97.8%,
+    43% 100%,
+    24% 98.4%,
+    6% 94%,
+    0 76%,
+    1.8% 54%,
+    0 33%,
+    2.8% 12%
+  );
+  animation: bs-bt-eldritch-breathe 7s ease-in-out infinite;
+  filter:
+    saturate(1)
+    brightness(1);
+  background:
+    radial-gradient(ellipse at 50% 50%, transparent 0 19%, rgba(104, 214, 194, 0.13) 20% 21%, transparent 22%),
+    repeating-radial-gradient(ellipse at 50% 52%, transparent 0 18px, rgba(104, 214, 194, 0.06) 19px 20px, transparent 21px 42px),
+    radial-gradient(ellipse at 52% 6%, rgba(215, 239, 232, 0.08), transparent 26%),
+    radial-gradient(ellipse at 20% 78%, rgba(91, 59, 115, 0.24), transparent 28%),
+    var(--bsbt-pager-bg);
+}
+
+#bs-biotracker-settings.theme-eldritch.bs-bt-device::before {
+  content: '';
+  position: absolute;
+  inset: 14px;
+  pointer-events: none;
+  opacity: 0.28;
+  background:
+    radial-gradient(ellipse at 50% 50%, transparent 0 19%, rgba(104, 214, 194, 0.16) 20% 21%, transparent 22%),
+    repeating-radial-gradient(ellipse at 50% 52%, transparent 0 18px, rgba(104, 214, 194, 0.08) 19px 20px, transparent 21px 42px);
+  filter: blur(0.2px);
+  z-index: 0;
+}
+
+#bs-biotracker-settings.theme-eldritch.bs-bt-device::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 100 100' preserveAspectRatio='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpolygon points='8,1.5 26,0 44,1.2 61,0.2 82,2 98,9 100,28 98.2,48 100,69 96,91 82,99 61,97.8 43,100 24,98.4 6,94 0,76 1.8,54 0,33 2.8,12' fill='none' stroke='%2368d6c2' stroke-width='2.25' stroke-linejoin='round' stroke-linecap='round' vector-effect='non-scaling-stroke'/%3E%3Cpolygon points='8,1.5 26,0 44,1.2 61,0.2 82,2 98,9 100,28 98.2,48 100,69 96,91 82,99 61,97.8 43,100 24,98.4 6,94 0,76 1.8,54 0,33 2.8,12' fill='none' stroke='%23b9a88a' stroke-width='.85' stroke-linejoin='round' stroke-linecap='round' vector-effect='non-scaling-stroke' opacity='.78'/%3E%3C/svg%3E") center / 100% 100% no-repeat;
+  filter: drop-shadow(0 0 4px rgba(104, 214, 194, 0.28));
+}
+
+#bs-biotracker-settings.theme-eldritch > :not(.bs-bt-hardware-detail) {
+  position: relative;
+  z-index: 1;
+}
+
+#bs-biotracker-settings.theme-eldritch .bs-bt-brand {
+  color: rgba(215, 239, 232, 0.68);
+  text-shadow: 0 0 10px rgba(104, 214, 194, 0.32);
+}
+
+#bs-biotracker-settings.theme-eldritch .bs-bt-screen {
+  background:
+    radial-gradient(circle at 50% 8%, rgba(104, 214, 194, 0.2), transparent 32%),
+    linear-gradient(rgba(215, 239, 232, 0.05) 1px, transparent 1px),
+    var(--bsbt-lcd-bg);
+  background-size: auto, 100% 4px, auto;
+  border-width: 5px;
+  box-shadow:
+    inset 0 0 30px rgba(7, 11, 10, 0.78),
+    inset 0 0 0 1px rgba(215, 239, 232, 0.14),
+    0 0 20px rgba(104, 214, 194, 0.18);
+  text-shadow: 0 0 8px rgba(104, 214, 194, 0.22);
+}
+
+#bs-biotracker-settings.theme-eldritch .bs-bt-screen-header {
+  border-bottom-color: rgba(104, 214, 194, 0.46);
+}
+
+#bs-biotracker-settings.theme-eldritch .bs-bt-screen::after {
+  background:
+    linear-gradient(rgba(104, 214, 194, 0) 50%, rgba(104, 214, 194, 0.045) 50%);
+  background-size: 100% 4px;
+  opacity: 0.38;
+}
+
+#bs-biotracker-settings.theme-eldritch .bs-bt-menu-card,
+#bs-biotracker-settings.theme-eldritch .bs-bt-theme-option,
+#bs-biotracker-settings.theme-eldritch .bs-bt-status-box,
+#bs-biotracker-settings.theme-eldritch .text_pole,
+#bs-biotracker-settings.theme-eldritch select,
+#bs-biotracker-settings.theme-eldritch textarea,
+#bs-biotracker-settings.theme-eldritch input[type='text'],
+#bs-biotracker-settings.theme-eldritch input[type='password'],
+#bs-biotracker-settings.theme-eldritch input[type='number'],
+#bs-biotracker-settings.theme-eldritch .menu_button {
+  border-color: rgba(104, 214, 194, 0.38);
+  background: rgba(7, 11, 10, 0.38);
+  box-shadow:
+    inset 0 0 0 1px rgba(215, 239, 232, 0.05),
+    inset 0 0 18px rgba(91, 59, 115, 0.18);
+}
+
+#bs-biotracker-settings.theme-eldritch .bs-bt-theme-option.is-active {
+  background: rgba(104, 214, 194, 0.2);
+  color: #d7efe8;
+  border-color: rgba(215, 239, 232, 0.54);
+  box-shadow:
+    inset 0 0 18px rgba(104, 214, 194, 0.12),
+    0 0 14px rgba(104, 214, 194, 0.18);
+}
+
+#bs-biotracker-settings.theme-eldritch .bs-bt-home-tile {
+  border: 1px solid rgba(104, 214, 194, 0.28);
+  background:
+    radial-gradient(ellipse at 50% 35%, rgba(215, 239, 232, 0.08), transparent 45%),
+    var(--bsbt-home-tile-bg);
+  box-shadow:
+    0 2px 10px var(--bsbt-home-tile-shadow),
+    inset 0 0 0 1px rgba(215, 239, 232, 0.05),
+    inset 0 0 16px rgba(91, 59, 115, 0.12);
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-home-tile,
+#bs-biotracker-settings.theme-gothic .bs-bt-home-tile,
+#bs-biotracker-settings.theme-steampunk .bs-bt-home-tile,
+#bs-biotracker-settings.theme-eldritch .bs-bt-home-tile {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-home-tile:hover,
+#bs-biotracker-settings.theme-holo .bs-bt-home-tile:focus-visible,
+#bs-biotracker-settings.theme-gothic .bs-bt-home-tile:hover,
+#bs-biotracker-settings.theme-gothic .bs-bt-home-tile:focus-visible,
+#bs-biotracker-settings.theme-steampunk .bs-bt-home-tile:hover,
+#bs-biotracker-settings.theme-steampunk .bs-bt-home-tile:focus-visible,
+#bs-biotracker-settings.theme-eldritch .bs-bt-home-tile:hover,
+#bs-biotracker-settings.theme-eldritch .bs-bt-home-tile:focus-visible {
+  background: transparent;
+  box-shadow: none;
+}
+
+#bs-biotracker-settings.theme-eldritch .bs-bt-physical-button,
+#bs-biotracker-settings.theme-eldritch .bs-bt-physical-button-off {
+  border: 1px solid rgba(185, 168, 138, 0.3);
+  box-shadow:
+    0 6px 0 rgba(3, 7, 6, 0.76),
+    inset 0 1px 0 rgba(215, 239, 232, 0.1),
+    inset 0 0 18px rgba(104, 214, 194, 0.1);
+}
+
+.bs-bt-floating-sphere.theme-eldritch {
+  animation: bs-bt-eldritch-breathe 7s ease-in-out infinite;
+  border: 2px solid rgba(104, 214, 194, 0.4);
+  box-shadow:
+    0 8px 16px rgba(3, 7, 6, 0.58),
+    0 0 20px rgba(104, 214, 194, 0.24),
+    inset 0 0 18px rgba(91, 59, 115, 0.26);
+}
+
+@keyframes bs-bt-eldritch-breathe {
+  0%, 100% {
+    filter:
+      saturate(1)
+      brightness(1);
+  }
+  50% {
+    filter:
+      saturate(1.16)
+      brightness(1.06);
+  }
 }
 
 #bs-biotracker-settings .bs-bt-power-off-overlay {

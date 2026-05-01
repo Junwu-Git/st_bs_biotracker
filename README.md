@@ -2,7 +2,7 @@
 
 ## 版本狀態
 
-v0.2.0
+v0.2.1
 
 ## 功能
 
@@ -13,7 +13,7 @@ v0.2.0
 - 時間流逝：手動推進年、月、週、天、時、分，讓所有已注册角色同步演進。
 - Worldbook 條目排除：可排除不想送進 tracker 分析的世界書條目。
 - 種族百科：內建多種繁殖型態與種族資料，方便注册時查閱。
-- 主題介面：目前內建 `retro`、`jade`、`fantasy`、`cyber-egypt`、`pip-boy`、`sakura-modern` 六種風格。
+- 主題介面：目前內建 `retro`、`cultivation`、`fantasy`、`cyber-egypt`、`wasteland`、`sakura`、`holo`、`gothic`、`steampunk`、`eldritch` 十種風格。
 
 ## 環境需求
 

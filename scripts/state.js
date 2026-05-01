@@ -22,6 +22,10 @@ export const THEME_CONFIG = {
   'cyber-egypt': {},
   wasteland: {},
   sakura: {},
+  holo: {},
+  gothic: {},
+  steampunk: {},
+  eldritch: {},
 };
 
 export const DEFAULT_SYSTEM_PROMPT = [
@@ -523,6 +527,7 @@ export function createEmptyChatState() {
     minutesPassed: 0,
     characters: {},
     lastRawResult: null,
+    lastOperationLogs: [],
     snapshots: [],
   };
 }
@@ -669,6 +674,7 @@ export function getChatState(ctx, settings) {
   if (!settings.chatStates[chatKey]) settings.chatStates[chatKey] = createEmptyChatState();
   const chatState = settings.chatStates[chatKey];
   if (!Array.isArray(chatState.snapshots)) chatState.snapshots = [];
+  if (!Array.isArray(chatState.lastOperationLogs)) chatState.lastOperationLogs = [];
   compactChatStateSnapshots(chatState);
   restoreChatStateFromSnapshot(chatState, getLatestMatchingSnapshot(ctx, chatState));
   const characters = chatState.characters;
@@ -687,7 +693,8 @@ function isChatStateEffectivelyEmpty(chatState) {
   const hasAttemptedSignature = Boolean(String(chatState.lastAttemptedSignature || '').trim());
   const hasProcessedSignature = Boolean(String(chatState.lastProcessedSignature || '').trim());
   const hasRawResult = chatState.lastRawResult && typeof chatState.lastRawResult === 'object';
-  return !(hasCharacters || hasSnapshots || hasSceneSummary || hasMinutesPassed || hasAttemptedSignature || hasProcessedSignature || hasRawResult);
+  const hasOperationLogs = Array.isArray(chatState.lastOperationLogs) && chatState.lastOperationLogs.length > 0;
+  return !(hasCharacters || hasSnapshots || hasSceneSummary || hasMinutesPassed || hasAttemptedSignature || hasProcessedSignature || hasRawResult || hasOperationLogs);
 }
 
 export function inheritChatStateFromMatchingChat(ctx, settings) {
@@ -905,6 +912,7 @@ function exportChatStateSnapshotPayload(chatState) {
     minutesPassed: chatState.minutesPassed || 0,
     characters: chatState.characters || {},
     lastRawResult: summarizeRawResult(chatState.lastRawResult),
+    lastOperationLogs: summarizeOperationLogs(chatState.lastOperationLogs),
   };
 }
 
@@ -923,6 +931,16 @@ function summarizeRawResult(value) {
   if (error) result.error = error;
   if (toolCalls.length > 0) result.tool_calls = toolCalls;
   return Object.keys(result).length > 0 ? result : null;
+}
+
+function summarizeOperationLogs(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => ({
+    name: String(item?.name || ''),
+    applied: Boolean(item?.applied),
+    message: String(item?.message || '').slice(0, MAX_RAW_RESULT_TEXT_LENGTH),
+    arguments: item?.arguments && typeof item.arguments === 'object' ? cloneValue(item.arguments) : (item?.arguments ?? null),
+  }));
 }
 
 function trimChatStateSnapshots(chatState) {
@@ -954,6 +972,7 @@ export function restoreChatStateFromSnapshot(chatState, snapshot) {
   chatState.minutesPassed = payload.minutesPassed || 0;
   chatState.characters = payload.characters || {};
   chatState.lastRawResult = payload.lastRawResult || null;
+  chatState.lastOperationLogs = Array.isArray(payload.lastOperationLogs) ? payload.lastOperationLogs : [];
 }
 
 export function recordChatStateSnapshot(ctx, chatState, options = {}) {

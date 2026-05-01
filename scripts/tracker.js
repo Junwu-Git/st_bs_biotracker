@@ -384,6 +384,7 @@ export async function runTracker(ctx, deps, reason = 'manual') {
       message: '当前对话没有可分析的消息，已跳过追踪。',
       tool_calls: [],
     };
+    chatState.lastOperationLogs = [];
     saveSettings(ctx);
     deps.renderStatusPanel(ctx);
     return { skipped: true, reason: 'empty_chat' };
@@ -393,6 +394,7 @@ export async function runTracker(ctx, deps, reason = 'manual') {
       message: '已有一轮追踪请求正在执行，本次请求未重复发送。',
       tool_calls: [],
     };
+    chatState.lastOperationLogs = [];
     saveSettings(ctx);
     deps.renderStatusPanel(ctx);
     return { skipped: true, reason: 'already_running' };
@@ -402,6 +404,7 @@ export async function runTracker(ctx, deps, reason = 'manual') {
       message: '尚无已注册角色，跳过分析。',
       tool_calls: [],
     };
+    chatState.lastOperationLogs = [];
     saveSettings(ctx);
     deps.renderStatusPanel(ctx);
     deps.updateMainFlowPrompt?.(ctx);
@@ -432,6 +435,7 @@ export async function runTracker(ctx, deps, reason = 'manual') {
       error: String(error?.message || error),
       tool_calls: [],
     };
+    chatState.lastOperationLogs = [];
     saveSettings(ctx);
     deps.renderStatusPanel(ctx);
     globalThis.toastr?.error?.(String(error?.message || error), '[BS BioTracker]');
