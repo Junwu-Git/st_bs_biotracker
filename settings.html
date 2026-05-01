@@ -69,6 +69,8 @@
               <button type="button" class="bs-bt-theme-option" data-theme-option="gothic">8. 哥特 (Gothic)</button>
               <button type="button" class="bs-bt-theme-option" data-theme-option="steampunk">9. 蒸汽 (Steam)</button>
               <button type="button" class="bs-bt-theme-option" data-theme-option="eldritch">10. 克系 (Eldritch)</button>
+              <button type="button" class="bs-bt-theme-option" data-theme-option="ink">11. 水墨 (Ink)</button>
+              <button type="button" class="bs-bt-theme-option" data-theme-option="constructivism">12. 建构 (Construct)</button>
             </div>
 
             <hr class="sysHR" />
@@ -367,6 +369,25 @@
               <select id="bs-bt-race-select" class="text_pole">
                 <option value="">请选择种族</option>
               </select>
+            </div>
+
+            <div class="settings_section">
+              <button id="bs-bt-race-open-editor" class="menu_button" type="button">调整参数</button>
+              <div id="bs-bt-race-editor-modal" class="bs-bt-race-editor-modal" hidden>
+                <div class="bs-bt-race-editor-dialog">
+                  <div class="bs-bt-race-editor-head">
+                    <div id="bs-bt-race-editor-title" class="bs-bt-status-title">种族参数覆盖</div>
+                    <button id="bs-bt-race-editor-close" class="bs-bt-race-close-button" type="button" aria-label="关闭参数覆盖">×</button>
+                  </div>
+                  <div id="bs-bt-race-editor" class="bs-bt-race-editor"></div>
+                  <div class="settings_section bs-bt-action-row">
+                    <button id="bs-bt-race-use-human" class="menu_button" type="button">套用人类值</button>
+                    <button id="bs-bt-race-save-override" class="menu_button" type="button">保存覆盖</button>
+                    <button id="bs-bt-race-reset-override" class="menu_button" type="button">恢复内置</button>
+                  </div>
+                  <div id="bs-bt-race-editor-status" class="bs-bt-inline-status">物种短敘述可留空；数值只保存与内置值不同的字段；产后恢复天数由系统公式与指令流程处理。</div>
+                </div>
+              </div>
             </div>
 
             <div class="settings_section">

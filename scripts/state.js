@@ -26,6 +26,8 @@ export const THEME_CONFIG = {
   gothic: {},
   steampunk: {},
   eldritch: {},
+  ink: {},
+  constructivism: {},
 };
 
 export const DEFAULT_SYSTEM_PROMPT = [
@@ -72,6 +74,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   registryCustomNotes: '',
   registryDescriptionGuides: DEFAULT_REGISTRY_DESCRIPTION_GUIDES,
+  racePhysiologyOverrides: {},
   chatStates: {},
 });
 

@@ -73,6 +73,19 @@ export const AMORPHOUS_RACES = Object.freeze([
   "影魔"
 ]);
 
+export const ALL_BUILTIN_RACES = Object.freeze([
+  ...VIVIPAROUS_RACES,
+  ...OVIPAROUS_RACES,
+  ...OVOVIVIPAROUS_RACES,
+  ...METOVIVIPAROUS_RACES,
+  ...AMORPHOUS_RACES,
+]);
+
+export const RACE_INTRODUCTION_LINES = Object.freeze(Object.fromEntries(
+  ALL_BUILTIN_RACES.map((race) => [race, ""]),
+));
+export const RACE_INTRODUCTION_FIELD = "introductionLine";
+
 export const DERIVED_TYPE_RACES = Object.freeze([
   "修行",
   "妖怪",
@@ -777,6 +790,82 @@ export const RACE_PHYSIOLOGY_FIELDS = Object.freeze([
   "genderRatio"
 ]);
 
+let customRacePhysiologyProfiles = {};
+
+function sanitizeRacePhysiologyProfilePatch(profile) {
+  if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return null;
+  const result = {};
+  if (Object.prototype.hasOwnProperty.call(profile, RACE_INTRODUCTION_FIELD)) {
+    const introductionLine = String(profile[RACE_INTRODUCTION_FIELD] || '').trim();
+    if (introductionLine) result[RACE_INTRODUCTION_FIELD] = introductionLine;
+  }
+  for (const field of RACE_PHYSIOLOGY_FIELDS) {
+    if (field === 'recoveryDays') continue;
+    if (!Object.prototype.hasOwnProperty.call(profile, field)) continue;
+    if (field === 'genderRatio' && profile[field] === null) {
+      result[field] = null;
+      continue;
+    }
+    const value = Number(profile[field]);
+    if (!Number.isFinite(value)) continue;
+    if (field === 'genderRatio') result[field] = Math.max(-1, Math.min(100, Math.round(value)));
+    else if (field === 'orgasmOvulationAmount') result[field] = Math.max(0, Math.round(value));
+    else if (field === 'identicalProbability') result[field] = Math.max(0, Math.min(100, value));
+    else result[field] = Math.max(0, value);
+  }
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+export function setRacePhysiologyOverrides(overrides = {}) {
+  const next = {};
+  if (overrides && typeof overrides === 'object' && !Array.isArray(overrides)) {
+    for (const [race, profile] of Object.entries(overrides)) {
+      const key = String(race || '').trim();
+      const patch = sanitizeRacePhysiologyProfilePatch(profile);
+      if (key && patch) next[key] = Object.freeze(patch);
+    }
+  }
+  customRacePhysiologyProfiles = Object.freeze(next);
+}
+
+export function getRacePhysiologyOverrides() {
+  const result = {};
+  for (const [race, profile] of Object.entries(customRacePhysiologyProfiles)) {
+    result[race] = { ...profile };
+  }
+  return result;
+}
+
+export function getRacePhysiologyOverride(race) {
+  const key = String(race || '').trim();
+  const profile = customRacePhysiologyProfiles[key];
+  return profile ? { ...profile } : null;
+}
+
+export function getBuiltinRacePhysiologyProfile(race) {
+  const key = String(race || '').trim();
+  const profile = RACE_PHYSIOLOGY_PROFILES[key];
+  return profile ? { ...profile } : null;
+}
+
+export function getRaceIntroductionLine(race) {
+  const key = getBaseRaceName(race);
+  if (!key) return '';
+  const customLine = customRacePhysiologyProfiles[key]?.[RACE_INTRODUCTION_FIELD];
+  if (customLine !== undefined) return String(customLine || '').trim();
+  return String(RACE_INTRODUCTION_LINES[key] || '').trim();
+}
+
+function getEffectiveRacePhysiologyProfileValue(race) {
+  const key = String(race || '').trim();
+  const builtin = RACE_PHYSIOLOGY_PROFILES[key];
+  if (!builtin) return null;
+  return {
+    ...builtin,
+    ...(customRacePhysiologyProfiles[key] || {}),
+  };
+}
+
 function getEmbryoRecoveryCoefficientByType(embryoType) {
   switch (String(embryoType || '胎生')) {
     case '卵生':
@@ -810,7 +899,7 @@ function resolveRecoveryDays(profile, embryoType) {
 
 export function getRacePhysiologyProfile(race) {
   const key = String(race || "");
-  const profile = RACE_PHYSIOLOGY_PROFILES[key];
+  const profile = getEffectiveRacePhysiologyProfileValue(key);
   if (!profile) return null;
   return {
     ...profile,
@@ -917,7 +1006,7 @@ export function getEmbryoTypeByRace(race) {
   let dominantRace = parts[0];
   let lowestGestationSpeciesSpeed = Number.POSITIVE_INFINITY;
   for (const part of parts) {
-    const profile = RACE_PHYSIOLOGY_PROFILES[String(part || '')] || null;
+    const profile = getEffectiveRacePhysiologyProfileValue(part);
     const gestationSpeciesSpeed = Number(profile?.gestationSpeciesSpeed);
     if (Number.isFinite(gestationSpeciesSpeed) && gestationSpeciesSpeed < lowestGestationSpeciesSpeed) {
       lowestGestationSpeciesSpeed = gestationSpeciesSpeed;

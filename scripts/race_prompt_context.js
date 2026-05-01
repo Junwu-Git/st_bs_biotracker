@@ -1,4 +1,4 @@
-import { getDerivedTypeFluxProfile, getEmbryoTypeByRace, getMergedRacePhysiologyProfile, getRaceComponents, getRacePhysiologyProfile } from './race_config.js';
+import { getDerivedTypeFluxProfile, getEmbryoTypeByRace, getMergedRacePhysiologyProfile, getRaceComponents, getRaceIntroductionLine, getRacePhysiologyProfile } from './race_config.js';
 
 function formatNumber(value, digits = 2) {
   const num = Number(value);
@@ -172,8 +172,10 @@ function describeShift(nextValue, baseValue, formatter = (value) => String(value
 function buildSingleRacePhysiologyBlock(race) {
   const profile = getRacePhysiologyProfile(race);
   if (!profile) return '';
+  const introductionLine = getRaceIntroductionLine(race);
   return [
     `【${race}】`,
+    introductionLine ? `- 物种短敘述: ${introductionLine}` : '',
     `- 经期长度: ${formatCycleDays(profile.menstrualLengthRatio)}`,
     `- 妊娠长度: ${formatGestation(profile.gestationSpeciesSpeed)}`,
     `- 产后恢复时间: ${formatRecoveryDays(profile.recoveryDays)}`,
@@ -181,7 +183,7 @@ function buildSingleRacePhysiologyBlock(race) {
     `- 受精难度: ${getImpregnationDifficultyText(profile.impregnationDifficulty)}`,
     `- 多产性: ${getProlificacyText(profile.orgasmOvulationAmount, profile.identicalProbability)}；额外排卵倾向 ${formatNumber(profile.orgasmOvulationAmount)}，同卵多胎概率 ${formatNumber(profile.identicalProbability)}%`,
     `- 性别比: ${getGenderRatioText(profile.genderRatio)}`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 export function buildSingleRacePhysiologyText(race) {

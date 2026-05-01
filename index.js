@@ -3,8 +3,14 @@ import { runRegistry } from './scripts/registry.js';
 import {
   AMORPHOUS_RACES,
   DERIVED_TYPE_RACES,
+  RACE_INTRODUCTION_FIELD,
+  RACE_PHYSIOLOGY_FIELDS,
   getEmbryoTypeByRace,
+  getBuiltinRacePhysiologyProfile,
   getDerivedTypeFluxProfile,
+  getRaceIntroductionLine,
+  getRacePhysiologyOverride,
+  setRacePhysiologyOverrides,
   METOVIVIPAROUS_RACES,
   OVIPAROUS_RACES,
   OVOVIVIPAROUS_RACES,
@@ -66,6 +72,7 @@ let selectedTrackSubpage = 'overview';
 let selectedTrackCardIndexes = {};
 let selectedRaceEncyclopedia = '';
 let selectedDerivedEncyclopedia = '';
+let racePhysiologyEditorOpen = false;
 let worldbookEntrySearch = '';
 let latestWorldbookEntries = [];
 let racePaletteState = {
@@ -112,6 +119,21 @@ const RACE_ENCYCLOPEDIA_GROUPS = RACE_PALETTE_GROUPS.map((group) => ({
   races: Array.from(new Set(group.races)),
 })).filter((group) => group.races.length > 0);
 const DERIVED_ENCYCLOPEDIA_LIST = Array.from(new Set(DERIVED_TYPE_RACES)).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+const RACE_PHYSIOLOGY_FIELD_LABELS = Object.freeze({
+  menstrualLengthRatio: '经期长度倍率',
+  gestationSpeciesSpeed: '妊娠速度倍率',
+  birthDifficulty: '分娩难度',
+  breedTolerance: '承载耐受',
+  impregnationDifficulty: '受精难度',
+  orgasmOvulationAmount: '额外排卵倾向',
+  identicalProbability: '同卵多胎概率(%)',
+  genderRatio: '男胎比例',
+});
+const RACE_PHYSIOLOGY_FIELD_HINTS = Object.freeze({
+  genderRatio: '0-100；空白=双性，-1=无性',
+});
+const EDITABLE_RACE_PHYSIOLOGY_FIELDS = Object.freeze(RACE_PHYSIOLOGY_FIELDS.filter((field) => field !== 'recoveryDays'));
+const RACE_INTRODUCTION_LABEL = '物种短敘述';
 
 function setConnectStatus(message, isError = false) {
   const el = document.getElementById('bs-bt-connect-status');
@@ -299,12 +321,204 @@ function updateBatteryIndicator(activeCharacterCount = 0) {
   icons.setAttribute('aria-label', `battery ${width}/16 with ${count} tracked active character${count === 1 ? '' : 's'}`);
 }
 
-function renderRaceEncyclopediaPage() {
+function syncRacePhysiologyOverrides(settings) {
+  setRacePhysiologyOverrides(settings?.racePhysiologyOverrides || {});
+}
+
+function getRacePhysiologyFieldStep(field) {
+  if (field === 'orgasmOvulationAmount' || field === 'genderRatio') return '1';
+  return '0.01';
+}
+
+function getRacePhysiologyFieldMin(field) {
+  return field === 'genderRatio' ? '-1' : '0';
+}
+
+function getRacePhysiologyInputValue(race, field) {
+  const override = getRacePhysiologyOverride(race);
+  if (override && Object.prototype.hasOwnProperty.call(override, field)) {
+    return override[field] === null ? '' : String(override[field]);
+  }
+  const builtin = getBuiltinRacePhysiologyProfile(race);
+  if (!builtin || !Object.prototype.hasOwnProperty.call(builtin, field)) return '';
+  return builtin[field] === null ? '' : String(builtin[field]);
+}
+
+function getRaceIntroductionInputValue(race) {
+  return getRaceIntroductionLine(race);
+}
+
+function renderRacePhysiologyEditor(race) {
+  const editorNode = document.getElementById('bs-bt-race-editor');
+  const statusNode = document.getElementById('bs-bt-race-editor-status');
+  if (!editorNode) return;
+  editorNode.innerHTML = '';
+  if (statusNode) statusNode.textContent = '物种短敘述可留空；数值只保存与内置值不同的字段；产后恢复天数由系统公式与指令流程处理。';
+  if (!race) {
+    editorNode.textContent = '请选择种族后编辑参数。';
+    return;
+  }
+  const override = getRacePhysiologyOverride(race);
+  const builtin = getBuiltinRacePhysiologyProfile(race);
+  if (!builtin) {
+    editorNode.textContent = '此种族没有内置生理资料。';
+    return;
+  }
+
+  const introductionLabel = document.createElement('label');
+  introductionLabel.className = 'bs-bt-race-editor-field bs-bt-race-editor-field-wide';
+  introductionLabel.setAttribute('for', 'bs-bt-race-introduction-line');
+
+  const introductionText = document.createElement('span');
+  introductionText.textContent = RACE_INTRODUCTION_LABEL;
+  introductionLabel.appendChild(introductionText);
+
+  const introductionInput = document.createElement('textarea');
+  introductionInput.id = 'bs-bt-race-introduction-line';
+  introductionInput.className = 'text_pole bs-bt-race-introduction-input';
+  introductionInput.rows = 2;
+  introductionInput.dataset.raceIntroductionField = RACE_INTRODUCTION_FIELD;
+  introductionInput.value = getRaceIntroductionInputValue(race);
+  introductionInput.placeholder = '可留空；填入后会作为该物种的提示词短句。';
+  introductionLabel.appendChild(introductionInput);
+
+  if (override && Object.prototype.hasOwnProperty.call(override, RACE_INTRODUCTION_FIELD)) {
+    const badge = document.createElement('span');
+    badge.className = 'bs-bt-race-editor-badge';
+    badge.textContent = '已覆盖';
+    introductionLabel.appendChild(badge);
+  }
+
+  editorNode.appendChild(introductionLabel);
+
+  for (const field of EDITABLE_RACE_PHYSIOLOGY_FIELDS) {
+    const label = document.createElement('label');
+    label.className = 'bs-bt-race-editor-field';
+    label.setAttribute('for', `bs-bt-race-field-${field}`);
+
+    const text = document.createElement('span');
+    text.textContent = RACE_PHYSIOLOGY_FIELD_LABELS[field] || field;
+    label.appendChild(text);
+
+    const input = document.createElement('input');
+    input.id = `bs-bt-race-field-${field}`;
+    input.className = 'text_pole';
+    input.type = 'number';
+    input.step = getRacePhysiologyFieldStep(field);
+    input.min = getRacePhysiologyFieldMin(field);
+    if (field === 'genderRatio') input.max = '100';
+    if (field === 'identicalProbability') input.max = '100';
+    input.dataset.racePhysiologyField = field;
+    input.value = getRacePhysiologyInputValue(race, field);
+    input.placeholder = RACE_PHYSIOLOGY_FIELD_HINTS[field] || '';
+    label.appendChild(input);
+
+    if (override && Object.prototype.hasOwnProperty.call(override, field)) {
+      const badge = document.createElement('span');
+      badge.className = 'bs-bt-race-editor-badge';
+      badge.textContent = '已覆盖';
+      label.appendChild(badge);
+    }
+
+    editorNode.appendChild(label);
+  }
+}
+
+function collectRacePhysiologyEditorProfile(race, { onlyDiff = false } = {}) {
+  const builtin = getBuiltinRacePhysiologyProfile(race);
+  if (!builtin) return null;
+  const result = {};
+  const introductionInput = document.querySelector(`[data-race-introduction-field="${RACE_INTRODUCTION_FIELD}"]`);
+  if (introductionInput instanceof HTMLTextAreaElement) {
+    const value = String(introductionInput.value || '').trim();
+    const baseValue = '';
+    const changed = value !== baseValue;
+    if (value && (!onlyDiff || changed)) result[RACE_INTRODUCTION_FIELD] = value;
+  }
+  for (const field of EDITABLE_RACE_PHYSIOLOGY_FIELDS) {
+    const input = document.querySelector(`[data-race-physiology-field="${field}"]`);
+    if (!(input instanceof HTMLInputElement)) continue;
+    let value;
+    if (field === 'genderRatio' && String(input.value || '').trim() === '') value = null;
+    else {
+      const num = Number(input.value);
+      if (!Number.isFinite(num)) continue;
+      value = (field === 'orgasmOvulationAmount' || field === 'genderRatio') ? Math.round(num) : num;
+    }
+    const baseValue = builtin[field];
+    const changed = value === null ? baseValue !== null : Math.abs(Number(value) - Number(baseValue)) > 0.0001;
+    if (!onlyDiff || changed) result[field] = value;
+  }
+  return result;
+}
+
+function saveRacePhysiologyOverrideFromEditor(ctx, mode = 'diff') {
+  if (!ctx || !selectedRaceEncyclopedia) return;
+  const settings = getSettings(ctx);
+  const currentOverrides = settings.racePhysiologyOverrides && typeof settings.racePhysiologyOverrides === 'object'
+    ? { ...settings.racePhysiologyOverrides }
+    : {};
+  const profile = collectRacePhysiologyEditorProfile(selectedRaceEncyclopedia, { onlyDiff: mode === 'diff' });
+  if (!profile) return;
+  if (Object.keys(profile).length === 0) delete currentOverrides[selectedRaceEncyclopedia];
+  else currentOverrides[selectedRaceEncyclopedia] = profile;
+  settings.racePhysiologyOverrides = currentOverrides;
+  syncRacePhysiologyOverrides(settings);
+  saveSettings(ctx);
+  updateMainFlowPrompt(ctx);
+  racePhysiologyEditorOpen = false;
+  renderRaceEncyclopediaPage(ctx);
+}
+
+function resetRacePhysiologyOverride(ctx) {
+  if (!ctx || !selectedRaceEncyclopedia) return;
+  const settings = getSettings(ctx);
+  const currentOverrides = settings.racePhysiologyOverrides && typeof settings.racePhysiologyOverrides === 'object'
+    ? { ...settings.racePhysiologyOverrides }
+    : {};
+  delete currentOverrides[selectedRaceEncyclopedia];
+  settings.racePhysiologyOverrides = currentOverrides;
+  syncRacePhysiologyOverrides(settings);
+  saveSettings(ctx);
+  updateMainFlowPrompt(ctx);
+  racePhysiologyEditorOpen = false;
+  renderRaceEncyclopediaPage(ctx);
+}
+
+function copyHumanPhysiologyToEditor() {
+  const human = getBuiltinRacePhysiologyProfile('人类');
+  if (!human) return;
+  const introductionInput = document.querySelector(`[data-race-introduction-field="${RACE_INTRODUCTION_FIELD}"]`);
+  if (introductionInput instanceof HTMLTextAreaElement) introductionInput.value = '';
+  for (const field of EDITABLE_RACE_PHYSIOLOGY_FIELDS) {
+    const input = document.querySelector(`[data-race-physiology-field="${field}"]`);
+    if (!(input instanceof HTMLInputElement)) continue;
+    input.value = human[field] === null ? '' : String(human[field]);
+  }
+}
+
+function openRacePhysiologyEditor(ctx) {
+  if (!selectedRaceEncyclopedia) return;
+  racePhysiologyEditorOpen = true;
+  renderRaceEncyclopediaPage(ctx);
+}
+
+function closeRacePhysiologyEditor() {
+  racePhysiologyEditorOpen = false;
+  const modal = document.getElementById('bs-bt-race-editor-modal');
+  if (modal) modal.hidden = true;
+}
+
+function renderRaceEncyclopediaPage(ctx = null) {
+  if (ctx) syncRacePhysiologyOverrides(getSettings(ctx));
   const countNode = document.getElementById('bs-bt-race-count');
   const selectNode = document.getElementById('bs-bt-race-select');
   const outputNode = document.getElementById('bs-bt-race-output');
   const derivedSelectNode = document.getElementById('bs-bt-derived-select');
   const derivedOutputNode = document.getElementById('bs-bt-derived-output');
+  const editButton = document.getElementById('bs-bt-race-open-editor');
+  const editorModal = document.getElementById('bs-bt-race-editor-modal');
+  const editorTitle = document.getElementById('bs-bt-race-editor-title');
   if (!countNode || !selectNode || !outputNode || !derivedSelectNode || !derivedOutputNode) return;
 
   countNode.innerHTML = `内置种族数量：${RACE_ENCYCLOPEDIA_LIST.length}<br>衍生类型数量：${DERIVED_ENCYCLOPEDIA_LIST.length}`;
@@ -339,7 +553,16 @@ function renderRaceEncyclopediaPage() {
 
   if (!selectedRaceEncyclopedia) {
     outputNode.textContent = '暂无可显示的种族资料。';
+    if (editButton) editButton.disabled = true;
+    closeRacePhysiologyEditor();
   } else {
+    if (editButton) {
+      editButton.disabled = false;
+      editButton.textContent = getRacePhysiologyOverride(selectedRaceEncyclopedia) ? '编辑覆盖' : '调整参数';
+    }
+    if (editorModal) editorModal.hidden = !racePhysiologyEditorOpen;
+    if (editorTitle) editorTitle.textContent = `${selectedRaceEncyclopedia} 参数覆盖`;
+    if (racePhysiologyEditorOpen) renderRacePhysiologyEditor(selectedRaceEncyclopedia);
     const embryoType = getEmbryoTypeByRace(selectedRaceEncyclopedia);
     const embryoText = getEmbryoTypeReferenceText(embryoType);
     const physiologyText = buildSingleRacePhysiologyText(selectedRaceEncyclopedia);
@@ -2073,6 +2296,7 @@ function getLastPagerView() {
 
 function applySettingsToForm(ctx) {
   const settings = getSettings(ctx);
+  syncRacePhysiologyOverrides(settings);
   const setValue = (id, value) => {
     const node = document.getElementById(id);
     if (!node) return;
@@ -2102,7 +2326,7 @@ function applySettingsToForm(ctx) {
   applyTheme(settings);
   renderStatusPanel(ctx);
   renderFullStatePage(ctx);
-  renderRaceEncyclopediaPage();
+  renderRaceEncyclopediaPage(ctx);
   refreshRegisterRacePalette();
   setView(getLastPagerView());
 }
@@ -2163,6 +2387,7 @@ async function clearCurrentWorldbookExcludeSelections(ctx) {
 
 function updateMainFlowPrompt(ctx) {
   const settings = getSettings(ctx);
+  syncRacePhysiologyOverrides(settings);
   const prompt = buildMainFlowPrompt(ctx, settings);
   try {
     ctx.setExtensionPrompt?.(MAINFLOW_PROMPT_KEY, prompt, 1, Math.max(2, Number(settings.contextSize) || 12), false);
@@ -2194,6 +2419,7 @@ function readSettingsFromForm(ctx) {
     closeupDescription: String(getValue('bs-bt-registry-closeup-description')).trim(),
     pregnantDescription: String(getValue('bs-bt-registry-pregnant-description')).trim(),
   };
+  syncRacePhysiologyOverrides(settings);
   saveSettings(ctx);
   updateMainFlowPrompt(ctx);
   resetPoller(ctx, trackerDeps);
@@ -2498,7 +2724,7 @@ async function ensureModal(ctx) {
         });
       }
       if (nextView === 'full-state') renderFullStatePage(ctx);
-      if (nextView === 'race-encyclopedia') renderRaceEncyclopediaPage();
+      if (nextView === 'race-encyclopedia') renderRaceEncyclopediaPage(ctx);
       setView(nextView);
     }),
   );
@@ -2530,7 +2756,8 @@ async function ensureModal(ctx) {
   });
   document.getElementById('bs-bt-race-select')?.addEventListener('change', (event) => {
     selectedRaceEncyclopedia = String(event.target?.value || '');
-    renderRaceEncyclopediaPage();
+    racePhysiologyEditorOpen = false;
+    renderRaceEncyclopediaPage(ctx);
   });
   document.getElementById('bs-bt-tracker-worldbook-mode')?.addEventListener('change', async () => {
     readSettingsFromForm(ctx);
@@ -2557,7 +2784,29 @@ async function ensureModal(ctx) {
   });
   document.getElementById('bs-bt-derived-select')?.addEventListener('change', (event) => {
     selectedDerivedEncyclopedia = String(event.target?.value || '');
-    renderRaceEncyclopediaPage();
+    renderRaceEncyclopediaPage(ctx);
+  });
+  document.getElementById('bs-bt-race-open-editor')?.addEventListener('click', () => {
+    openRacePhysiologyEditor(ctx);
+  });
+  document.getElementById('bs-bt-race-editor-close')?.addEventListener('click', () => {
+    closeRacePhysiologyEditor();
+  });
+  document.getElementById('bs-bt-race-editor-modal')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closeRacePhysiologyEditor();
+  });
+  document.getElementById('bs-bt-race-use-human')?.addEventListener('click', () => {
+    copyHumanPhysiologyToEditor();
+    const status = document.getElementById('bs-bt-race-editor-status');
+    if (status) status.textContent = '已填入人类数值，点击“保存覆盖”后生效。';
+  });
+  document.getElementById('bs-bt-race-save-override')?.addEventListener('click', () => {
+    saveRacePhysiologyOverrideFromEditor(ctx, 'diff');
+    globalThis.toastr?.success?.(`[BS BioTracker] 已保存 ${selectedRaceEncyclopedia} 的种族参数覆盖`);
+  });
+  document.getElementById('bs-bt-race-reset-override')?.addEventListener('click', () => {
+    resetRacePhysiologyOverride(ctx);
+    globalThis.toastr?.success?.(`[BS BioTracker] 已恢复 ${selectedRaceEncyclopedia} 的内置种族参数`);
   });
   document.getElementById('bs-bt-connect')?.addEventListener('click', async () => {
     readSettingsFromForm(ctx);

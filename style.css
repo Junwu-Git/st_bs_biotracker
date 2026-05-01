@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Chewy&family=Ma+Shan+Zheng&family=Long+Cang&family=Noto+Serif+TC:wght@400;700&family=Special+Elite&family=UnifrakturCook:wght@700&family=Zhi+Mang+Xing&family=Audiowide&family=Silkscreen&family=DotGothic16&family=ZCOOL+KuaiLe&family=ZCOOL+QingKe+HuangYou&family=ZCOOL+XiaoWei&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Chewy&family=Chiron+GoRound+TC:wght@400;700&family=Ma+Shan+Zheng&family=Long+Cang&family=LXGW+WenKai+TC&family=Noto+Sans+TC:wght@400;700&family=Noto+Serif+TC:wght@400;700&family=Special+Elite&family=UnifrakturCook:wght@700&family=Zhi+Mang+Xing&family=Audiowide&family=Chocolate+Classical+Sans&family=Silkscreen&family=DotGothic16&family=WDXL+Lubrifont+SC&family=ZCOOL+KuaiLe&family=ZCOOL+XiaoWei&display=swap');
 
 :root {
   --bsbt-pager-bg: #2d3436;
@@ -81,7 +81,7 @@
   --bsbt-lcd-bg: #00f2ff;
   --bsbt-lcd-text: #002b2b;
   --bsbt-border-color: #002b2b;
-  --bsbt-font-main: 'Audiowide', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', cursive;
+  --bsbt-font-main: 'Audiowide', 'Chocolate Classical Sans', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', sans-serif;
   --bsbt-btn-grad-1: #daa520;
   --bsbt-btn-grad-2: #8b4513;
   --bsbt-btn-text: #002b2b;
@@ -138,7 +138,7 @@
   --bsbt-lcd-bg: rgba(3, 28, 52, 0.22);
   --bsbt-lcd-text: #8df7ff;
   --bsbt-border-color: rgba(74, 223, 255, 0.74);
-  --bsbt-font-main: 'ZCOOL QingKe HuangYou', 'Microsoft JhengHei UI', 'PingFang TC', 'Noto Sans TC', sans-serif;
+  --bsbt-font-main: 'Chiron GoRound TC', 'Noto Sans TC', 'Microsoft JhengHei UI', 'PingFang TC', sans-serif;
   --bsbt-btn-grad-1: rgba(22, 198, 255, 0.16);
   --bsbt-btn-grad-2: rgba(10, 82, 155, 0.1);
   --bsbt-btn-text: #b8fbff;
@@ -230,6 +230,57 @@
   --bsbt-home-tile-bg: rgba(18, 48, 47, 0.34);
   --bsbt-home-tile-glow: rgba(104, 214, 194, 0.2);
   --bsbt-home-tile-shadow: rgba(3, 7, 6, 0.58);
+}
+
+#bs-biotracker-settings.theme-ink, .bs-bt-floating-sphere.theme-ink {
+  --bsbt-pager-bg:
+    radial-gradient(ellipse at 50% 12%, rgba(31, 37, 34, 0.1), transparent 30%),
+    linear-gradient(90deg, #c9b98f 0 5%, #f3ead8 5% 95%, #c9b98f 95% 100%);
+  --bsbt-lcd-bg: rgba(243, 234, 216, 0.82);
+  --bsbt-lcd-text: #1f2522;
+  --bsbt-border-color: rgba(31, 37, 34, 0.42);
+  --bsbt-font-main: 'LXGW WenKai TC', 'Noto Serif TC', 'Microsoft JhengHei', 'PingFang TC', serif;
+  --bsbt-btn-grad-1: #f3ead8;
+  --bsbt-btn-grad-2: #dfd1b6;
+  --bsbt-btn-text: #1f2522;
+  --bsbt-off-bg: #dfd1b6;
+  --bsbt-off-text: #1f2522;
+  --bsbt-case-radius: 3px;
+  --bsbt-case-shadow:
+    0 18px 28px rgba(31, 37, 34, 0.24),
+    inset 0 0 0 1px rgba(31, 37, 34, 0.12),
+    inset 0 0 34px rgba(75, 81, 76, 0.08);
+  --bsbt-case-border: 0;
+  --bsbt-home-tile-bg: transparent;
+  --bsbt-home-tile-glow: rgba(31, 37, 34, 0.08);
+  --bsbt-home-tile-shadow: rgba(31, 37, 34, 0.16);
+}
+
+#bs-biotracker-settings.theme-constructivism, .bs-bt-floating-sphere.theme-constructivism {
+  --bsbt-pager-bg:
+    repeating-linear-gradient(90deg, rgba(236, 227, 207, 0.05) 0 1px, transparent 1px 10px),
+    linear-gradient(135deg, rgba(182, 37, 37, 0.24) 0 17%, transparent 17%),
+    linear-gradient(315deg, rgba(20, 20, 20, 0.28) 0 18%, transparent 18%),
+    linear-gradient(90deg, #5f6668 0%, #3f4547 48%, #6c7375 100%);
+  --bsbt-lcd-bg: #d8d2c3;
+  --bsbt-lcd-text: #141414;
+  --bsbt-border-color: #141414;
+  --bsbt-font-main: 'WDXL Lubrifont SC', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', sans-serif;
+  --bsbt-btn-grad-1: #b62525;
+  --bsbt-btn-grad-2: #141414;
+  --bsbt-btn-text: #ece3cf;
+  --bsbt-off-bg: #141414;
+  --bsbt-off-text: #ece3cf;
+  --bsbt-case-radius: 0;
+  --bsbt-case-shadow:
+    10px 10px 0 rgba(20, 20, 20, 0.62),
+    0 18px 34px rgba(0, 0, 0, 0.4),
+    inset 0 0 0 2px rgba(236, 227, 207, 0.16),
+    inset 0 0 28px rgba(20, 20, 20, 0.28);
+  --bsbt-case-border: 6px solid #141414;
+  --bsbt-home-tile-bg: transparent;
+  --bsbt-home-tile-glow: rgba(182, 37, 37, 0.18);
+  --bsbt-home-tile-shadow: rgba(20, 20, 20, 0.36);
 }
 
 .bs-bt-modal {
@@ -600,6 +651,7 @@
 }
 
 #bs-biotracker-settings .bs-bt-screen-content {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
@@ -1228,6 +1280,77 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-race-editor-modal {
+  position: absolute;
+  inset: 44px 12px 18px;
+  z-index: 18;
+  display: grid;
+  align-items: start;
+  padding: 10px;
+  background: rgba(18, 18, 18, 0.2);
+  backdrop-filter: blur(2px);
+}
+
+#bs-biotracker-settings .bs-bt-race-editor-modal[hidden] {
+  display: none;
+}
+
+#bs-biotracker-settings .bs-bt-race-editor-dialog {
+  display: grid;
+  gap: 10px;
+  max-height: 100%;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.24);
+  border-radius: 8px;
+  background: rgba(248, 243, 232, 0.97);
+  color: inherit;
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.2);
+}
+
+#bs-biotracker-settings .bs-bt-race-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-race-editor {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-race-editor-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-race-editor-field-wide {
+  grid-column: 1 / -1;
+}
+
+#bs-biotracker-settings .bs-bt-race-introduction-input {
+  min-height: 56px;
+  resize: vertical;
+}
+
+#bs-biotracker-settings .bs-bt-race-editor-field > span:first-child {
+  font-size: 0.84em;
+  opacity: 0.82;
+}
+
+#bs-biotracker-settings .bs-bt-race-editor-badge {
+  width: fit-content;
+  padding: 1px 6px;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  border-radius: 6px;
+  font-size: 0.76em;
+  opacity: 0.8;
 }
 
 #bs-biotracker-settings .bs-bt-track-debug-button {
@@ -2109,6 +2232,282 @@
       saturate(1.16)
       brightness(1.06);
   }
+}
+
+#bs-biotracker-settings.theme-ink.bs-bt-device {
+  padding: 42px 28px 36px;
+  background:
+    radial-gradient(ellipse at 26% 22%, rgba(31, 37, 34, 0.08), transparent 30%),
+    radial-gradient(ellipse at 76% 74%, rgba(164, 56, 47, 0.08), transparent 24%),
+    var(--bsbt-pager-bg);
+  overflow: visible;
+}
+
+#bs-biotracker-settings.theme-ink.bs-bt-device::before,
+#bs-biotracker-settings.theme-ink.bs-bt-device::after {
+  content: '';
+  position: absolute;
+  left: -18px;
+  right: -18px;
+  height: 24px;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 20px 50%, #4b3324 0 9px, transparent 10px),
+    radial-gradient(circle at calc(100% - 20px) 50%, #4b3324 0 9px, transparent 10px),
+    linear-gradient(90deg, #4b3324, #7a5638 16%, #9f7650 50%, #7a5638 84%, #4b3324);
+  border-radius: 999px;
+  box-shadow:
+    0 2px 0 rgba(31, 37, 34, 0.28),
+    inset 0 1px 0 rgba(243, 234, 216, 0.18);
+  z-index: 0;
+}
+
+#bs-biotracker-settings.theme-ink.bs-bt-device::before {
+  top: 8px;
+}
+
+#bs-biotracker-settings.theme-ink.bs-bt-device::after {
+  bottom: 8px;
+}
+
+#bs-biotracker-settings.theme-ink > :not(.bs-bt-hardware-detail) {
+  position: relative;
+  z-index: 1;
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-brand {
+  color: rgba(31, 37, 34, 0.42);
+  letter-spacing: 0.32em;
+  text-shadow: none;
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-screen {
+  background:
+    radial-gradient(ellipse at 20% 10%, rgba(31, 37, 34, 0.08), transparent 34%),
+    radial-gradient(ellipse at 80% 88%, rgba(164, 56, 47, 0.06), transparent 28%),
+    linear-gradient(rgba(31, 37, 34, 0.035) 1px, transparent 1px),
+    var(--bsbt-lcd-bg);
+  background-size: auto, auto, 100% 8px, auto;
+  border: 2px solid rgba(31, 37, 34, 0.28);
+  border-radius: 2px;
+  box-shadow:
+    inset 0 0 32px rgba(75, 81, 76, 0.08),
+    0 0 0 1px rgba(243, 234, 216, 0.64);
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-screen-header {
+  border-bottom: 1px solid rgba(31, 37, 34, 0.36);
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-screen::after {
+  background: none;
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-menu-card,
+#bs-biotracker-settings.theme-ink .bs-bt-theme-option,
+#bs-biotracker-settings.theme-ink .bs-bt-status-box,
+#bs-biotracker-settings.theme-ink .text_pole,
+#bs-biotracker-settings.theme-ink select,
+#bs-biotracker-settings.theme-ink textarea,
+#bs-biotracker-settings.theme-ink input[type='text'],
+#bs-biotracker-settings.theme-ink input[type='password'],
+#bs-biotracker-settings.theme-ink input[type='number'],
+#bs-biotracker-settings.theme-ink .menu_button {
+  border-color: rgba(31, 37, 34, 0.32);
+  background: rgba(243, 234, 216, 0.44);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-theme-option.is-active {
+  background: rgba(164, 56, 47, 0.18);
+  color: #1f2522;
+  border-color: rgba(164, 56, 47, 0.5);
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-home-tile {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-home-tile:hover,
+#bs-biotracker-settings.theme-ink .bs-bt-home-tile:focus-visible {
+  background: transparent;
+  box-shadow: none;
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-physical-buttons {
+  padding-top: 18px;
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-physical-button,
+#bs-biotracker-settings.theme-ink .bs-bt-physical-button-off {
+  border: 1px solid rgba(164, 56, 47, 0.58);
+  border-radius: 3px 2px 4px 2px;
+  background:
+    radial-gradient(ellipse at 12% 18%, rgba(164, 56, 47, 0.26), transparent 24%),
+    radial-gradient(ellipse at 92% 76%, rgba(164, 56, 47, 0.22), transparent 22%),
+    linear-gradient(90deg, rgba(164, 56, 47, 0.2), transparent 8% 92%, rgba(164, 56, 47, 0.18)),
+    linear-gradient(180deg, rgba(164, 56, 47, 0.2), transparent 10% 88%, rgba(164, 56, 47, 0.16)),
+    rgba(164, 56, 47, 0.08);
+  color: #a4382f;
+  box-shadow:
+    inset 0 0 0 1px rgba(164, 56, 47, 0.18),
+    inset 0 0 12px rgba(164, 56, 47, 0.08),
+    0 0 0 1px rgba(164, 56, 47, 0.12);
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-physical-button:active {
+  transform: none;
+  box-shadow: none;
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-power-off-overlay {
+  background: rgba(223, 209, 182, 0.96);
+}
+
+.bs-bt-floating-sphere.theme-ink {
+  border: 2px solid rgba(31, 37, 34, 0.34);
+  background:
+    #f3ead8;
+  color: #a4382f;
+  box-shadow:
+    0 6px 14px rgba(31, 37, 34, 0.22),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+}
+
+#bs-biotracker-settings.theme-constructivism.bs-bt-device {
+  background:
+    linear-gradient(135deg, rgba(182, 37, 37, 0.86) 0 18%, transparent 18%),
+    linear-gradient(315deg, rgba(20, 20, 20, 0.9) 0 16%, transparent 16%),
+    repeating-linear-gradient(90deg, rgba(236, 227, 207, 0.06) 0 1px, transparent 1px 9px),
+    var(--bsbt-pager-bg);
+}
+
+#bs-biotracker-settings.theme-constructivism.bs-bt-device::before {
+  content: '';
+  position: absolute;
+  inset: 18px;
+  pointer-events: none;
+  border: 2px solid rgba(20, 20, 20, 0.72);
+  background:
+    linear-gradient(135deg, transparent 0 47%, rgba(182, 37, 37, 0.72) 47% 53%, transparent 53%),
+    linear-gradient(315deg, transparent 0 46%, rgba(20, 20, 20, 0.64) 46% 54%, transparent 54%);
+  box-shadow:
+    inset 0 0 0 1px rgba(236, 227, 207, 0.14),
+    0 0 0 1px rgba(236, 227, 207, 0.08);
+  z-index: 0;
+}
+
+#bs-biotracker-settings.theme-constructivism > :not(.bs-bt-hardware-detail) {
+  position: relative;
+  z-index: 1;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-brand {
+  color: rgba(236, 227, 207, 0.72);
+  letter-spacing: 0.26em;
+  text-shadow: none;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-screen {
+  background:
+    linear-gradient(rgba(20, 20, 20, 0.04) 1px, transparent 1px),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.2), transparent 35%),
+    var(--bsbt-lcd-bg);
+  background-size: 100% 6px, auto, auto;
+  border-width: 4px;
+  border-radius: 0;
+  box-shadow:
+    7px 7px 0 rgba(20, 20, 20, 0.58),
+    inset 0 0 0 1px rgba(236, 227, 207, 0.28),
+    inset 0 0 22px rgba(20, 20, 20, 0.1);
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-screen-shell {
+  border-radius: 0;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-screen-header {
+  border-bottom-color: #141414;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-screen::after {
+  background:
+    repeating-linear-gradient(90deg, transparent 0 8px, rgba(20, 20, 20, 0.06) 8px 9px),
+    repeating-linear-gradient(0deg, transparent 0 12px, rgba(182, 37, 37, 0.04) 12px 13px);
+  opacity: 0.5;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-menu-card,
+#bs-biotracker-settings.theme-constructivism .bs-bt-theme-option,
+#bs-biotracker-settings.theme-constructivism .bs-bt-status-box,
+#bs-biotracker-settings.theme-constructivism .text_pole,
+#bs-biotracker-settings.theme-constructivism select,
+#bs-biotracker-settings.theme-constructivism textarea,
+#bs-biotracker-settings.theme-constructivism input[type='text'],
+#bs-biotracker-settings.theme-constructivism input[type='password'],
+#bs-biotracker-settings.theme-constructivism input[type='number'],
+#bs-biotracker-settings.theme-constructivism .menu_button {
+  border: 2px solid #141414;
+  border-radius: 0;
+  background:
+    linear-gradient(135deg, rgba(182, 37, 37, 0.08), transparent 34%),
+    rgba(236, 227, 207, 0.52);
+  box-shadow: none;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-theme-option.is-active {
+  background:
+    linear-gradient(135deg, #b62525 0 58%, #141414 58% 100%);
+  color: #ece3cf;
+  border-color: #141414;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-home-tile {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-home-tile:hover,
+#bs-biotracker-settings.theme-constructivism .bs-bt-home-tile:focus-visible {
+  background: transparent;
+  box-shadow: none;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-physical-button,
+#bs-biotracker-settings.theme-constructivism .bs-bt-physical-button-off {
+  border: 3px solid #141414;
+  border-radius: 0;
+  background:
+    linear-gradient(135deg, #b62525 0 52%, #141414 52% 100%);
+  color: #ece3cf;
+  box-shadow:
+    5px 5px 0 rgba(20, 20, 20, 0.72),
+    inset 0 0 0 1px rgba(236, 227, 207, 0.18);
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-physical-button:active {
+  transform: translate(3px, 3px);
+  box-shadow: 2px 2px 0 rgba(20, 20, 20, 0.72);
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-power-off-overlay {
+  background: rgba(20, 20, 20, 0.96);
+}
+
+.bs-bt-floating-sphere.theme-constructivism {
+  border: 3px solid #141414;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 34% 28%, rgba(236, 227, 207, 0.26), transparent 28%),
+    linear-gradient(135deg, #b62525 0 52%, #141414 52% 100%);
+  color: #ece3cf;
+  box-shadow:
+    0 8px 16px rgba(20, 20, 20, 0.46),
+    inset 0 0 0 2px rgba(236, 227, 207, 0.14);
 }
 
 #bs-biotracker-settings .bs-bt-power-off-overlay {
