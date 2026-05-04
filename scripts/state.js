@@ -14,6 +14,9 @@ const MAX_CHAT_STATE_SNAPSHOTS = 48;
 const MAX_RAW_RESULT_TEXT_LENGTH = 1200;
 const MIN_CHAT_INHERIT_MESSAGE_COUNT = 2;
 const MESSAGE_DIGEST_SEED = 2166136261;
+const SNAPSHOT_FULL_INTERVAL = 8;
+const SNAPSHOT_PATCH_SIZE_RATIO = 0.85;
+const SNAPSHOT_DELETE_SENTINEL_KEY = '__bs_bt_deleted__';
 
 export const THEME_CONFIG = {
   retro: {},
@@ -300,6 +303,18 @@ export function getContextSafe() {
 export function cloneValue(value) {
   if (typeof globalThis.structuredClone === 'function') return globalThis.structuredClone(value);
   return JSON.parse(JSON.stringify(value));
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function createSnapshotDeleteSentinel() {
+  return { [SNAPSHOT_DELETE_SENTINEL_KEY]: true };
+}
+
+function isSnapshotDeleteSentinel(value) {
+  return isPlainObject(value) && value[SNAPSHOT_DELETE_SENTINEL_KEY] === true;
 }
 
 function sanitizeSpermList(value) {
@@ -679,6 +694,7 @@ export function getChatState(ctx, settings) {
   if (!Array.isArray(chatState.snapshots)) chatState.snapshots = [];
   if (!Array.isArray(chatState.lastOperationLogs)) chatState.lastOperationLogs = [];
   compactChatStateSnapshots(chatState);
+  if (repackChatStateSnapshots(chatState)) saveSettings(ctx);
   restoreChatStateFromSnapshot(chatState, getLatestMatchingSnapshot(ctx, chatState));
   const characters = chatState.characters;
   if (characters && typeof characters === 'object') {
@@ -693,11 +709,7 @@ function isChatStateEffectivelyEmpty(chatState) {
   const hasSnapshots = Array.isArray(chatState.snapshots) && chatState.snapshots.length > 0;
   const hasSceneSummary = Boolean(String(chatState.sceneSummary || '').trim());
   const hasMinutesPassed = Number(chatState.minutesPassed) > 0;
-  const hasAttemptedSignature = Boolean(String(chatState.lastAttemptedSignature || '').trim());
-  const hasProcessedSignature = Boolean(String(chatState.lastProcessedSignature || '').trim());
-  const hasRawResult = chatState.lastRawResult && typeof chatState.lastRawResult === 'object';
-  const hasOperationLogs = Array.isArray(chatState.lastOperationLogs) && chatState.lastOperationLogs.length > 0;
-  return !(hasCharacters || hasSnapshots || hasSceneSummary || hasMinutesPassed || hasAttemptedSignature || hasProcessedSignature || hasRawResult || hasOperationLogs);
+  return !(hasCharacters || hasSnapshots || hasSceneSummary || hasMinutesPassed);
 }
 
 export function inheritChatStateFromMatchingChat(ctx, settings) {
@@ -906,16 +918,171 @@ function buildMessageDigestFromSignatures(signatures, endIndexExclusive = null) 
   return hash.toString(16).padStart(8, '0');
 }
 
+function createSnapshotCharacterBaseline(name = '') {
+  return {
+    name: String(name || '').trim(),
+    initialized: false,
+    profile: {
+      cooldown: {
+        orgasmOvulationUsed: false,
+        laborResistanceUsed: false,
+        pregnancyPressureWarning: false,
+      },
+      base: {
+        isHere: true,
+        days: 1,
+        fertilizationDays: 0,
+        latestSexDays: null,
+        age: 15,
+        stage: null,
+        race: '人类',
+        derivedType: null,
+        sperms: [],
+        eggs: 0,
+        libido: 0,
+        uterinePressure: 0,
+        vitality: getVitalityInitByLevel(4),
+        psyStress: getPsyStressInitByLevel(4),
+        vitalityLevel: 4,
+        psyStressLevel: 4,
+      },
+      pregnant: {
+        pregnantDays: 0,
+        effectivePregnantDays: 0,
+        laborHours: 0,
+        effectiveLaborHours: 0,
+        fetusesCount: 0,
+        fetalEnergyDrain: 0,
+        amnionDurability: 0,
+        fetuses: [],
+      },
+      experience: {
+        virginity: null,
+        latestSexPartner: null,
+        emotionalMate: null,
+        marriageMate: null,
+        pregnantExperience: 0,
+        naturalBirthExperience: 0,
+        surgicalBirthExperience: 0,
+        miscarriageExperience: 0,
+      },
+      psychology: {
+        mens: buildEmptyPsychologyGroup(PSY_MENS_FIELDS, PSY_MENS_BOOL_FIELDS),
+        preg: buildEmptyPsychologyGroup(PSY_PREG_FIELDS, PSY_PREG_BOOL_FIELDS),
+      },
+      children: [],
+      bio: {
+        menstrualLengthRatio: 1.0,
+        gestationSpeciesSpeed: 1.0,
+        gestationEffectiveSpeed: 1.0,
+        gestationModifierMultiplier: 1.0,
+        gestationModifierName: '',
+        gestationModifierDescription: '',
+        birthDifficulty: 1.0,
+        breedTolerance: 1.0,
+        impregnationDifficulty: 1.0,
+        orgasmOvulationAmount: 1,
+        identicalProbability: 5,
+        recoveryDays: 56,
+      },
+      metabolism: {
+        urine: 0,
+        stool: 0,
+        hunger: 0,
+        sleep: 0,
+        flux: 0,
+      },
+      descriptions: {
+        normalDescription: '',
+        closeupDescription: '',
+        pregnantDescription: '',
+      },
+      notify: {
+        firstly: '',
+        secondly: '',
+        thirdly: '',
+      },
+      immune: {
+        metabolism: false,
+        miscarriage: false,
+      },
+    },
+  };
+}
+
+function compactSnapshotRecord(value) {
+  if (!isPlainObject(value)) return value;
+  const result = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry === undefined || entry === null || entry === '') continue;
+    result[key] = entry;
+  }
+  return result;
+}
+
+function compactSnapshotArrayEntries(list) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => compactSnapshotRecord(item));
+}
+
+function normalizeCharacterForSnapshot(character, name = '') {
+  const next = cloneValue(character || {});
+  next.name = String(next.name || name || '').trim();
+  next.initialized = Boolean(next.initialized);
+  next.profile = next.profile && typeof next.profile === 'object' ? next.profile : {};
+  next.profile.psychology = normalizePsychologyState(next.profile.psychology);
+  next.profile.base = next.profile.base && typeof next.profile.base === 'object' ? next.profile.base : {};
+  next.profile.pregnant = next.profile.pregnant && typeof next.profile.pregnant === 'object' ? next.profile.pregnant : {};
+  next.profile.children = compactSnapshotArrayEntries(next.profile.children);
+  next.profile.pregnant.fetuses = compactSnapshotArrayEntries(next.profile.pregnant.fetuses);
+  next.profile.base.sperms = compactSnapshotArrayEntries(next.profile.base.sperms);
+  next.profile.descriptions = compactSnapshotRecord(next.profile.descriptions || {});
+  next.profile.notify = compactSnapshotRecord(next.profile.notify || {});
+  delete next.updatedAt;
+  delete next.runtime;
+  return next;
+}
+
+function packSnapshotCharacters(characters) {
+  const source = characters && typeof characters === 'object' ? characters : {};
+  const packed = {};
+  for (const [name, item] of Object.entries(source)) {
+    const normalized = normalizeCharacterForSnapshot(item, name);
+    const baseline = createSnapshotCharacterBaseline(normalized.name || name);
+    const patch = buildStateDeltaPatch(baseline, normalized);
+    packed[name] = patch && typeof patch === 'object' ? patch : {};
+  }
+  return packed;
+}
+
+function unpackSnapshotCharacters(characters, format = '') {
+  if (!characters || typeof characters !== 'object') return {};
+  const unpacked = {};
+  for (const [name, item] of Object.entries(characters)) {
+    if (format === 'default_delta_v1') {
+      const baseline = createSnapshotCharacterBaseline(name);
+      const restored = applyStateDeltaPatch(baseline, item && typeof item === 'object' ? item : {});
+      unpacked[name] = normalizeCharacterPsychologyState(restored);
+      continue;
+    }
+    unpacked[name] = normalizeCharacterPsychologyState(cloneValue(item));
+  }
+  return unpacked;
+}
+
 function exportChatStateSnapshotPayload(chatState) {
   return {
+    snapshotSchema: 'packed_v2',
+    charactersFormat: 'default_delta_v1',
     lastAttemptedSignature: chatState.lastAttemptedSignature || '',
     lastProcessedSignature: chatState.lastProcessedSignature || '',
     lastRunAt: chatState.lastRunAt || 0,
     sceneSummary: chatState.sceneSummary || '',
     minutesPassed: chatState.minutesPassed || 0,
-    characters: chatState.characters || {},
+    characters: packSnapshotCharacters(chatState.characters),
     lastRawResult: summarizeRawResult(chatState.lastRawResult),
-    lastOperationLogs: summarizeOperationLogs(chatState.lastOperationLogs),
   };
 }
 
@@ -924,7 +1091,6 @@ function summarizeRawResult(value) {
   const toolCalls = Array.isArray(value.tool_calls)
     ? value.tool_calls.map((call) => ({
         name: String(call?.name || ''),
-        arguments: call?.arguments && typeof call.arguments === 'object' ? cloneValue(call.arguments) : (call?.arguments ?? null),
       }))
     : [];
   const message = typeof value.message === 'string' ? value.message.slice(0, MAX_RAW_RESULT_TEXT_LENGTH) : undefined;
@@ -942,14 +1108,151 @@ function summarizeOperationLogs(value) {
     name: String(item?.name || ''),
     applied: Boolean(item?.applied),
     message: String(item?.message || '').slice(0, MAX_RAW_RESULT_TEXT_LENGTH),
-    arguments: item?.arguments && typeof item.arguments === 'object' ? cloneValue(item.arguments) : (item?.arguments ?? null),
   }));
+}
+
+function buildStateDeltaPatch(previousValue, nextValue) {
+  if (previousValue === nextValue) return undefined;
+  if (Array.isArray(previousValue) || Array.isArray(nextValue)) {
+    return JSON.stringify(previousValue) === JSON.stringify(nextValue) ? undefined : cloneValue(nextValue);
+  }
+  if (!isPlainObject(previousValue) || !isPlainObject(nextValue)) {
+    return JSON.stringify(previousValue) === JSON.stringify(nextValue) ? undefined : cloneValue(nextValue);
+  }
+
+  const patch = {};
+  let changed = false;
+  const keys = new Set([...Object.keys(previousValue), ...Object.keys(nextValue)]);
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(nextValue, key)) {
+      patch[key] = createSnapshotDeleteSentinel();
+      changed = true;
+      continue;
+    }
+    if (!Object.prototype.hasOwnProperty.call(previousValue, key)) {
+      patch[key] = cloneValue(nextValue[key]);
+      changed = true;
+      continue;
+    }
+    const childPatch = buildStateDeltaPatch(previousValue[key], nextValue[key]);
+    if (childPatch !== undefined) {
+      patch[key] = childPatch;
+      changed = true;
+    }
+  }
+  return changed ? patch : undefined;
+}
+
+function applyStateDeltaPatch(previousValue, deltaPatch) {
+  if (deltaPatch === undefined) return cloneValue(previousValue);
+  if (isSnapshotDeleteSentinel(deltaPatch)) return undefined;
+  if (Array.isArray(deltaPatch) || !isPlainObject(deltaPatch)) return cloneValue(deltaPatch);
+
+  const base = isPlainObject(previousValue) ? cloneValue(previousValue) : {};
+  for (const [key, value] of Object.entries(deltaPatch)) {
+    if (isSnapshotDeleteSentinel(value)) {
+      delete base[key];
+      continue;
+    }
+    const nextValue = applyStateDeltaPatch(base[key], value);
+    if (nextValue === undefined) delete base[key];
+    else base[key] = nextValue;
+  }
+  return base;
+}
+
+function getSerializedSize(value) {
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return Number.MAX_SAFE_INTEGER;
+  }
+}
+
+function shouldStoreFullSnapshot(snapshotIndex, fullPayload, deltaPatch) {
+  if (snapshotIndex <= 0) return true;
+  if (snapshotIndex % SNAPSHOT_FULL_INTERVAL === 0) return true;
+  if (deltaPatch === undefined) return false;
+  const fullSize = getSerializedSize(fullPayload);
+  const patchSize = getSerializedSize(deltaPatch);
+  if (!Number.isFinite(fullSize) || fullSize <= 0) return true;
+  return patchSize >= Math.floor(fullSize * SNAPSHOT_PATCH_SIZE_RATIO);
 }
 
 function trimChatStateSnapshots(chatState) {
   if (!Array.isArray(chatState?.snapshots)) return;
   if (chatState.snapshots.length <= MAX_CHAT_STATE_SNAPSHOTS) return;
-  chatState.snapshots.splice(0, chatState.snapshots.length - MAX_CHAT_STATE_SNAPSHOTS);
+  compactChatStateSnapshots(chatState);
+  const startIndex = chatState.snapshots.length - MAX_CHAT_STATE_SNAPSHOTS;
+  const materializedFirstPayload = materializeSnapshotPayloadAt(chatState.snapshots, startIndex);
+  chatState.snapshots = chatState.snapshots.slice(startIndex);
+  if (chatState.snapshots[0]) {
+    chatState.snapshots[0] = {
+      messageCount: Number.isInteger(chatState.snapshots[0].messageCount) ? chatState.snapshots[0].messageCount : 0,
+      messageDigest: String(chatState.snapshots[0].messageDigest || ''),
+      reason: String(chatState.snapshots[0].reason || 'state'),
+      createdAt: Number(chatState.snapshots[0].createdAt || Date.now()),
+      snapshotMode: 'full',
+      stateSnapshot: materializedFirstPayload,
+    };
+  }
+}
+
+function findSnapshotIndex(chatState, snapshot) {
+  const snapshots = Array.isArray(chatState?.snapshots) ? chatState.snapshots : [];
+  if (!snapshot || typeof snapshot !== 'object') return -1;
+  const directIndex = snapshots.indexOf(snapshot);
+  if (directIndex >= 0) return directIndex;
+  return snapshots.findIndex((item) =>
+    item
+    && item.createdAt === snapshot.createdAt
+    && item.messageCount === snapshot.messageCount
+    && item.reason === snapshot.reason
+    && String(item.messageDigest || '') === String(snapshot.messageDigest || ''));
+}
+
+function materializeSnapshotPayloadAt(snapshots, index, cache = new Map()) {
+  if (!Array.isArray(snapshots) || index < 0 || index >= snapshots.length) return createEmptyChatState();
+  if (cache.has(index)) return cloneValue(cache.get(index));
+
+  const snapshot = snapshots[index];
+  let payload;
+  if (snapshot?.snapshotMode === 'patch') {
+    const previousPayload = materializeSnapshotPayloadAt(snapshots, index - 1, cache);
+    payload = applyStateDeltaPatch(previousPayload, snapshot.stateDelta || {});
+  } else {
+    payload = snapshot?.stateSnapshot ? cloneValue(snapshot.stateSnapshot) : createEmptyChatState();
+  }
+
+  cache.set(index, cloneValue(payload));
+  return payload;
+}
+
+function createStoredSnapshotState(snapshots, payload, metadata = {}, cache = new Map()) {
+  const snapshotIndex = Array.isArray(snapshots) ? snapshots.length : 0;
+  const normalizedPayload = cloneValue(payload || createEmptyChatState());
+  const previousPayload = snapshotIndex > 0 ? materializeSnapshotPayloadAt(snapshots, snapshotIndex - 1, cache) : null;
+  const deltaPatch = previousPayload ? buildStateDeltaPatch(previousPayload, normalizedPayload) : undefined;
+  const baseRecord = {
+    messageCount: Number.isInteger(metadata.messageCount) ? Math.max(0, metadata.messageCount) : 0,
+    messageDigest: String(metadata.messageDigest || ''),
+    reason: String(metadata.reason || 'state'),
+    createdAt: Number(metadata.createdAt || Date.now()),
+  };
+
+  if (shouldStoreFullSnapshot(snapshotIndex, normalizedPayload, deltaPatch)) {
+    return {
+      ...baseRecord,
+      snapshotMode: 'full',
+      stateSnapshot: normalizedPayload,
+    };
+  }
+
+  return {
+    ...baseRecord,
+    snapshotMode: 'patch',
+    stateDelta: deltaPatch || {},
+  };
 }
 
 function compactChatStateSnapshots(chatState) {
@@ -962,18 +1265,58 @@ function compactChatStateSnapshots(chatState) {
     if (!snapshot.messageDigest && Array.isArray(snapshot.messageSignatures)) {
       snapshot.messageDigest = buildMessageDigestFromSignatures(snapshot.messageSignatures, snapshot.messageCount);
     }
+    if (!snapshot.snapshotMode) {
+      snapshot.snapshotMode = snapshot.stateDelta ? 'patch' : 'full';
+    }
     delete snapshot.messageSignatures;
   }
 }
 
+function repackChatStateSnapshots(chatState) {
+  if (!Array.isArray(chatState?.snapshots) || chatState.snapshots.length === 0) return false;
+  compactChatStateSnapshots(chatState);
+
+  const originalSnapshots = chatState.snapshots;
+  const sourceCache = new Map();
+  const repackedSnapshots = [];
+  const repackedCache = new Map();
+  let changed = false;
+
+  for (let index = 0; index < originalSnapshots.length; index += 1) {
+    const snapshot = originalSnapshots[index];
+    const payload = materializeSnapshotPayloadAt(originalSnapshots, index, sourceCache);
+    const stored = createStoredSnapshotState(repackedSnapshots, payload, {
+      messageCount: snapshot?.messageCount,
+      messageDigest: snapshot?.messageDigest,
+      reason: snapshot?.reason,
+      createdAt: snapshot?.createdAt,
+    }, repackedCache);
+    repackedSnapshots.push(stored);
+    repackedCache.set(repackedSnapshots.length - 1, cloneValue(payload));
+
+    if (
+      stored.snapshotMode !== snapshot?.snapshotMode
+      || JSON.stringify(stored.stateSnapshot ?? stored.stateDelta ?? null) !== JSON.stringify(snapshot?.stateSnapshot ?? snapshot?.stateDelta ?? null)
+    ) {
+      changed = true;
+    }
+  }
+
+  if (changed) chatState.snapshots = repackedSnapshots;
+  return changed;
+}
+
 export function restoreChatStateFromSnapshot(chatState, snapshot) {
-  const payload = snapshot?.stateSnapshot ? cloneValue(snapshot.stateSnapshot) : createEmptyChatState();
+  const snapshotIndex = findSnapshotIndex(chatState, snapshot);
+  const payload = snapshotIndex >= 0
+    ? materializeSnapshotPayloadAt(chatState.snapshots, snapshotIndex)
+    : (snapshot?.stateSnapshot ? cloneValue(snapshot.stateSnapshot) : createEmptyChatState());
   chatState.lastAttemptedSignature = payload.lastAttemptedSignature || '';
   chatState.lastProcessedSignature = payload.lastProcessedSignature || '';
   chatState.lastRunAt = payload.lastRunAt || 0;
   chatState.sceneSummary = payload.sceneSummary || '';
   chatState.minutesPassed = payload.minutesPassed || 0;
-  chatState.characters = payload.characters || {};
+  chatState.characters = unpackSnapshotCharacters(payload.characters, payload.charactersFormat || '');
   chatState.lastRawResult = payload.lastRawResult || null;
   chatState.lastOperationLogs = Array.isArray(payload.lastOperationLogs) ? payload.lastOperationLogs : [];
 }
@@ -983,13 +1326,16 @@ export function recordChatStateSnapshot(ctx, chatState, options = {}) {
   const messageCount = Number.isInteger(options.messageCount)
     ? Math.max(0, options.messageCount)
     : (Array.isArray(ctx.chat) ? ctx.chat.length : 0);
-  const snapshot = {
-    messageCount,
-    messageDigest: buildMessageDigest(ctx, messageCount),
-    reason: String(options.reason || 'state'),
-    createdAt: Date.now(),
-    stateSnapshot: cloneValue(exportChatStateSnapshotPayload(chatState)),
-  };
+  const snapshot = createStoredSnapshotState(
+    chatState.snapshots,
+    exportChatStateSnapshotPayload(chatState),
+    {
+      messageCount,
+      messageDigest: buildMessageDigest(ctx, messageCount),
+      reason: String(options.reason || 'state'),
+      createdAt: Date.now(),
+    },
+  );
   chatState.snapshots.push(snapshot);
   trimChatStateSnapshots(chatState);
   return snapshot;
