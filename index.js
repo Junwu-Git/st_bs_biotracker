@@ -2265,6 +2265,17 @@ function applyTheme(settings) {
   }
   root.classList.add(`theme-${settings.theme}`);
   if (sphere) sphere.classList.add(`theme-${settings.theme}`);
+  root.classList.remove('size-phone', 'size-tablet', 'font-compact', 'font-standard', 'font-large');
+  const deviceSize = String(settings.deviceSize || 'phone').trim() === 'tablet' ? 'tablet' : 'phone';
+  const fontSize = ['compact', 'standard', 'large'].includes(String(settings.fontSize || '').trim()) ? String(settings.fontSize).trim() : 'standard';
+  root.classList.add(`size-${deviceSize}`);
+  root.classList.add(`font-${fontSize}`);
+  document.querySelectorAll('#bs-biotracker-settings [data-device-size-option]').forEach((node) => {
+    node.classList.toggle('is-active', String(node.dataset.deviceSizeOption || 'phone') === deviceSize);
+  });
+  document.querySelectorAll('#bs-biotracker-settings [data-font-size-option]').forEach((node) => {
+    node.classList.toggle('is-active', String(node.dataset.fontSizeOption || 'standard') === fontSize);
+  });
   const brand = document.getElementById('bs-bt-brand');
   if (brand) brand.textContent = 'Bastneth Pager';
   updateBatteryIndicator(0);
@@ -2274,20 +2285,20 @@ function applyTheme(settings) {
 function setView(view) {
   const root = document.getElementById(PANEL_ID);
   if (!root) return;
-  const next = ['home', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'time-lapse', 'race-encyclopedia'].includes(view) ? view : 'home';
+  const next = ['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'time-lapse', 'race-encyclopedia'].includes(view) ? view : 'home';
   root.dataset.view = next;
   try {
     globalThis.localStorage?.setItem(LAST_VIEW_STORAGE_KEY, next);
   } catch {}
   document.querySelectorAll('#bs-biotracker-settings .bs-bt-view').forEach((node) => node.classList.toggle('is-active', node.dataset.view === next));
   const title = document.getElementById('bs-bt-title');
-  if (title) title.textContent = next === 'system' ? 'SYSTEM' : next === 'register' ? 'REGISTRY' : next === 'worldbook-filter' ? 'WORLDBOOK' : next === 'track-list' ? 'TRACK LIST' : next === 'track-char' ? 'TRACK CHAR' : next === 'full-state' ? 'FULL STATE' : next === 'time-lapse' ? 'TIME LAPSE' : next === 'race-encyclopedia' ? 'RACE DATA' : 'HOME';
+  if (title) title.textContent = next === 'theme' ? 'THEME' : next === 'system' ? 'SYSTEM' : next === 'register' ? 'REGISTRY' : next === 'worldbook-filter' ? 'WORLDBOOK' : next === 'track-list' ? 'TRACK LIST' : next === 'track-char' ? 'TRACK CHAR' : next === 'full-state' ? 'FULL STATE' : next === 'time-lapse' ? 'TIME LAPSE' : next === 'race-encyclopedia' ? 'RACE DATA' : 'HOME';
 }
 
 function getLastPagerView() {
   try {
     const value = String(globalThis.localStorage?.getItem(LAST_VIEW_STORAGE_KEY) || '').trim();
-    if (['home', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'time-lapse', 'race-encyclopedia'].includes(value)) {
+    if (['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'time-lapse', 'race-encyclopedia'].includes(value)) {
       return value;
     }
   } catch {}
@@ -2742,7 +2753,26 @@ async function ensureModal(ctx) {
       settings.theme = node.dataset.themeOption || 'retro';
       saveSettings(ctx);
       applyTheme(settings);
-      setView('system');
+      setView('theme');
+    }),
+  );
+  document.querySelectorAll('#bs-biotracker-settings [data-device-size-option]').forEach((node) =>
+    node.addEventListener('click', () => {
+      const settings = getSettings(ctx);
+      settings.deviceSize = String(node.dataset.deviceSizeOption || 'phone') === 'tablet' ? 'tablet' : 'phone';
+      saveSettings(ctx);
+      applyTheme(settings);
+      setView('theme');
+    }),
+  );
+  document.querySelectorAll('#bs-biotracker-settings [data-font-size-option]').forEach((node) =>
+    node.addEventListener('click', () => {
+      const settings = getSettings(ctx);
+      const nextFontSize = String(node.dataset.fontSizeOption || 'standard').trim();
+      settings.fontSize = ['compact', 'standard', 'large'].includes(nextFontSize) ? nextFontSize : 'standard';
+      saveSettings(ctx);
+      applyTheme(settings);
+      setView('theme');
     }),
   );
   document.getElementById('bs-bt-system-button')?.addEventListener('click', () => setView('system'));

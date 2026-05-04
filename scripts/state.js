@@ -61,6 +61,8 @@ export const DEFAULT_SYSTEM_PROMPT = [
 
 export const DEFAULT_SETTINGS = Object.freeze({
   theme: 'retro',
+  deviceSize: 'phone',
+  fontSize: 'standard',
   enabled: false,
   useStPresetForAsync: false,
   apiUrl: '',

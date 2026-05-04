@@ -51,12 +51,33 @@
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--dna" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">百科</span>
               </button>
+              <button class="bs-bt-home-tile" type="button" data-nav-view="theme">
+                <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--theme" aria-hidden="true"></span>
+                <span class="bs-bt-home-tile__label">主题</span>
+              </button>
             </div>
           </div>
         </section>
 
-        <section id="bs-bt-view-system" class="bs-bt-view" data-view="system">
+        <section id="bs-bt-view-theme" class="bs-bt-view" data-view="theme">
           <div class="bs-bt-panel">
+            <div class="bs-bt-section-title">显示尺寸</div>
+            <div class="bs-bt-size-options" id="bs-bt-size-options">
+              <button type="button" class="bs-bt-size-option" data-device-size-option="phone">手机</button>
+              <button type="button" class="bs-bt-size-option" data-device-size-option="tablet">平板</button>
+            </div>
+
+            <hr class="sysHR" />
+
+            <div class="bs-bt-section-title">字体大小</div>
+            <div class="bs-bt-size-options" id="bs-bt-font-size-options">
+              <button type="button" class="bs-bt-size-option" data-font-size-option="compact">小</button>
+              <button type="button" class="bs-bt-size-option" data-font-size-option="standard">标准</button>
+              <button type="button" class="bs-bt-size-option" data-font-size-option="large">大</button>
+            </div>
+
+            <hr class="sysHR" />
+
             <div class="bs-bt-section-title">主题风格</div>
             <div class="bs-bt-theme-list" id="bs-bt-theme-list">
               <button type="button" class="bs-bt-theme-option" data-theme-option="retro">1. 仿真 (Retro)</button>
@@ -72,9 +93,11 @@
               <button type="button" class="bs-bt-theme-option" data-theme-option="ink">11. 水墨 (Ink)</button>
               <button type="button" class="bs-bt-theme-option" data-theme-option="constructivism">12. 建构 (Construct)</button>
             </div>
+          </div>
+        </section>
 
-            <hr class="sysHR" />
-
+        <section id="bs-bt-view-system" class="bs-bt-view" data-view="system">
+          <div class="bs-bt-panel">
             <div class="settings_section flex-container alignitemscenter">
               <input type="checkbox" id="bs-bt-enabled" />
               <label for="bs-bt-enabled">启用异步生理状态追踪</label>
