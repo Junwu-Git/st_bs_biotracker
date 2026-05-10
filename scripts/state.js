@@ -65,6 +65,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   fontSize: 'standard',
   enabled: false,
   useStPresetForAsync: false,
+  trackerPresetName: '',
+  trackerPromptToggles: {},
+  trackerPromptToggleOverrides: {},
   apiUrl: '',
   apiKey: '',
   model: 'gpt-4.1-mini',
@@ -693,10 +696,25 @@ export function getChatState(ctx, settings) {
   const chatKey = getChatKey(ctx);
   if (!settings.chatStates[chatKey]) settings.chatStates[chatKey] = createEmptyChatState();
   const chatState = settings.chatStates[chatKey];
+  let shouldSave = false;
   if (!Array.isArray(chatState.snapshots)) chatState.snapshots = [];
   if (!Array.isArray(chatState.lastOperationLogs)) chatState.lastOperationLogs = [];
+  const sanitizedCurrentPayload = sanitizeSnapshotPayload(chatState);
+  if (
+    chatState.lastAttemptedSignature !== sanitizedCurrentPayload.lastAttemptedSignature
+    || chatState.lastProcessedSignature !== sanitizedCurrentPayload.lastProcessedSignature
+    || JSON.stringify(chatState.lastRawResult || null) !== JSON.stringify(sanitizedCurrentPayload.lastRawResult || null)
+    || JSON.stringify(chatState.lastOperationLogs || []) !== JSON.stringify(sanitizedCurrentPayload.lastOperationLogs || [])
+  ) {
+    chatState.lastAttemptedSignature = sanitizedCurrentPayload.lastAttemptedSignature;
+    chatState.lastProcessedSignature = sanitizedCurrentPayload.lastProcessedSignature;
+    chatState.lastRawResult = sanitizedCurrentPayload.lastRawResult;
+    chatState.lastOperationLogs = sanitizedCurrentPayload.lastOperationLogs;
+    shouldSave = true;
+  }
   compactChatStateSnapshots(chatState);
-  if (repackChatStateSnapshots(chatState)) saveSettings(ctx);
+  if (repackChatStateSnapshots(chatState)) shouldSave = true;
+  if (shouldSave) saveSettings(ctx);
   restoreChatStateFromSnapshot(chatState, getLatestMatchingSnapshot(ctx, chatState));
   const characters = chatState.characters;
   if (characters && typeof characters === 'object') {
@@ -1078,22 +1096,59 @@ function exportChatStateSnapshotPayload(chatState) {
   return {
     snapshotSchema: 'packed_v2',
     charactersFormat: 'default_delta_v1',
-    lastAttemptedSignature: chatState.lastAttemptedSignature || '',
-    lastProcessedSignature: chatState.lastProcessedSignature || '',
+    lastAttemptedSignature: sanitizeStoredSignature(chatState.lastAttemptedSignature),
+    lastProcessedSignature: sanitizeStoredSignature(chatState.lastProcessedSignature),
     lastRunAt: chatState.lastRunAt || 0,
     sceneSummary: chatState.sceneSummary || '',
     minutesPassed: chatState.minutesPassed || 0,
     characters: packSnapshotCharacters(chatState.characters),
     lastRawResult: summarizeRawResult(chatState.lastRawResult),
+    lastOperationLogs: summarizeOperationLogs(chatState.lastOperationLogs),
   };
 }
 
-function summarizeRawResult(value) {
+function sanitizeStoredSignature(value) {
+  const text = String(value || '');
+  if (!text) return '';
+  if (text.length <= 120) return text;
+  return `hash:${hashStringFNV1a(text, MESSAGE_DIGEST_SEED).toString(16).padStart(8, '0')}`;
+}
+
+function normalizeSnapshotToolArguments(value) {
+  if (value === undefined) return undefined;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' ? summarizeSnapshotDebugValue(parsed) : value.slice(0, MAX_RAW_RESULT_TEXT_LENGTH);
+    } catch {
+      return value.slice(0, MAX_RAW_RESULT_TEXT_LENGTH);
+    }
+  }
+  if (value && typeof value === 'object') return summarizeSnapshotDebugValue(value);
+  return value;
+}
+
+function summarizeSnapshotDebugValue(value, depth = 0) {
+  if (typeof value === 'string') return value.slice(0, MAX_RAW_RESULT_TEXT_LENGTH);
+  if (!value || typeof value !== 'object') return value;
+  if (depth >= 8) return '[Object]';
+  if (Array.isArray(value)) return value.slice(0, 80).map((item) => summarizeSnapshotDebugValue(item, depth + 1));
+  const result = {};
+  for (const [key, child] of Object.entries(value)) {
+    result[key] = summarizeSnapshotDebugValue(child, depth + 1);
+  }
+  return result;
+}
+
+export function summarizeRawResult(value) {
   if (!value || typeof value !== 'object') return null;
   const toolCalls = Array.isArray(value.tool_calls)
-    ? value.tool_calls.map((call) => ({
-        name: String(call?.name || ''),
-      }))
+    ? value.tool_calls.map((call) => {
+        const item = { name: String(call?.name || '') };
+        const args = normalizeSnapshotToolArguments(call?.arguments);
+        if (args !== undefined) item.arguments = args;
+        return item;
+      })
     : [];
   const message = typeof value.message === 'string' ? value.message.slice(0, MAX_RAW_RESULT_TEXT_LENGTH) : undefined;
   const error = typeof value.error === 'string' ? value.error.slice(0, MAX_RAW_RESULT_TEXT_LENGTH) : undefined;
@@ -1104,13 +1159,27 @@ function summarizeRawResult(value) {
   return Object.keys(result).length > 0 ? result : null;
 }
 
-function summarizeOperationLogs(value) {
+export function summarizeOperationLogs(value) {
   if (!Array.isArray(value)) return [];
-  return value.map((item) => ({
-    name: String(item?.name || ''),
-    applied: Boolean(item?.applied),
-    message: String(item?.message || '').slice(0, MAX_RAW_RESULT_TEXT_LENGTH),
-  }));
+  return value.map((item) => {
+    const log = {
+      name: String(item?.name || ''),
+      applied: Boolean(item?.applied),
+      message: String(item?.message || '').slice(0, MAX_RAW_RESULT_TEXT_LENGTH),
+    };
+    const args = normalizeSnapshotToolArguments(item?.arguments);
+    if (args !== undefined) log.arguments = args;
+    return log;
+  });
+}
+
+function sanitizeSnapshotPayload(payload) {
+  const next = cloneValue(payload || createEmptyChatState());
+  next.lastAttemptedSignature = sanitizeStoredSignature(next.lastAttemptedSignature);
+  next.lastProcessedSignature = sanitizeStoredSignature(next.lastProcessedSignature);
+  next.lastRawResult = summarizeRawResult(next.lastRawResult);
+  next.lastOperationLogs = summarizeOperationLogs(next.lastOperationLogs);
+  return next;
 }
 
 function buildStateDeltaPatch(previousValue, nextValue) {
@@ -1232,7 +1301,7 @@ function materializeSnapshotPayloadAt(snapshots, index, cache = new Map()) {
 
 function createStoredSnapshotState(snapshots, payload, metadata = {}, cache = new Map()) {
   const snapshotIndex = Array.isArray(snapshots) ? snapshots.length : 0;
-  const normalizedPayload = cloneValue(payload || createEmptyChatState());
+  const normalizedPayload = sanitizeSnapshotPayload(payload);
   const previousPayload = snapshotIndex > 0 ? materializeSnapshotPayloadAt(snapshots, snapshotIndex - 1, cache) : null;
   const deltaPatch = previousPayload ? buildStateDeltaPatch(previousPayload, normalizedPayload) : undefined;
   const baseRecord = {
@@ -1380,8 +1449,7 @@ export function buildSignature(ctx, endIndexExclusive = null) {
     last.is_user ? 'user' : 'assistant',
     String(last.name || ''),
     content.length,
-    content.slice(0, 180),
-    content.slice(-120),
+    hashStringFNV1a(content, MESSAGE_DIGEST_SEED).toString(16).padStart(8, '0'),
   ].join('|');
 }
 

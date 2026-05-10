@@ -9,6 +9,8 @@ import {
   getSettings,
   getVitalityInitByLevel,
   saveSettings,
+  summarizeOperationLogs,
+  summarizeRawResult,
   syncCharacterStageFromProfile,
 } from './state.js';
 import {
@@ -3035,8 +3037,8 @@ export function applyToolCallsResult(ctx, result) {
     });
   }
   if (result?.scene_summary !== undefined) chatState.sceneSummary = String(result.scene_summary || '');
-  chatState.lastRawResult = result;
-  chatState.lastOperationLogs = logs;
+  chatState.lastRawResult = summarizeRawResult(result);
+  chatState.lastOperationLogs = summarizeOperationLogs(logs);
   saveSettings(ctx);
   return { chatState, logs };
 }

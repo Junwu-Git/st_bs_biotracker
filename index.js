@@ -63,6 +63,11 @@ const GROUP_CHAT_DELETED_HANDLER_KEY = '__bs_biotracker_group_chat_deleted_handl
 const GROUP_CHAT_CREATED_HANDLER_KEY = '__bs_biotracker_group_chat_created_handler__';
 const PENDING_CHAT_INHERIT_KEY = '__bs_biotracker_pending_chat_inherit__';
 const WORLDBOOK_RELOAD_TIMER_KEY = '__bs_biotracker_worldbook_reload_timer__';
+const MAINFLOW_CONTEXT_SNAPSHOT_KEY = '__bs_biotracker_mainflow_context_snapshot__';
+const DEBUG_LAST_MAINFLOW_SNAPSHOT_KEY = '__bs_biotracker_debug_last_mainflow_snapshot__';
+const FETCH_CAPTURE_READY_KEY = '__bs_biotracker_fetch_capture_ready__';
+const ORIGINAL_FETCH_KEY = '__bs_biotracker_original_fetch__';
+const MAX_MAINFLOW_SNAPSHOT_MESSAGES = 48;
 const VITALITY_CAPS = { 1: 50, 2: 75, 3: 100, 4: 125, 5: 150, 6: 175, 7: 200 };
 const PSY_STRESS_CAPS = { 1: 20, 2: 50, 3: 80, 4: 110, 5: 140, 6: 170, 7: 200 };
 
@@ -84,6 +89,12 @@ let racePaletteState = {
   subtype: '',
   raceTags: [],
 };
+
+function normalizeWorldbookMode(value) {
+  const mode = String(value || 'exclude').trim();
+  if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude') return mode;
+  return 'exclude';
+}
 let debugInjectDraft = {
   father: '',
   race: '人类',
@@ -151,14 +162,14 @@ function setRegisterStatus(message, isError = false) {
 
 function getWorldbookFilterInputNames(ctx) {
   const settings = getSettings(ctx);
-  const mode = String(settings.trackerWorldbookMode || 'exclude').trim();
+  const mode = normalizeWorldbookMode(settings.trackerWorldbookMode);
   if (mode === 'allowlist_all') return parseWorldbookExcludeNamesInput(settings.trackerWorldbookIncludeNames);
   return parseWorldbookExcludeNamesInput(settings.trackerWorldbookExcludeNames);
 }
 
 function syncWorldbookFilterInput(ctx) {
   const settings = getSettings(ctx);
-  const mode = String(settings.trackerWorldbookMode || 'exclude').trim();
+  const mode = normalizeWorldbookMode(settings.trackerWorldbookMode);
   const label = document.getElementById('bs-bt-worldbook-filter-input-label');
   const input = document.getElementById('bs-bt-worldbook-filter-input');
   const names = getWorldbookFilterInputNames(ctx);
@@ -167,8 +178,80 @@ function syncWorldbookFilterInput(ctx) {
     input.value = names.join('\n');
     input.placeholder = mode === 'allowlist_all'
       ? '每行一个条目名。参考模式下，仅这些条目会传给 tracker；即使它们目前是 disabled 也会保留。'
-      : '每行一个条目名。正常模式下，这些条目会从 worldbook 传输中排除。';
+      : mode === 'mainflow'
+        ? '每行一个条目名。主流模式下，tracker 优先引用上次 ST 主流 request 上下文；没有快照时会按常驻/关键字触发，并套用这些排除条目。'
+        : '每行一个条目名。正常模式下，这些条目会从 worldbook 传输中排除。';
   }
+}
+
+function trimMainflowSnapshotContent(content) {
+  return String(content || '');
+}
+
+function normalizeMainflowSnapshotMessages(messages) {
+  return (Array.isArray(messages) ? messages : [])
+    .filter((message) => message && typeof message === 'object')
+    .slice(-MAX_MAINFLOW_SNAPSHOT_MESSAGES)
+    .map((message) => ({
+      role: String(message.role || 'user'),
+      content: trimMainflowSnapshotContent(message.content ?? message.text ?? ''),
+      name: message.name ? String(message.name) : undefined,
+    }))
+    .filter((message) => message.content);
+}
+
+function captureMainflowRequestBody(body, source = 'fetch') {
+  if (!body || typeof body !== 'object') return;
+  const messages = normalizeMainflowSnapshotMessages(body.messages);
+  if (messages.length === 0) return;
+  globalThis[MAINFLOW_CONTEXT_SNAPSHOT_KEY] = {
+    source,
+    capturedAt: Date.now(),
+    model: body.model ? String(body.model) : '',
+    messages,
+  };
+  globalThis[DEBUG_LAST_MAINFLOW_SNAPSHOT_KEY] = globalThis[MAINFLOW_CONTEXT_SNAPSHOT_KEY];
+}
+
+function parseJsonText(value) {
+  if (!value || typeof value !== 'string') return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function parseFetchBodyFromInit(init) {
+  const raw = init?.body;
+  return parseJsonText(raw);
+}
+
+async function parseFetchBodyFromRequest(input) {
+  if (!input || typeof input !== 'object' || typeof input.clone !== 'function') return null;
+  try {
+    return await input.clone().json();
+  } catch {
+    return null;
+  }
+}
+
+function installMainflowRequestCapture() {
+  if (globalThis[FETCH_CAPTURE_READY_KEY] || typeof globalThis.fetch !== 'function') return;
+  const originalFetch = globalThis.fetch.bind(globalThis);
+  globalThis[ORIGINAL_FETCH_KEY] = originalFetch;
+  globalThis.fetch = async (...args) => {
+    if (!globalThis.__bs_biotracker_async_request__) {
+      try {
+        const body = parseFetchBodyFromInit(args[1]) || await parseFetchBodyFromRequest(args[0]);
+        captureMainflowRequestBody(body, 'fetch');
+      } catch (error) {
+        console.warn('[BS BioTracker] mainflow request capture failed', error);
+      }
+    }
+    return originalFetch(...args);
+  };
+  globalThis[FETCH_CAPTURE_READY_KEY] = true;
 }
 
 function saveWorldbookExcludeNamesFromList(ctx, names) {
@@ -194,7 +277,7 @@ function saveWorldbookIncludeNamesFromList(ctx, names) {
 function applyWorldbookFilterSelection(ctx, entries = [], selectedNames = []) {
   latestWorldbookEntries = Array.isArray(entries) ? entries : [];
   const settings = getSettings(ctx);
-  const mode = String(settings.trackerWorldbookMode || 'exclude').trim();
+  const mode = normalizeWorldbookMode(settings.trackerWorldbookMode);
   if (mode === 'allowlist_all') {
     settings.trackerWorldbookIncludeNames = parseWorldbookExcludeNamesInput(selectedNames.join('\n')).join('\n');
   } else {
@@ -211,7 +294,7 @@ function renderWorldbookEntryList(ctx, entries = [], selectedNames = null) {
   const searchInput = document.getElementById('bs-bt-worldbook-entry-search');
   if (!container) return;
   const settings = getSettings(ctx);
-  const mode = String(settings.trackerWorldbookMode || 'exclude').trim();
+  const mode = normalizeWorldbookMode(settings.trackerWorldbookMode);
   if (searchInput && searchInput.value !== worldbookEntrySearch) searchInput.value = worldbookEntrySearch;
   const selected = new Set(
     Array.isArray(selectedNames)
@@ -273,7 +356,7 @@ function renderWorldbookEntryList(ctx, entries = [], selectedNames = null) {
       const nextSelected = new Set(getWorldbookFilterInputNames(ctx));
       if (checkbox.checked) nextSelected.add(name);
       else nextSelected.delete(name);
-      if (String(getSettings(ctx).trackerWorldbookMode || 'exclude').trim() === 'allowlist_all') {
+      if (normalizeWorldbookMode(getSettings(ctx).trackerWorldbookMode) === 'allowlist_all') {
         saveWorldbookIncludeNamesFromList(ctx, Array.from(nextSelected));
       } else {
         saveWorldbookExcludeNamesFromList(ctx, Array.from(nextSelected));
@@ -782,7 +865,7 @@ async function getCurrentCharacterWorldbook(ctx) {
 async function inspectCurrentCharacterWorldbook(ctx) {
   const worldBook = await getCurrentCharacterWorldbook(ctx);
   const settings = getSettings(ctx);
-  const mode = String(settings.trackerWorldbookMode || 'exclude').trim();
+  const mode = normalizeWorldbookMode(settings.trackerWorldbookMode);
   const foundEntries = collectWorldbookEntryNames(worldBook, { includeDisabled: mode === 'allowlist_all' });
   const foundNames = foundEntries.map(e => e.name);
   const filterInputValue = document.getElementById('bs-bt-worldbook-filter-input')?.value;
@@ -2285,20 +2368,20 @@ function applyTheme(settings) {
 function setView(view) {
   const root = document.getElementById(PANEL_ID);
   if (!root) return;
-  const next = ['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'time-lapse', 'race-encyclopedia'].includes(view) ? view : 'home';
+  const next = ['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'time-lapse', 'race-encyclopedia', 'tracker-preset'].includes(view) ? view : 'home';
   root.dataset.view = next;
   try {
     globalThis.localStorage?.setItem(LAST_VIEW_STORAGE_KEY, next);
   } catch {}
   document.querySelectorAll('#bs-biotracker-settings .bs-bt-view').forEach((node) => node.classList.toggle('is-active', node.dataset.view === next));
   const title = document.getElementById('bs-bt-title');
-  if (title) title.textContent = next === 'theme' ? 'THEME' : next === 'system' ? 'SYSTEM' : next === 'register' ? 'REGISTRY' : next === 'worldbook-filter' ? 'WORLDBOOK' : next === 'track-list' ? 'TRACK LIST' : next === 'track-char' ? 'TRACK CHAR' : next === 'full-state' ? 'FULL STATE' : next === 'time-lapse' ? 'TIME LAPSE' : next === 'race-encyclopedia' ? 'RACE DATA' : 'HOME';
+  if (title) title.textContent = next === 'theme' ? 'THEME' : next === 'system' ? 'SYSTEM' : next === 'register' ? 'REGISTRY' : next === 'worldbook-filter' ? 'WORLDBOOK' : next === 'track-list' ? 'TRACK LIST' : next === 'track-char' ? 'TRACK CHAR' : next === 'full-state' ? 'FULL STATE' : next === 'time-lapse' ? 'TIME LAPSE' : next === 'race-encyclopedia' ? 'RACE DATA' : next === 'tracker-preset' ? 'PRESET' : 'HOME';
 }
 
 function getLastPagerView() {
   try {
     const value = String(globalThis.localStorage?.getItem(LAST_VIEW_STORAGE_KEY) || '').trim();
-    if (['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'time-lapse', 'race-encyclopedia'].includes(value)) {
+    if (['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'time-lapse', 'race-encyclopedia', 'tracker-preset'].includes(value)) {
       return value;
     }
   } catch {}
@@ -2315,7 +2398,7 @@ function applySettingsToForm(ctx) {
     else node.value = value ?? '';
   };
   setValue('bs-bt-enabled', settings.enabled);
-  setValue('bs-bt-use-st-preset', settings.useStPresetForAsync);
+  setValue('bs-bt-tracker-preset-list', settings.useStPresetForAsync ? CURRENT_PRESET_OPTION_VALUE : (settings.trackerPresetName || NO_PRESET_OPTION_VALUE));
   setValue('bs-bt-api-url', settings.apiUrl);
   setValue('bs-bt-api-key', settings.apiKey);
   setValue('bs-bt-model', settings.model);
@@ -2323,7 +2406,7 @@ function applySettingsToForm(ctx) {
   setValue('bs-bt-poll-ms', settings.pollMs);
   setValue('bs-bt-context-size', settings.contextSize);
   setValue('bs-bt-targets', settings.targetNames);
-  setValue('bs-bt-tracker-worldbook-mode', settings.trackerWorldbookMode);
+  setValue('bs-bt-tracker-worldbook-mode', normalizeWorldbookMode(settings.trackerWorldbookMode));
   setValue('bs-bt-system-prompt', settings.systemPrompt);
   setValue('bs-bt-register-custom-notes', settings.registryCustomNotes);
   setValue('bs-bt-registry-normal-description', settings.registryDescriptionGuides?.normalDescription);
@@ -2339,6 +2422,7 @@ function applySettingsToForm(ctx) {
   renderFullStatePage(ctx);
   renderRaceEncyclopediaPage(ctx);
   refreshRegisterRacePalette();
+  syncTrackerPresetSelectionUi(ctx);
   setView(getLastPagerView());
 }
 
@@ -2346,7 +2430,7 @@ const trackerDeps = { renderStatusPanel, updateClock };
 
 function getWorldbookFilterSnapshot(ctx) {
   const settings = getSettings(ctx);
-  const mode = String(settings.trackerWorldbookMode || 'exclude').trim();
+  const mode = normalizeWorldbookMode(settings.trackerWorldbookMode);
   const names = mode === 'allowlist_all'
     ? settings.trackerWorldbookIncludeNames
     : settings.trackerWorldbookExcludeNames;
@@ -2372,6 +2456,460 @@ async function refreshWorldbookFilterPage(ctx) {
   }
 }
 
+let cachedPresetManager = null;
+let cachedPresetData = null;
+const cachedPresetPromptMap = new Map();
+const cachedPresetDetailsMap = new Map();
+let cachedActivePresetName = '';
+const CURRENT_PRESET_OPTION_VALUE = '__bsbt_current_preset__';
+const NO_PRESET_OPTION_VALUE = '__bsbt_no_preset__';
+
+function normalizeTrackerPresetSelectionValue(name) {
+  const next = String(name || '').trim();
+  return next === NO_PRESET_OPTION_VALUE || next === CURRENT_PRESET_OPTION_VALUE ? '' : next;
+}
+
+function syncTrackerPresetSelectionUi(ctx) {
+  const select = document.getElementById('bs-bt-tracker-preset-list');
+  if (!(select instanceof HTMLSelectElement)) return;
+  select.disabled = false;
+  select.title = '';
+}
+
+async function refreshTrackerPresetPage(ctx) {
+  const select = document.getElementById('bs-bt-tracker-preset-list');
+  if (!select) return;
+  const settings = getSettings(ctx);
+  const savedName = String(settings.trackerPresetName || '').trim();
+  cachedPresetPromptMap.clear();
+  cachedPresetDetailsMap.clear();
+
+  let presetNames = [];
+  let activeName = '';
+
+  // 策略 1: bastneth 自訂 API — ST_API.preset.list()
+  try {
+    if (typeof globalThis.ST_API?.preset?.list === 'function') {
+      const result = await globalThis.ST_API.preset.list();
+      if (Array.isArray(result?.presets)) {
+        result.presets.forEach((preset) => {
+          const name = String(preset?.name || '').trim();
+          if (!name) return;
+          cachedPresetDetailsMap.set(name, preset);
+          if (Array.isArray(preset?.prompts) && preset.prompts.length > 0) {
+            cachedPresetPromptMap.set(name, preset.prompts);
+          }
+        });
+        presetNames = result.presets.map((p) => String(p?.name || '').trim()).filter(Boolean);
+        activeName = String(result?.active || '').trim();
+      }
+    }
+  } catch {}
+
+  // 策略 2: SillyTavern PresetManager
+  try {
+    try {
+      const stCtx = globalThis.SillyTavern?.getContext?.();
+      const pm = typeof stCtx?.getPresetManager === 'function' ? stCtx.getPresetManager('openai') : null;
+      if (pm) {
+        cachedPresetManager = pm;
+        // getAllPresets() 返回 select 中選項文字陣列
+        if (typeof pm.getAllPresets === 'function') {
+          const names = pm.getAllPresets();
+          if (Array.isArray(names) && names.length > 0) {
+            presetNames = names.map((n) => String(n || '').trim()).filter(Boolean);
+          }
+        }
+        // getPresetList() 返回 { presets, preset_names, settings }
+        if (typeof pm.getPresetList === 'function') {
+          const data = pm.getPresetList();
+          cachedPresetData = data;
+          if (presetNames.length === 0) {
+            if (data?.preset_names && typeof data.preset_names === 'object') {
+              presetNames = Object.keys(data.preset_names).filter(Boolean);
+            } else if (data?.presets && typeof data.presets === 'object') {
+              presetNames = Object.keys(data.presets).filter(Boolean);
+            }
+          }
+          if (Array.isArray(presetNames) && typeof pm.getCompletionPresetByName === 'function') {
+            presetNames.forEach((name) => {
+              try {
+                const preset = pm.getCompletionPresetByName(name);
+                if (preset && typeof preset === 'object') {
+                  cachedPresetDetailsMap.set(name, preset);
+                  if (Array.isArray(preset.prompts) && preset.prompts.length > 0) {
+                    cachedPresetPromptMap.set(name, preset.prompts);
+                  }
+                }
+              } catch {}
+            });
+          }
+        }
+        // 從 oai_settings 獲取 active preset name
+        try {
+          if (typeof pm.getSelectedPresetName === 'function') {
+            activeName = String(pm.getSelectedPresetName() || '').trim();
+          }
+          const oai = stCtx.chatCompletionSettings;
+          if (!activeName && oai?.preset_settings_openai) activeName = String(oai.preset_settings_openai).trim();
+        } catch {}
+      }
+    } catch {}
+  } catch {}
+
+  // 策略 3: 至少保留使用者目前存的 trackerPresetName
+  if (presetNames.length === 0 && savedName) {
+    presetNames = [savedName];
+  }
+  cachedActivePresetName = activeName;
+
+  // 填充 dropdown
+  select.innerHTML = `<option value="${CURRENT_PRESET_OPTION_VALUE}">跟随 ST 当前预设</option><option value="${NO_PRESET_OPTION_VALUE}">裸请求（不套用预设）</option>`;
+  presetNames.forEach((name) => {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = name + (name === activeName ? ' (当前)' : '');
+    select.appendChild(option);
+  });
+
+  if (presetNames.length === 0 && !savedName && !settings.useStPresetForAsync) {
+    const opt = document.createElement('option');
+    opt.value = NO_PRESET_OPTION_VALUE;
+    opt.disabled = true;
+    opt.textContent = '未找到任何 ST 预设，请检查 ST 是否已配置预设';
+    select.appendChild(opt);
+  }
+
+  const uiSelectedValue = settings.useStPresetForAsync
+    ? CURRENT_PRESET_OPTION_VALUE
+    : (savedName || NO_PRESET_OPTION_VALUE);
+  select.value = Array.from(select.options).some((option) => option.value === uiSelectedValue)
+    ? uiSelectedValue
+    : NO_PRESET_OPTION_VALUE;
+  syncTrackerPresetSelectionUi(ctx);
+
+  // 渲染 prompt toggle 列表
+  const targetPresetName = settings.useStPresetForAsync
+    ? resolveTrackerPresetName(CURRENT_PRESET_OPTION_VALUE, true)
+    : resolveTrackerPresetName(select.value || savedName, false);
+  await renderPromptToggles(ctx, targetPresetName);
+}
+
+function resolveTrackerPresetName(name, fallbackToActive = true) {
+  const raw = String(name || '').trim();
+  if (raw === CURRENT_PRESET_OPTION_VALUE) {
+    return String(cachedActivePresetName || '').trim();
+  }
+  if (raw === NO_PRESET_OPTION_VALUE) {
+    return '';
+  }
+  const next = normalizeTrackerPresetSelectionValue(raw);
+  if (next) return next;
+  return fallbackToActive ? String(cachedActivePresetName || '').trim() : '';
+}
+
+function getTrackerPromptOverrideMap(settings, presetName) {
+  const allOverrides = settings?.trackerPromptToggleOverrides;
+  if (!allOverrides || typeof allOverrides !== 'object') return {};
+  const presetOverrides = allOverrides[presetName];
+  return presetOverrides && typeof presetOverrides === 'object' ? presetOverrides : {};
+}
+
+function getPromptOrderEntriesFromSettings(settings, stCtx = null) {
+  const direct = Array.isArray(settings?.prompt_order) ? settings.prompt_order : null;
+  if (direct) return direct;
+  const runtime = Array.isArray(stCtx?.chatCompletionSettings?.prompt_order) ? stCtx.chatCompletionSettings.prompt_order : null;
+  return runtime || [];
+}
+
+function pickPromptOrderList(promptOrderEntries, stCtx = null) {
+  if (!Array.isArray(promptOrderEntries) || promptOrderEntries.length === 0) return [];
+  const groupId = stCtx?.groupId;
+  const characterId = stCtx?.characterId;
+  const candidates = [
+    promptOrderEntries.find((entry) => String(entry?.character_id) === String(groupId) && Array.isArray(entry?.order)),
+    promptOrderEntries.find((entry) => String(entry?.character_id) === String(characterId) && Array.isArray(entry?.order)),
+    promptOrderEntries.find((entry) => Array.isArray(entry?.order) && entry.order.length > 0),
+  ];
+  return candidates.find(Boolean)?.order || [];
+}
+
+function normalizePromptListForDisplay(prompts, presetName) {
+  const list = Array.isArray(prompts)
+    ? prompts.filter((prompt) => prompt && typeof prompt === 'object' && prompt.identifier)
+    : [];
+  const stCtx = globalThis.SillyTavern?.getContext?.();
+  const isActivePreset = presetName && presetName === String(cachedActivePresetName || '').trim();
+  const promptOrderEntries = isActivePreset
+    ? pickPromptOrderList(getPromptOrderEntriesFromSettings(cachedPresetData?.settings, stCtx), stCtx)
+    : [];
+
+  if (!Array.isArray(promptOrderEntries) || promptOrderEntries.length === 0) {
+    return list.map((prompt) => ({
+      ...prompt,
+      _sourceEnabled: prompt.enabled !== false,
+    }));
+  }
+
+  const byId = new Map(list.map((prompt) => [prompt.identifier, prompt]));
+  const ordered = promptOrderEntries
+    .map((entry) => {
+      const prompt = byId.get(entry?.identifier);
+      if (!prompt) return null;
+      return {
+        ...prompt,
+        _sourceEnabled: entry?.enabled !== false,
+      };
+    })
+    .filter(Boolean);
+  return ordered;
+}
+
+function getPromptDisplayMeta(prompt) {
+  const isMarkerPrompt = !!prompt?.marker && Number(prompt?.injection_position) !== 1;
+  const isImportantPrompt = !prompt?.marker && !!prompt?.system_prompt && Number(prompt?.injection_position) !== 1 && !!prompt?.forbid_overrides;
+  const isSystemPrompt = !prompt?.marker && !!prompt?.system_prompt && Number(prompt?.injection_position) !== 1 && !prompt?.forbid_overrides;
+  const isUserPrompt = !prompt?.marker && !prompt?.system_prompt && Number(prompt?.injection_position) !== 1;
+  const isInjectionPrompt = Number(prompt?.injection_position) === 1;
+  if (isMarkerPrompt) return { icon: 'fa-thumb-tack', title: 'Marker' };
+  if (isImportantPrompt) return { icon: 'fa-star', title: 'Important Prompt' };
+  if (isSystemPrompt) return { icon: 'fa-square-poll-horizontal', title: 'Global Prompt' };
+  if (isUserPrompt) return { icon: 'fa-asterisk', title: 'Preset Prompt' };
+  if (isInjectionPrompt) return { icon: 'fa-syringe', title: 'In-Chat Injection' };
+  return { icon: 'fa-asterisk', title: 'Prompt' };
+}
+
+function getPromptTypeGlyph(prompt) {
+  const isMarkerPrompt = !!prompt?.marker && Number(prompt?.injection_position) !== 1;
+  const isImportantPrompt = !prompt?.marker && !!prompt?.system_prompt && Number(prompt?.injection_position) !== 1 && !!prompt?.forbid_overrides;
+  const isSystemPrompt = !prompt?.marker && !!prompt?.system_prompt && Number(prompt?.injection_position) !== 1 && !prompt?.forbid_overrides;
+  const isInjectionPrompt = Number(prompt?.injection_position) === 1;
+  if (isMarkerPrompt) return '•';
+  if (isImportantPrompt) return '★';
+  if (isSystemPrompt) return '■';
+  if (isInjectionPrompt) return '↳';
+  return '✶';
+}
+
+function extractVisibleText(node) {
+  if (!node) return '';
+  const clone = node.cloneNode(true);
+  clone.querySelectorAll('input, button, select, textarea, svg, img, i').forEach((child) => child.remove());
+  return String(clone.textContent || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getAccessibleDocuments() {
+  const docs = [document];
+  try {
+    if (globalThis.parent?.document && globalThis.parent.document !== document) docs.push(globalThis.parent.document);
+  } catch {}
+  try {
+    if (globalThis.top?.document && !docs.includes(globalThis.top.document)) docs.push(globalThis.top.document);
+  } catch {}
+  return docs;
+}
+
+function getToggleState(node) {
+  if (!node || !(node instanceof HTMLElement)) return null;
+  if (node.matches('input[type="checkbox"]')) return !!node.checked;
+  const ariaChecked = node.getAttribute('aria-checked');
+  if (ariaChecked === 'true') return true;
+  if (ariaChecked === 'false') return false;
+  if (node.getAttribute('data-value') === 'true') return true;
+  if (node.getAttribute('data-value') === 'false') return false;
+  return null;
+}
+
+function collectToggleNodes(root) {
+  return Array.from(root.querySelectorAll([
+    'input[type="checkbox"]',
+    '[role="switch"]',
+    '[role="checkbox"]',
+    '[aria-checked]',
+    '.toggle-control',
+    '.menu_toggle',
+    '.checkbox',
+  ].join(', ')));
+}
+
+function findPromptListScopes(doc) {
+  const nodes = Array.from(doc.querySelectorAll('div, section, form'));
+  return nodes.filter((node) => {
+    if (!(node instanceof HTMLElement)) return false;
+    const text = String(node.textContent || '');
+    if (!/名称|name/i.test(text) || !/token/i.test(text)) return false;
+    const toggleCount = collectToggleNodes(node).length;
+    return toggleCount >= 3 && toggleCount <= 80;
+  }).sort((a, b) => a.textContent.length - b.textContent.length);
+}
+
+function isPromptListRow(row) {
+  if (!(row instanceof HTMLElement)) return false;
+  const text = extractVisibleText(row);
+  if (!text || text.length < 2 || text.length > 120) return false;
+  if (/刷新预设列表|跟随 ST 当前预设|裸请求|Tracker 专用预设|总 Token 数量/.test(text)) return false;
+  const toggleCount = collectToggleNodes(row).length;
+  if (toggleCount !== 1) return false;
+  const actionButtons = row.querySelectorAll('button, [role="button"]');
+  return actionButtons.length >= 2;
+}
+
+function scrapePromptManagerDomBlocks() {
+  const rows = [];
+  const seen = new Set();
+  const docs = getAccessibleDocuments();
+  let debugCounts = [];
+
+  docs.forEach((doc, docIndex) => {
+    const scopes = findPromptListScopes(doc);
+    debugCounts.push(`doc${docIndex}:scopes=${scopes.length}`);
+    scopes.forEach((scope, scopeIndex) => {
+      const toggleNodes = collectToggleNodes(scope);
+      debugCounts.push(`doc${docIndex}.scope${scopeIndex}:toggles=${toggleNodes.length}`);
+      toggleNodes.forEach((toggleNode, index) => {
+        const candidates = [
+          toggleNode.closest('li'),
+          toggleNode.closest('tr'),
+          toggleNode.closest('div'),
+        ].filter(Boolean);
+        const row = candidates.find(isPromptListRow);
+        if (!row || seen.has(row)) return;
+        seen.add(row);
+        const name = extractVisibleText(row);
+        const enabled = getToggleState(toggleNode);
+        rows.push({
+          identifier: `dom-${docIndex}-${scopeIndex}-${index}-${name}`,
+          name,
+          enabled: enabled !== false,
+          source: 'dom',
+        });
+      });
+    });
+  });
+
+  const filtered = rows.filter((row) => {
+    const text = String(row.name || '');
+    return text.length >= 2
+      && !/^Token$/i.test(text)
+      && !/^名称$/i.test(text)
+      && !/刷新预设列表|跟随 ST 当前预设|裸请求|Tracker 专用预设/.test(text);
+  });
+  filtered._debugSummary = debugCounts.join(' ; ');
+  return filtered;
+}
+
+async function getPresetPromptList(presetName) {
+  const targetPresetName = resolveTrackerPresetName(presetName, false);
+  if (!targetPresetName) return [];
+  try {
+    if (cachedPresetManager && typeof cachedPresetManager.getCompletionPresetByName === 'function') {
+      const preset = cachedPresetManager.getCompletionPresetByName(targetPresetName);
+      if (preset && typeof preset === 'object') {
+        cachedPresetDetailsMap.set(targetPresetName, preset);
+        if (Array.isArray(preset.prompts) && preset.prompts.length > 0) {
+          cachedPresetPromptMap.set(targetPresetName, preset.prompts);
+          return preset.prompts;
+        }
+      }
+    }
+    if (cachedPresetDetailsMap.has(targetPresetName)) {
+      const prompts = cachedPresetDetailsMap.get(targetPresetName)?.prompts;
+      if (Array.isArray(prompts) && prompts.length > 0) {
+        cachedPresetPromptMap.set(targetPresetName, prompts);
+        return prompts;
+      }
+    }
+    // 從 getPresetList 取得的 presets 物件中撈
+    if (cachedPresetData?.presets?.[targetPresetName]?.prompts) {
+      return cachedPresetData.presets[targetPresetName].prompts;
+    }
+    if (cachedPresetPromptMap.has(targetPresetName)) {
+      return cachedPresetPromptMap.get(targetPresetName) || [];
+    }
+    if (typeof globalThis.ST_API?.preset?.get === 'function') {
+      const result = await globalThis.ST_API.preset.get({ name: targetPresetName });
+      const prompts = Array.isArray(result?.preset?.prompts) ? result.preset.prompts : [];
+      if (prompts.length > 0) cachedPresetPromptMap.set(targetPresetName, prompts);
+      if (prompts.length > 0) return prompts;
+    }
+    // 嘗試從 openai_settings 全域變數撈
+    if (typeof globalThis.openai_settings === 'object' && globalThis.openai_settings[targetPresetName]?.prompts) {
+      return globalThis.openai_settings[targetPresetName].prompts;
+    }
+    // 再試 SillyTavern context
+    const stCtx = globalThis.SillyTavern?.getContext?.();
+    const oai = stCtx?.chatCompletionSettings;
+    if (oai && typeof oai === 'object') {
+      // oai_settings 本身可能就是 keyed by preset name
+      if (oai[targetPresetName]?.prompts) return oai[targetPresetName].prompts;
+      // 或 oai_settings.presets 是巢狀的
+      if (oai.presets?.[targetPresetName]?.prompts) return oai.presets[targetPresetName].prompts;
+    }
+  } catch {}
+  const domPrompts = scrapePromptManagerDomBlocks();
+  if (domPrompts.length > 0) return domPrompts;
+  return [];
+}
+
+async function renderPromptToggles(ctx, presetName) {
+  const container = document.getElementById('bs-bt-prompt-toggles');
+  if (!container) return;
+  const settings = getSettings(ctx);
+  const targetPresetName = settings?.useStPresetForAsync
+    ? resolveTrackerPresetName(presetName, true)
+    : resolveTrackerPresetName(presetName, false);
+  const prompts = normalizePromptListForDisplay(await getPresetPromptList(targetPresetName), targetPresetName);
+
+  if (!targetPresetName || prompts.length === 0) {
+    container.style.display = 'none';
+    container.innerHTML = '';
+    return;
+  }
+
+  container.style.display = '';
+  const presetOverrides = getTrackerPromptOverrideMap(settings, targetPresetName);
+  container.innerHTML = prompts
+    .map((p) => {
+      const isEnabled = Object.hasOwn(presetOverrides, p.identifier)
+        ? !!presetOverrides[p.identifier]
+        : p._sourceEnabled !== false;
+      const disabledClass = isEnabled ? '' : ' is-disabled';
+      const glyph = getPromptTypeGlyph(p);
+      return `<div class="bs-bt-prompt-toggle-item${disabledClass}" data-prompt-id="${escapeHtml(p.identifier)}">
+        <span class="bs-bt-prompt-toggle-name" title="${escapeHtml(String(p.name || p.identifier || 'Unnamed Prompt'))}">
+          <span class="bs-bt-prompt-toggle-glyph">${escapeHtml(glyph)}</span>
+          <span>${escapeHtml(String(p.name || p.identifier || 'Unnamed Prompt'))}</span>
+        </span>
+        <button type="button" class="bs-bt-prompt-toggle-action${isEnabled ? ' is-on' : ''}" data-prompt-id="${escapeHtml(p.identifier)}" aria-pressed="${isEnabled ? 'true' : 'false'}" title="${isEnabled ? 'Disable' : 'Enable'}">
+          <span class="bs-bt-prompt-toggle-thumb"></span>
+        </button>
+      </div>`;
+    })
+    .join('');
+
+  container.querySelectorAll('.bs-bt-prompt-toggle-action').forEach((button) => {
+    button.addEventListener('click', () => {
+      const pid = button.dataset.promptId;
+      if (!pid) return;
+      if (!settings.trackerPromptToggleOverrides || typeof settings.trackerPromptToggleOverrides !== 'object') {
+        settings.trackerPromptToggleOverrides = {};
+      }
+      if (!settings.trackerPromptToggleOverrides[targetPresetName] || typeof settings.trackerPromptToggleOverrides[targetPresetName] !== 'object') {
+        settings.trackerPromptToggleOverrides[targetPresetName] = {};
+      }
+      const sourcePrompt = prompts.find((prompt) => prompt.identifier === pid);
+      const currentEnabled = Object.hasOwn(settings.trackerPromptToggleOverrides[targetPresetName], pid)
+        ? !!settings.trackerPromptToggleOverrides[targetPresetName][pid]
+        : sourcePrompt?._sourceEnabled !== false;
+      settings.trackerPromptToggleOverrides[targetPresetName][pid] = !currentEnabled;
+      saveSettings(ctx);
+      void renderPromptToggles(ctx, targetPresetName);
+    });
+  });
+}
+
 function scheduleWorldbookFilterReload(ctx, reason = 'chat_changed') {
   globalThis.clearTimeout?.(globalThis[WORLDBOOK_RELOAD_TIMER_KEY]);
   globalThis[WORLDBOOK_RELOAD_TIMER_KEY] = globalThis.setTimeout?.(async () => {
@@ -2386,7 +2924,7 @@ function scheduleWorldbookFilterReload(ctx, reason = 'chat_changed') {
 async function clearCurrentWorldbookExcludeSelections(ctx) {
   const result = await inspectCurrentCharacterWorldbook(ctx);
   const settings = getSettings(ctx);
-  if (String(settings.trackerWorldbookMode || 'exclude').trim() === 'allowlist_all') {
+  if (normalizeWorldbookMode(settings.trackerWorldbookMode) === 'allowlist_all') {
     saveWorldbookIncludeNamesFromList(ctx, []);
   } else {
     const currentEntryNames = new Set((Array.isArray(result?.foundEntries) ? result.foundEntries : []).map((entry) => String(entry?.name || '').trim()).filter(Boolean));
@@ -2411,7 +2949,9 @@ function readSettingsFromForm(ctx) {
   const settings = getSettings(ctx);
   const getValue = (id) => document.getElementById(id)?.value ?? '';
   settings.enabled = !!document.getElementById('bs-bt-enabled')?.checked;
-  settings.useStPresetForAsync = !!document.getElementById('bs-bt-use-st-preset')?.checked;
+  const trackerPresetSelectionValue = String(getValue('bs-bt-tracker-preset-list')).trim();
+  settings.useStPresetForAsync = trackerPresetSelectionValue === CURRENT_PRESET_OPTION_VALUE;
+  settings.trackerPresetName = normalizeTrackerPresetSelectionValue(trackerPresetSelectionValue);
   settings.apiUrl = String(getValue('bs-bt-api-url')).trim();
   settings.apiKey = String(getValue('bs-bt-api-key')).trim();
   settings.model = String(getValue('bs-bt-model')).trim();
@@ -2419,7 +2959,7 @@ function readSettingsFromForm(ctx) {
   settings.pollMs = Math.max(800, Number(getValue('bs-bt-poll-ms')) || 1800);
   settings.contextSize = Math.max(2, Number(getValue('bs-bt-context-size')) || 12);
   settings.targetNames = String(getValue('bs-bt-targets')).trim();
-  settings.trackerWorldbookMode = String(getValue('bs-bt-tracker-worldbook-mode')).trim() || 'exclude';
+  settings.trackerWorldbookMode = normalizeWorldbookMode(getValue('bs-bt-tracker-worldbook-mode'));
   const filterNames = String(getValue('bs-bt-worldbook-filter-input')).trim();
   if (settings.trackerWorldbookMode === 'allowlist_all') settings.trackerWorldbookIncludeNames = filterNames;
   else settings.trackerWorldbookExcludeNames = filterNames;
@@ -2736,6 +3276,12 @@ async function ensureModal(ctx) {
       }
       if (nextView === 'full-state') renderFullStatePage(ctx);
       if (nextView === 'race-encyclopedia') renderRaceEncyclopediaPage(ctx);
+      if (nextView === 'tracker-preset') {
+        readSettingsFromForm(ctx);
+        await refreshTrackerPresetPage(ctx).catch((error) => {
+          console.error('[BS BioTracker] refreshTrackerPresetPage failed', error);
+        });
+      }
       setView(nextView);
     }),
   );
@@ -2784,6 +3330,22 @@ async function ensureModal(ctx) {
     const modelInput = document.getElementById('bs-bt-model');
     if (modelInput) modelInput.value = nextModel;
   });
+  document.getElementById('bs-bt-tracker-preset-list')?.addEventListener('change', async () => {
+    readSettingsFromForm(ctx);
+    const settings = getSettings(ctx);
+    const selectedValue = String(document.getElementById('bs-bt-tracker-preset-list')?.value || '').trim();
+    const targetPresetName = settings?.useStPresetForAsync
+      ? resolveTrackerPresetName(selectedValue, true)
+      : resolveTrackerPresetName(selectedValue, false);
+    await renderPromptToggles(ctx, targetPresetName).catch((error) => {
+      console.error('[BS BioTracker] renderPromptToggles failed', error);
+    });
+  });
+  document.getElementById('bs-bt-refresh-presets')?.addEventListener('click', async () => {
+    await refreshTrackerPresetPage(ctx).catch((error) => {
+      console.error('[BS BioTracker] refreshTrackerPresetPage failed', error);
+    });
+  });
   document.getElementById('bs-bt-race-select')?.addEventListener('change', (event) => {
     selectedRaceEncyclopedia = String(event.target?.value || '');
     racePhysiologyEditorOpen = false;
@@ -2800,7 +3362,7 @@ async function ensureModal(ctx) {
   });
   document.getElementById('bs-bt-worldbook-filter-input')?.addEventListener('change', async (event) => {
     const names = parseWorldbookExcludeNamesInput(String(event.target?.value || ''));
-    if (String(getSettings(ctx).trackerWorldbookMode || 'exclude').trim() === 'allowlist_all') saveWorldbookIncludeNamesFromList(ctx, names);
+    if (normalizeWorldbookMode(getSettings(ctx).trackerWorldbookMode) === 'allowlist_all') saveWorldbookIncludeNamesFromList(ctx, names);
     else saveWorldbookExcludeNamesFromList(ctx, names);
     try {
       await refreshWorldbookFilterPage(ctx);
@@ -2850,7 +3412,7 @@ async function ensureModal(ctx) {
     try {
       await clearCurrentWorldbookExcludeSelections(ctx);
       syncWorldbookFilterInput(ctx);
-      const mode = String(getSettings(ctx).trackerWorldbookMode || 'exclude').trim();
+      const mode = normalizeWorldbookMode(getSettings(ctx).trackerWorldbookMode);
       globalThis.toastr?.success?.(mode === 'allowlist_all'
         ? '[BS BioTracker] 已清空当前角色的可参考条目文本框'
         : '[BS BioTracker] 已清空当前角色的可排除条目文本框');
@@ -3197,6 +3759,7 @@ async function bootstrap() {
   if (globalThis[BOOTSTRAP_RUNTIME_KEY]) return;
   globalThis[BOOTSTRAP_RUNTIME_KEY] = true;
   try {
+    installMainflowRequestCapture();
     await ensureModal(ctx);
     await registerMenuItem(ctx);
     trackerDeps.updateMainFlowPrompt = updateMainFlowPrompt;

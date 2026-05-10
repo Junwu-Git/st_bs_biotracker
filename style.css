@@ -980,6 +980,11 @@
   -webkit-mask-image: url('./assets/icons/painting-bucket-logo-icon.svg');
 }
 
+#bs-biotracker-settings .bs-bt-home-tile__icon--preset {
+  mask-image: url('./assets/icons/book-sparkles-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/book-sparkles-svgrepo-com.svg');
+}
+
 #bs-biotracker-settings .bs-bt-home-tile__label {
   font-size: var(--bsbt-home-label-font-size);
   font-weight: 700;
@@ -1030,6 +1035,104 @@
   display: grid;
   grid-template-columns: 1fr;
   gap: 6px;
+}
+
+#bs-biotracker-settings .bs-bt-track-list-note {
+  margin-top: auto;
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 0.84em;
+  line-height: 1.35;
+  opacity: 0.82;
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggles {
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 42px;
+  padding: 8px 12px;
+  font-size: 0.88em;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-item:last-child {
+  border-bottom: none;
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-item.is-disabled {
+  opacity: 0.62;
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  color: inherit;
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-name > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-glyph {
+  width: 12px;
+  flex: 0 0 12px;
+  text-align: center;
+  opacity: 0.88;
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-action {
+  width: 30px;
+  height: 16px;
+  border: 1px solid color-mix(in srgb, var(--bsbt-border-color, #1a1a1a) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bsbt-off-bg, #3d4446) 78%, transparent);
+  cursor: pointer;
+  padding: 1px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-action.is-on {
+  background: linear-gradient(145deg, var(--bsbt-btn-grad-1, #4d5456), var(--bsbt-btn-grad-2, #282e30));
+  border-color: color-mix(in srgb, var(--bsbt-btn-text, #ffffff) 24%, var(--bsbt-border-color, #1a1a1a));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bsbt-btn-text, #ffffff) 14%, transparent);
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bsbt-lcd-bg, #87a96b) 68%, white);
+  display: block;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
+  transition: transform 120ms ease, background 120ms ease;
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-action.is-on .bs-bt-prompt-toggle-thumb {
+  transform: translateX(14px);
+  background: color-mix(in srgb, var(--bsbt-btn-text, #ffffff) 82%, white);
 }
 
 #bs-biotracker-settings .bs-bt-track-tabs {

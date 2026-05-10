@@ -25,6 +25,15 @@ export const POLL_RUNTIME_KEY = '__bs_biotracker_poll__';
 export const RUN_RUNTIME_KEY = '__bs_biotracker_running__';
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const AFTER_AI_SETTLE_MS = 1400;
+const MAINFLOW_CONTEXT_SNAPSHOT_KEY = '__bs_biotracker_mainflow_context_snapshot__';
+const DEBUG_LAST_TRACKER_REQUEST_KEY = '__bs_biotracker_debug_last_tracker_request__';
+const DEBUG_LAST_TRACKER_RESULT_KEY = '__bs_biotracker_debug_last_tracker_result__';
+
+function normalizeWorldbookMode(value) {
+  const mode = String(value || 'exclude').trim();
+  if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude') return mode;
+  return 'exclude';
+}
 
 function getVitalityLevelText(level) {
   const levels = {
@@ -183,10 +192,54 @@ function parseTrackerWorldbookIncludeNames(settings) {
   );
 }
 
-function filterTrackerWorldbookEntries(value, excludedNames, settings = null) {
+function normalizeWorldbookKeywords(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean);
+  if (typeof value === 'string') return value.split(/[\r\n,]+/).map((item) => item.trim()).filter(Boolean);
+  return [];
+}
+
+function buildWorldbookActivationText(recentMessages = []) {
+  return (Array.isArray(recentMessages) ? recentMessages : [])
+    .map((message) => `${message?.name || ''}\n${message?.text || ''}`)
+    .join('\n')
+    .toLowerCase();
+}
+
+function getWorldbookEntryActivationMode(entry) {
+  const mode = String(entry?.activationMode || '').trim().toLowerCase();
+  if (mode) return mode;
+  if (entry?.constant === true || entry?.always === true) return 'always';
+  if (entry?.selective === true || normalizeWorldbookKeywords(entry?.key).length > 0 || normalizeWorldbookKeywords(entry?.keys).length > 0) return 'keyword';
+  return '';
+}
+
+function worldbookKeywordMatches(entry, activationText) {
+  if (!activationText) return false;
+  const primaryKeys = [
+    ...normalizeWorldbookKeywords(entry?.key),
+    ...normalizeWorldbookKeywords(entry?.keys),
+  ];
+  if (primaryKeys.length === 0) return false;
+  const primaryMatched = primaryKeys.some((keyword) => activationText.includes(keyword.toLowerCase()));
+  if (!primaryMatched) return false;
+
+  const secondaryKeys = [
+    ...normalizeWorldbookKeywords(entry?.keysecondary),
+    ...normalizeWorldbookKeywords(entry?.keySecondary),
+    ...normalizeWorldbookKeywords(entry?.secondary_keys),
+    ...normalizeWorldbookKeywords(entry?.secondaryKeys),
+  ];
+  if (entry?.selective === true && secondaryKeys.length > 0) {
+    return secondaryKeys.some((keyword) => activationText.includes(keyword.toLowerCase()));
+  }
+  return true;
+}
+
+function filterTrackerWorldbookEntries(value, excludedNames, settings = null, recentMessages = []) {
   if (!value || typeof value !== 'object') return value;
-  const mode = String(settings?.trackerWorldbookMode || 'exclude').trim();
+  const mode = normalizeWorldbookMode(settings?.trackerWorldbookMode);
   const includedNames = parseTrackerWorldbookIncludeNames(settings);
+  const activationText = mode === 'mainflow' ? buildWorldbookActivationText(recentMessages) : '';
 
   const normalizeEntryName = (entry) => String(entry?.name || entry?.comment || entry?.title || entry?.displayName || entry?.uid || '').trim();
 
@@ -194,8 +247,15 @@ function filterTrackerWorldbookEntries(value, excludedNames, settings = null) {
     const name = normalizeEntryName(entry);
     if (mode === 'allowlist_all') return Boolean(name) && includedNames.has(name);
     if (entry?.enabled === false || entry?.disable === true) return false;
+    if (name && excludedNames.has(name)) return false;
+    if (mode === 'mainflow') {
+      const activationMode = getWorldbookEntryActivationMode(entry);
+      if (activationMode === 'always' || activationMode === 'constant') return true;
+      if (activationMode === 'keyword' || activationMode === 'selective') return worldbookKeywordMatches(entry, activationText);
+      return false;
+    }
     if (!excludedNames || excludedNames.size === 0) return true;
-    return !name || !excludedNames.has(name);
+    return true;
   };
 
   if (Array.isArray(value.entries)) {
@@ -218,29 +278,63 @@ function filterTrackerWorldbookEntries(value, excludedNames, settings = null) {
   return value;
 }
 
+function getMainflowContextSnapshot() {
+  const snapshot = globalThis[MAINFLOW_CONTEXT_SNAPSHOT_KEY];
+  if (!snapshot || typeof snapshot !== 'object') return null;
+  const messages = Array.isArray(snapshot.messages)
+    ? snapshot.messages
+      .filter((message) => message && typeof message === 'object' && String(message.content || '').trim())
+      .map((message) => ({
+        role: String(message.role || 'user'),
+        content: String(message.content || ''),
+        name: message.name ? String(message.name) : undefined,
+      }))
+    : [];
+  if (messages.length === 0) return null;
+  return {
+    source: String(snapshot.source || 'st_request'),
+    capturedAt: Number(snapshot.capturedAt || 0) || null,
+    model: snapshot.model ? String(snapshot.model) : '',
+    messages,
+  };
+}
+
 export function buildTrackerPayload(ctx, settings, reason = 'manual', endIndexExclusive = null) {
   const currentCharacter = getCharacterCard(ctx);
   const chatState = getChatState(ctx, settings);
   const existingState = chatState.characters || {};
+  const recentMessages = buildRecentMessages(ctx, settings, endIndexExclusive);
+  const useMainflowMode = normalizeWorldbookMode(settings?.trackerWorldbookMode) === 'mainflow';
+  let mainflowContextSnapshot = useMainflowMode ? getMainflowContextSnapshot() : null;
+  if (mainflowContextSnapshot && settings?.useStPresetForAsync) {
+    mainflowContextSnapshot = {
+      ...mainflowContextSnapshot,
+      messages: mainflowContextSnapshot.messages.filter((m) => m.role !== 'system'),
+    };
+    if (mainflowContextSnapshot.messages.length === 0) mainflowContextSnapshot = null;
+  }
   const filteredWorldBook = filterTrackerWorldbookEntries(
     currentCharacter.worldBook || null,
     parseTrackerWorldbookExcludeNames(settings),
     settings,
+    recentMessages,
   );
+  const payloadWorldBook = mainflowContextSnapshot ? null : filteredWorldBook;
   return {
     reason,
     chat_id: getChatKey(ctx),
     current_character: {
       ...currentCharacter,
-      worldBook: filteredWorldBook,
+      worldBook: payloadWorldBook,
     },
     character_description: currentCharacter.description || '',
     character_worldbook_name: getCharacterWorldBookName(ctx) || null,
-    character_worldbook: filteredWorldBook,
+    character_worldbook: payloadWorldBook,
+    mainflow_context_snapshot: mainflowContextSnapshot,
     tracked_females: getRegisteredTargetNames(ctx, settings, chatState),
     existing_state: buildTrackerStateView(existingState),
     available_tools: TOOL_DEFINITIONS,
-    recent_messages: buildRecentMessages(ctx, settings, endIndexExclusive),
+    recent_messages: recentMessages,
   };
 }
 
@@ -290,6 +384,27 @@ function hasPendingChatHistory(ctx, chatState) {
 
 function emitTrackerUpdateCue(detail = {}) {
   globalThis.dispatchEvent?.(new CustomEvent(UPDATE_CUE_EVENT, { detail }));
+}
+
+function recordTrackerRequestDebug(systemPrompt, payload) {
+  globalThis[DEBUG_LAST_TRACKER_REQUEST_KEY] = {
+    capturedAt: Date.now(),
+    systemPrompt,
+    payload,
+    messages: [
+      { role: 'system', content: String(systemPrompt || '') },
+      { role: 'user', content: JSON.stringify(payload, null, 2) },
+    ],
+  };
+}
+
+function recordTrackerResultDebug(result, error = null) {
+  globalThis[DEBUG_LAST_TRACKER_RESULT_KEY] = {
+    capturedAt: Date.now(),
+    ok: !error,
+    result: result ?? null,
+    error: error ? String(error?.message || error) : null,
+  };
 }
 
 function buildStreamingGuardSignature(ctx) {
@@ -343,7 +458,9 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
   }
 
   const payload = buildTrackerPayload(ctx, settings, reason, messageIndex + 1);
-  if (!payload.character_worldbook && !payload.character_worldbook_name) {
+  if (payload.mainflow_context_snapshot) {
+    payload.character_worldbook_name = null;
+  } else if (!payload.character_worldbook && !payload.character_worldbook_name) {
     payload.character_worldbook_name = await getCharacterWorldBookNameViaSTscript();
   }
   if (!payload.character_worldbook && payload.character_worldbook_name && typeof ctx?.loadWorldInfo === 'function') {
@@ -353,6 +470,7 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
         loadedWorldBook || null,
         parseTrackerWorldbookExcludeNames(settings),
         settings,
+        payload.recent_messages,
       );
     } catch (error) {
       console.warn('[BS BioTracker] loadWorldInfo for tracker failed', error);
@@ -361,11 +479,14 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
   chatState.lastRunAt = Date.now();
   chatState.lastAttemptedSignature = buildSignature(ctx, messageIndex + 1);
   saveSettings(ctx);
+  const systemPrompt = buildTrackerSystemPrompt(settings.systemPrompt || DEFAULT_SYSTEM_PROMPT, settings.registryDescriptionGuides, payload);
+  recordTrackerRequestDebug(systemPrompt, payload);
   const rawResult = await callOpenAICompatible(
     settings,
     payload,
-    buildTrackerSystemPrompt(settings.systemPrompt || DEFAULT_SYSTEM_PROMPT, settings.registryDescriptionGuides, payload)
+    systemPrompt
   );
+  recordTrackerResultDebug(rawResult);
   const result = normalizeTrackerResult(rawResult);
   applyToolCallsResult(ctx, result);
   chatState.lastProcessedSignature = chatState.lastAttemptedSignature;
@@ -431,6 +552,7 @@ export async function runTracker(ctx, deps, reason = 'manual') {
     return { skipped: false, processedCount, toolCalls };
   } catch (error) {
     console.error('[BS BioTracker] runTracker failed', error);
+    recordTrackerResultDebug(null, error);
     chatState.lastRawResult = {
       error: String(error?.message || error),
       tool_calls: [],

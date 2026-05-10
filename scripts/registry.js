@@ -35,6 +35,16 @@ import {
   saveSettings,
 } from './state.js';
 
+const MAINFLOW_CONTEXT_SNAPSHOT_KEY = '__bs_biotracker_mainflow_context_snapshot__';
+const DEBUG_LAST_REGISTRY_REQUEST_KEY = '__bs_biotracker_debug_last_registry_request__';
+const DEBUG_LAST_REGISTRY_RESULT_KEY = '__bs_biotracker_debug_last_registry_result__';
+
+function normalizeWorldbookMode(value) {
+  const mode = String(value || 'exclude').trim();
+  if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude') return mode;
+  return 'exclude';
+}
+
 async function getCharacterWorldBook(ctx) {
   const card = getCharacterCard(ctx);
   if (card?.worldBook) return card.worldBook;
@@ -75,10 +85,54 @@ function parseRegistryWorldbookIncludeNames(settings) {
   );
 }
 
-function filterRegistryWorldbookEntries(value, excludedNames, settings = null) {
+function normalizeWorldbookKeywords(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean);
+  if (typeof value === 'string') return value.split(/[\r\n,]+/).map((item) => item.trim()).filter(Boolean);
+  return [];
+}
+
+function buildWorldbookActivationText(recentMessages = []) {
+  return (Array.isArray(recentMessages) ? recentMessages : [])
+    .map((message) => `${message?.name || ''}\n${message?.text || ''}`)
+    .join('\n')
+    .toLowerCase();
+}
+
+function getWorldbookEntryActivationMode(entry) {
+  const mode = String(entry?.activationMode || '').trim().toLowerCase();
+  if (mode) return mode;
+  if (entry?.constant === true || entry?.always === true) return 'always';
+  if (entry?.selective === true || normalizeWorldbookKeywords(entry?.key).length > 0 || normalizeWorldbookKeywords(entry?.keys).length > 0) return 'keyword';
+  return '';
+}
+
+function worldbookKeywordMatches(entry, activationText) {
+  if (!activationText) return false;
+  const primaryKeys = [
+    ...normalizeWorldbookKeywords(entry?.key),
+    ...normalizeWorldbookKeywords(entry?.keys),
+  ];
+  if (primaryKeys.length === 0) return false;
+  const primaryMatched = primaryKeys.some((keyword) => activationText.includes(keyword.toLowerCase()));
+  if (!primaryMatched) return false;
+
+  const secondaryKeys = [
+    ...normalizeWorldbookKeywords(entry?.keysecondary),
+    ...normalizeWorldbookKeywords(entry?.keySecondary),
+    ...normalizeWorldbookKeywords(entry?.secondary_keys),
+    ...normalizeWorldbookKeywords(entry?.secondaryKeys),
+  ];
+  if (entry?.selective === true && secondaryKeys.length > 0) {
+    return secondaryKeys.some((keyword) => activationText.includes(keyword.toLowerCase()));
+  }
+  return true;
+}
+
+function filterRegistryWorldbookEntries(value, excludedNames, settings = null, recentMessages = []) {
   if (!value || typeof value !== 'object') return value;
-  const mode = String(settings?.trackerWorldbookMode || 'exclude').trim();
+  const mode = normalizeWorldbookMode(settings?.trackerWorldbookMode);
   const includedNames = parseRegistryWorldbookIncludeNames(settings);
+  const activationText = mode === 'mainflow' ? buildWorldbookActivationText(recentMessages) : '';
 
   const normalizeEntryName = (entry) => String(entry?.name || entry?.comment || entry?.title || entry?.displayName || entry?.uid || '').trim();
 
@@ -86,8 +140,15 @@ function filterRegistryWorldbookEntries(value, excludedNames, settings = null) {
     const name = normalizeEntryName(entry);
     if (mode === 'allowlist_all') return Boolean(name) && includedNames.has(name);
     if (entry?.enabled === false || entry?.disable === true) return false;
+    if (name && excludedNames.has(name)) return false;
+    if (mode === 'mainflow') {
+      const activationMode = getWorldbookEntryActivationMode(entry);
+      if (activationMode === 'always' || activationMode === 'constant') return true;
+      if (activationMode === 'keyword' || activationMode === 'selective') return worldbookKeywordMatches(entry, activationText);
+      return false;
+    }
     if (!excludedNames || excludedNames.size === 0) return true;
-    return !name || !excludedNames.has(name);
+    return true;
   };
 
   if (Array.isArray(value.entries)) {
@@ -107,6 +168,48 @@ function filterRegistryWorldbookEntries(value, excludedNames, settings = null) {
   }
 
   return value;
+}
+
+function getMainflowContextSnapshot() {
+  const snapshot = globalThis[MAINFLOW_CONTEXT_SNAPSHOT_KEY];
+  if (!snapshot || typeof snapshot !== 'object') return null;
+  const messages = Array.isArray(snapshot.messages)
+    ? snapshot.messages
+      .filter((message) => message && typeof message === 'object' && String(message.content || '').trim())
+      .map((message) => ({
+        role: String(message.role || 'user'),
+        content: String(message.content || ''),
+        name: message.name ? String(message.name) : undefined,
+      }))
+    : [];
+  if (messages.length === 0) return null;
+  return {
+    source: String(snapshot.source || 'st_request'),
+    capturedAt: Number(snapshot.capturedAt || 0) || null,
+    model: snapshot.model ? String(snapshot.model) : '',
+    messages,
+  };
+}
+
+function recordRegistryRequestDebug(systemPrompt, payload) {
+  globalThis[DEBUG_LAST_REGISTRY_REQUEST_KEY] = {
+    capturedAt: Date.now(),
+    systemPrompt,
+    payload,
+    messages: [
+      { role: 'system', content: String(systemPrompt || '') },
+      { role: 'user', content: JSON.stringify(payload, null, 2) },
+    ],
+  };
+}
+
+function recordRegistryResultDebug(result, error = null) {
+  globalThis[DEBUG_LAST_REGISTRY_RESULT_KEY] = {
+    capturedAt: Date.now(),
+    ok: !error,
+    result: result ?? null,
+    error: error ? String(error?.message || error) : null,
+  };
 }
 
 
@@ -707,24 +810,38 @@ export async function runRegistry(ctx, options = {}) {
   const declaredRace = String(options.declaredRace || '').trim();
   if (!targetName) throw new Error('runRegistry 需要 targetName');
   const currentCharacter = getCharacterCard(ctx);
+  const recentMessages = buildRecentMessages(ctx, settings);
+  const useMainflowMode = normalizeWorldbookMode(settings?.trackerWorldbookMode) === 'mainflow';
+  let mainflowContextSnapshot = useMainflowMode ? getMainflowContextSnapshot() : null;
+  if (mainflowContextSnapshot && settings?.useStPresetForAsync) {
+    mainflowContextSnapshot = {
+      ...mainflowContextSnapshot,
+      messages: mainflowContextSnapshot.messages.filter((message) => message.role !== 'system'),
+    };
+    if (mainflowContextSnapshot.messages.length === 0) mainflowContextSnapshot = null;
+  }
   const rawCharacterWorldBook = await getCharacterWorldBook(ctx);
   const characterWorldBook = filterRegistryWorldbookEntries(
     rawCharacterWorldBook,
     parseRegistryWorldbookExcludeNames(settings),
     settings,
+    recentMessages,
   );
+  const payloadWorldBook = mainflowContextSnapshot ? null : characterWorldBook;
   const payload = {
     reason: options.reason || 'manual_registry',
     chat_id: getChatKey(ctx),
     current_character: {
       ...currentCharacter,
-      worldBook: characterWorldBook,
+      worldBook: payloadWorldBook,
     },
     character_description: currentCharacter.description || '',
-    character_worldbook: characterWorldBook,
+    character_worldbook_name: payloadWorldBook ? (getCharacterWorldBookName(ctx) || null) : null,
+    character_worldbook: payloadWorldBook,
+    mainflow_context_snapshot: mainflowContextSnapshot,
     target_character: targetName,
     existing_state: chatState.characters[targetName] || null,
-    recent_messages: buildRecentMessages(ctx, settings),
+    recent_messages: recentMessages,
     custom_notes: customNotes,
     declared_race: declaredRace || null,
     user_instruction: String(options.userInstruction || '').trim(),
@@ -748,13 +865,21 @@ export async function runRegistry(ctx, options = {}) {
   } catch (error) {
     console.warn('[BS BioTracker][registry] payload size debug failed', error);
   }
-  const result = await callOpenAICompatible(
-    settings,
-    payload,
-    options.systemPrompt || buildRegistrySystemPrompt(settings, { ...options, customNotes, declaredRace, payload }),
-  );
-  const character = applyRegistryResult(chatState, result);
-  recordChatStateSnapshot(ctx, chatState, { reason: 'registry' });
-  saveSettings(ctx);
-  return character;
+  const systemPrompt = options.systemPrompt || buildRegistrySystemPrompt(settings, { ...options, customNotes, declaredRace, payload });
+  recordRegistryRequestDebug(systemPrompt, payload);
+  try {
+    const result = await callOpenAICompatible(
+      settings,
+      payload,
+      systemPrompt,
+    );
+    recordRegistryResultDebug(result);
+    const character = applyRegistryResult(chatState, result);
+    recordChatStateSnapshot(ctx, chatState, { reason: 'registry' });
+    saveSettings(ctx);
+    return character;
+  } catch (error) {
+    recordRegistryResultDebug(null, error);
+    throw error;
+  }
 }
