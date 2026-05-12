@@ -1,4 +1,4 @@
-import { DEFAULT_REGISTRY_DESCRIPTION_GUIDES } from './registry_config.js';
+import { DEFAULT_DIARY_WRITING_PROMPT, DEFAULT_REGISTRY_DESCRIPTION_GUIDES } from './registry_config.js';
 import {
   buildEmptyPsychologyGroup,
   normalizePsychologyGroup,
@@ -7,7 +7,7 @@ import {
   PSY_PREG_FIELDS,
   PSY_PREG_BOOL_FIELDS,
 } from './registry_psy_config.js';
-import { LABOR_STAGES, MENSTRUAL_STAGES, MENSTRUAL_STAGE_DAYS, PREGNANCY_STAGE_DAYS } from './stage_config.js';
+import { LABOR_STAGES, MENSTRUAL_STAGES, MENSTRUAL_STAGE_DAYS, PREGNANCY_STAGE_DAYS, PREGNANCY_STAGES } from './stage_config.js';
 
 export const MODULE_NAME = 'bs_biotracker';
 const MAX_CHAT_STATE_SNAPSHOTS = 48;
@@ -17,6 +17,7 @@ const MESSAGE_DIGEST_SEED = 2166136261;
 const SNAPSHOT_FULL_INTERVAL = 8;
 const SNAPSHOT_PATCH_SIZE_RATIO = 0.85;
 const SNAPSHOT_DELETE_SENTINEL_KEY = '__bs_bt_deleted__';
+const SNAPSHOT_ARRAY_APPEND_KEY = '__bs_bt_array_append__';
 
 export const THEME_CONFIG = {
   retro: {},
@@ -53,6 +54,7 @@ export const DEFAULT_SYSTEM_PROMPT = [
   '如果只是心理数值变化，使用 bsUpdatePsychology；其数值参数一律表示变化量(delta)而不是目标值，例如当前为 78 时传 2 会变成 80。应优先做单一心理项的小幅调整，单次建议只动一个字段，幅度尽量控制在 ±1 到 ±3，±5 已属于偏大变化。如果只是经验或关系记录变化，使用 bsUpdateExperience。',
   '如果只是描述文字变化，使用 bsSetDescription。',
   '性交留精用 bsAddSperm；排出残留精液用 bsDrainSperm；缓解生理需求用 bsExcreteMetabolism。',
+  '跨日、重大事件或 notify 提醒时，可用 bsWriteDiary 为角色追加主观日记。',
   '月经阶段、排卵期、假孕期切换用 bsSetMenstrualPhases；不要用它覆盖正在进行的受精、真妊娠或产程。',
   '流产用 bsAbortion；立即结束分娩用 bsChildbirth；角色在场状态变化用 bsSetCharacterPresence。',
   '母胎互动用 bsMaternalFetalInteraction；当角色处于产前阵痛且 direction=maternal 时，它表示分娩抵抗。',
@@ -75,6 +77,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   triggerTiming: 'after_ai',
   pollMs: 1800,
   contextSize: 12,
+  diaryRecentLimit: 5,
+  diaryWritingPrompt: DEFAULT_DIARY_WRITING_PROMPT,
   targetNames: '',
   trackerWorldbookMode: 'exclude',
   trackerWorldbookExcludeNames: '',
@@ -193,12 +197,12 @@ function randomInt(min, max) {
 
 export function deriveMenstrualStageState() {
   const stage = MENSTRUAL_STAGES[randomInt(0, MENSTRUAL_STAGES.length - 1)];
-  const days = randomInt(1, MENSTRUAL_STAGE_DAYS[stage]);
+  const days = randomInt(0, MENSTRUAL_STAGE_DAYS[stage]);
   return { stage, days };
 }
 
 export function derivePregnancyStageState(pregnantDays, gestationSpeed = 1) {
-  const actualPregnantDays = Math.max(1, Math.floor(Number(pregnantDays) || 1));
+  const actualPregnantDays = Math.max(0, Number(pregnantDays) || 0);
   const speed = Math.max(0.1, Number(gestationSpeed) || 1);
   const stageNames = ['孕早期', '孕中期', '孕晚期', '临产期'];
   let totalPregnancyDays = 0;
@@ -207,18 +211,19 @@ export function derivePregnancyStageState(pregnantDays, gestationSpeed = 1) {
   if (actualPregnantDays > totalPregnancyDays) {
     return {
       stage: '逾期',
-      days: Math.floor(actualPregnantDays - totalPregnancyDays),
+      days: actualPregnantDays - totalPregnancyDays,
     };
   }
 
   let stage = '孕早期';
-  let baseDays = 1;
-  let currentStageDays = 1;
+  let baseDays = 0;
+  let currentStageDays = 0;
   for (const stageName of stageNames) {
-    const nextBaseDays = baseDays + PREGNANCY_STAGE_DAYS[stageName] / speed;
-    if (actualPregnantDays >= baseDays && actualPregnantDays < nextBaseDays) {
+    const stageLimit = PREGNANCY_STAGE_DAYS[stageName] / speed;
+    const nextBaseDays = baseDays + stageLimit;
+    if (actualPregnantDays >= baseDays && actualPregnantDays <= baseDays + stageLimit) {
       stage = stageName;
-      currentStageDays = Math.floor(actualPregnantDays - baseDays + 1);
+      currentStageDays = actualPregnantDays - baseDays;
       break;
     }
     baseDays = nextBaseDays;
@@ -259,10 +264,22 @@ export function syncCharacterStageFromProfile(characterState) {
   const currentStage = String(base.stage || '');
 
   if (fetuses.length > 0) {
+    const fertilizationDays = Math.max(0, Number(base.fertilizationDays) || 0);
+    const effectivePregnantDays = Math.max(0, Number(pregnant.effectivePregnantDays) || 0);
+    if (fertilizationDays > 0 && effectivePregnantDays <= 0) {
+      const fallbackStage = PREGNANCY_STAGES.includes(currentStage) ? '排卵期' : currentStage;
+      next.profile.base = {
+        ...base,
+        stage: fallbackStage || '排卵期',
+        days: Math.max(0, Number(base.days) || 0),
+      };
+      return next;
+    }
+
     if (currentStage === '产前阵痛' || LABOR_STAGES.includes(currentStage)) {
       next.profile.base = {
         ...base,
-        days: Math.max(1, Math.floor(Number(base.days) || 1)),
+        days: Math.max(0, Number(base.days) || 0),
       };
       return next;
     }
@@ -287,7 +304,7 @@ export function syncCharacterStageFromProfile(characterState) {
   ) {
     next.profile.base = {
       ...base,
-      days: Math.max(1, Math.floor(Number(base.days) || 1)),
+      days: Math.max(0, Number(base.days) || 0),
     };
     return next;
   }
@@ -320,6 +337,45 @@ function createSnapshotDeleteSentinel() {
 
 function isSnapshotDeleteSentinel(value) {
   return isPlainObject(value) && value[SNAPSHOT_DELETE_SENTINEL_KEY] === true;
+}
+
+function createSnapshotArrayAppendPatch(previousList, nextList) {
+  if (!Array.isArray(previousList) || !Array.isArray(nextList)) return null;
+  if (nextList.length <= previousList.length) return null;
+  for (let index = 0; index < previousList.length; index += 1) {
+    if (!areSnapshotArrayItemsEqual(previousList[index], nextList[index])) return null;
+  }
+  return {
+    [SNAPSHOT_ARRAY_APPEND_KEY]: true,
+    length: previousList.length,
+    items: cloneValue(nextList.slice(previousList.length)),
+  };
+}
+
+function isSnapshotArrayAppendPatch(value) {
+  return isPlainObject(value)
+    && value[SNAPSHOT_ARRAY_APPEND_KEY] === true
+    && Number.isInteger(value.length)
+    && Array.isArray(value.items);
+}
+
+function applySnapshotArrayAppendPatch(previousValue, patch) {
+  const base = Array.isArray(previousValue) ? cloneValue(previousValue).slice(0, Math.max(0, patch.length)) : [];
+  return base.concat(cloneValue(patch.items));
+}
+
+function areSnapshotArrayItemsEqual(left, right) {
+  if (left === right) return true;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function areSnapshotArraysEqual(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right)) return false;
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (!areSnapshotArrayItemsEqual(left[index], right[index])) return false;
+  }
+  return true;
 }
 
 function sanitizeSpermList(value) {
@@ -407,8 +463,8 @@ function sanitizeProfilePatch(profilePatch) {
     ],
     {
       isHere: (value) => Boolean(value),
-      days: (value) => sanitizeInteger(value, { min: 0, max: 9999 }),
-      fertilizationDays: (value) => sanitizeInteger(value, { min: 0, max: 9999 }),
+      days: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
+      fertilizationDays: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
       latestSexDays: (value) => sanitizeInteger(value, { min: -1, max: 9999 }),
       age: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
       stage: sanitizeString,
@@ -428,7 +484,7 @@ function sanitizeProfilePatch(profilePatch) {
     profilePatch.pregnant,
     ['pregnantDays', 'effectivePregnantDays', 'laborHours', 'effectiveLaborHours', 'fetusesCount', 'fetalEnergyDrain', 'fetuses'],
     {
-      pregnantDays: (value) => sanitizeInteger(value, { min: 0, max: 9999 }),
+      pregnantDays: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
       effectivePregnantDays: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
       laborHours: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
       effectiveLaborHours: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
@@ -569,7 +625,7 @@ export function createDefaultFemaleState(name = '') {
       },
       base: {
         isHere: true,
-        days: 1,
+        days: 0,
         fertilizationDays: 0,
         latestSexDays: null,
         age: 15,
@@ -610,6 +666,7 @@ export function createDefaultFemaleState(name = '') {
         preg: buildEmptyPsychologyGroup(PSY_PREG_FIELDS, PSY_PREG_BOOL_FIELDS),
       },
       children: [],
+      diary: [],
       bio: {
         menstrualLengthRatio: 1.0,
         gestationSpeciesSpeed: 1.0,
@@ -669,6 +726,16 @@ export function getSettings(ctx) {
     settings.modelOptions = [];
     shouldSave = true;
   }
+  if (!String(settings.diaryWritingPrompt || '').trim()) {
+    settings.diaryWritingPrompt = DEFAULT_DIARY_WRITING_PROMPT;
+    shouldSave = true;
+  }
+  const rawDiaryRecentLimit = Number(settings.diaryRecentLimit);
+  const diaryRecentLimit = Math.max(0, Math.min(20, Math.floor(Number.isFinite(rawDiaryRecentLimit) ? rawDiaryRecentLimit : DEFAULT_SETTINGS.diaryRecentLimit)));
+  if (settings.diaryRecentLimit !== diaryRecentLimit) {
+    settings.diaryRecentLimit = diaryRecentLimit;
+    shouldSave = true;
+  }
   if (!settings.registryDescriptionGuides || typeof settings.registryDescriptionGuides !== 'object') {
     settings.registryDescriptionGuides = cloneValue(DEFAULT_REGISTRY_DESCRIPTION_GUIDES);
     shouldSave = true;
@@ -718,7 +785,10 @@ export function getChatState(ctx, settings) {
   restoreChatStateFromSnapshot(chatState, getLatestMatchingSnapshot(ctx, chatState));
   const characters = chatState.characters;
   if (characters && typeof characters === 'object') {
-    for (const item of Object.values(characters)) normalizeCharacterPsychologyState(item);
+    for (const item of Object.values(characters)) {
+      normalizeCharacterPsychologyState(item);
+      if (item?.profile && !Array.isArray(item.profile.diary)) item.profile.diary = [];
+    }
   }
   return chatState;
 }
@@ -950,7 +1020,7 @@ function createSnapshotCharacterBaseline(name = '') {
       },
       base: {
         isHere: true,
-        days: 1,
+        days: 0,
         fertilizationDays: 0,
         latestSexDays: null,
         age: 15,
@@ -991,6 +1061,7 @@ function createSnapshotCharacterBaseline(name = '') {
         preg: buildEmptyPsychologyGroup(PSY_PREG_FIELDS, PSY_PREG_BOOL_FIELDS),
       },
       children: [],
+      diary: [],
       bio: {
         menstrualLengthRatio: 1.0,
         gestationSpeciesSpeed: 1.0,
@@ -1056,6 +1127,7 @@ function normalizeCharacterForSnapshot(character, name = '') {
   next.profile.base = next.profile.base && typeof next.profile.base === 'object' ? next.profile.base : {};
   next.profile.pregnant = next.profile.pregnant && typeof next.profile.pregnant === 'object' ? next.profile.pregnant : {};
   next.profile.children = compactSnapshotArrayEntries(next.profile.children);
+  next.profile.diary = compactSnapshotArrayEntries(next.profile.diary);
   next.profile.pregnant.fetuses = compactSnapshotArrayEntries(next.profile.pregnant.fetuses);
   next.profile.base.sperms = compactSnapshotArrayEntries(next.profile.base.sperms);
   next.profile.descriptions = compactSnapshotRecord(next.profile.descriptions || {});
@@ -1185,7 +1257,9 @@ function sanitizeSnapshotPayload(payload) {
 function buildStateDeltaPatch(previousValue, nextValue) {
   if (previousValue === nextValue) return undefined;
   if (Array.isArray(previousValue) || Array.isArray(nextValue)) {
-    return JSON.stringify(previousValue) === JSON.stringify(nextValue) ? undefined : cloneValue(nextValue);
+    if (areSnapshotArraysEqual(previousValue, nextValue)) return undefined;
+    const appendPatch = createSnapshotArrayAppendPatch(previousValue, nextValue);
+    return appendPatch || cloneValue(nextValue);
   }
   if (!isPlainObject(previousValue) || !isPlainObject(nextValue)) {
     return JSON.stringify(previousValue) === JSON.stringify(nextValue) ? undefined : cloneValue(nextValue);
@@ -1217,6 +1291,7 @@ function buildStateDeltaPatch(previousValue, nextValue) {
 function applyStateDeltaPatch(previousValue, deltaPatch) {
   if (deltaPatch === undefined) return cloneValue(previousValue);
   if (isSnapshotDeleteSentinel(deltaPatch)) return undefined;
+  if (isSnapshotArrayAppendPatch(deltaPatch)) return applySnapshotArrayAppendPatch(previousValue, deltaPatch);
   if (Array.isArray(deltaPatch) || !isPlainObject(deltaPatch)) return cloneValue(deltaPatch);
 
   const base = isPlainObject(previousValue) ? cloneValue(previousValue) : {};
@@ -1477,6 +1552,7 @@ export function formatStatusText(chatState) {
     lines.push(`Pregnant: ${JSON.stringify(pregnant)}`);
     if (profile.notify && Object.values(profile.notify).some((value) => String(value || '').trim())) lines.push(`Notify: ${JSON.stringify(profile.notify)}`);
     if (Array.isArray(profile.children) && profile.children.length > 0) lines.push(`Children: ${JSON.stringify(profile.children)}`);
+    if (Array.isArray(profile.diary) && profile.diary.length > 0) lines.push(`Diary: ${JSON.stringify(profile.diary)}`);
     lines.push(`Experience: ${JSON.stringify(experience)}`);
     if ((psychology.mens && Object.values(psychology.mens).some((value) => value !== null && value !== undefined)) || (psychology.preg && Object.values(psychology.preg).some((value) => value !== null && value !== undefined))) {
       lines.push(`Psychology: ${JSON.stringify(psychology)}`);

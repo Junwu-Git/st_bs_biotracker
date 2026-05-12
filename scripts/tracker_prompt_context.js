@@ -28,7 +28,7 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '',
   '[总结构]',
   '- 每个角色结构为 name / initialized / profile。',
-  '- profile 主要包含 base、pregnant、experience、psychology、children、metabolism、descriptions、notify，必要时也会附带部分 bio 字段。',
+  '- profile 主要包含 base、pregnant、experience、psychology、children、metabolism、descriptions、diary、notify，必要时也会附带部分 bio 字段。',
   '- bio 与 immune 大多属于内部运行参数，tracker 默认不会完整发给你；但与剧情表达直接相关的少数 bio 字段可以发送。',
   '- 若角色具有 immune.metabolism=true，则 metabolism 也不会发给你，因为该角色不受代谢累积影响。',
   '- 若角色带有 offscreen=true，表示该角色当前不在场，existing_state 只提供精简状态，不代表角色不存在。',
@@ -36,7 +36,7 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '[base]',
   '- isHere: 是否在场。false 时角色仍会随时间推进，但幕外角色只发送少量状态给你。',
   '- stage: 当前阶段。可能是月经阶段、妊娠阶段、假孕期、产前阵痛、第一/第二/第三产程、产后恢复、无经期、未激活。',
-  '- days: 当前阶段已经过了多少天。',
+  '- days: 当前阶段已经过了多少天，使用 0 起算的 elapsed/progress 语义；进入新阶段时为 0，超过该阶段上限后才切换下一阶段。',
   '- fertilizationDays: 受精后、着床前已经过的天数。',
   '- latestSexDays: 距最近一次性行为经过的天数；超过一个周期后通常会失效。',
   '- age: 角色年龄，单位为年。',
@@ -56,8 +56,8 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '- vitalityLevelText / psyStressLevelText: 系统额外附带的等级文字说明，方便直接理解体质与精神倾向。',
   '',
   '[pregnant]',
-  '- pregnantDays: 这次妊娠在现实中已持续的天数。',
-  '- effectivePregnantDays: 真正计入胎儿发育与阶段推进的有效妊娠天数；当妊娠被冻结时，它可以停在原地而 pregnantDays 继续增加。',
+  '- pregnantDays: 这次妊娠在现实中已经过的天数，使用 0 起算的 elapsed/progress 语义。',
+  '- effectivePregnantDays: 真正计入胎儿发育与阶段推进的有效妊娠天数，使用 0 起算的 elapsed/progress 语义；当妊娠被冻结时，它可以停在原地而 pregnantDays 继续增加。',
   '- laborHours: 产程已消耗的实际时长。',
   '- effectiveLaborHours: 真正推动产程前进的有效时长。',
   '- amnionDurability: 母体层的膜耐性；过低代表接近或已经破水。',
@@ -103,6 +103,14 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '- children[*].derivedType: 孩子继承到的衍生类型；没有则为 null。',
   '- children[*].age: 孩子年龄，单位为年，会随时间推进。',
   '',
+  '[diary]',
+  '- diary 是角色主观日记，保存为数组；existing_state 中只会发送最近几笔，前端完整变量仍会保留全量。',
+  '- diary[*].time: 角色日记中的日期标题，不是具体钟点；应填写故事内日期、年月日、某日/第几天等日期性标题。不要填 HH:mm、午後 这类时刻；若只有时刻信息，请结合上下文写成“今日”“雨夜当日”“第 X 日”等日期标题。',
+  '- diary[*].content: 角色事后写下的主观日记，可包含心境、记忆、误解、愿望、秘密或身体感受；它不是即时心声/旁白，也不是客观状态，不能覆盖数值事实。',
+  '- diary 有 24 小时冷却；同一角色在同一个故事日内最多只能写一篇。若当天已经写过，必须跳过 bsWriteDiary。',
+  '- 通常只有 bsPassedTime 跨日后才调用 bsWriteDiary，并优先写“昨日/前一日/上一天”的回顾。若剧情发生重大事件或 notify 提醒，也应写成事后补记的语气，不要像当下即时独白。',
+  '- 角色不在场也可以写日记；可根据角色性格、处境与已知生活状态补足合理的日常幕外感受，但不要把未经剧情支持的重大事件写成既成事实，也不要用日记改写客观状态。',
+  '',
   '[metabolism]',
   '- 普通种族使用 urine / stool / hunger / sleep，分别对应尿意、便意、饿意、困意。',
   '- 若角色具有 derivedType，则 metabolism 只看 flux。它是 -150 到 150 的单一极性需求值：正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。',
@@ -111,6 +119,8 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '[descriptions]',
   '- normalDescription / closeupDescription / pregnantDescription 为文字描述栏位。',
   '- 三者格式固定为：字段名|描述内容;;字段名|描述内容;;...字段名|描述内容;;',
+  '- 使用 bsSetDescription 时，可以只传需要变化的既有子字段；未传入的子字段会保留旧值。',
+  '- 不要新增角色原本没有的描述子字段；只能更新 existing_state 中该角色该 descriptions 已存在的字段名。',
   '- 不要改写成自然段，不要省略字段名，不要把 ;; 或 | 换成别的分隔方式。',
   '',
   '[notify]',
@@ -120,17 +130,33 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '',
 ].join('\n');
 
+const TRACKER_DIARY_SECTION = [
+  '[diary]',
+  '- diary 是角色主观日记，保存为数组；existing_state 中只会发送最近几笔，前端完整变量仍会保留全量。',
+  '- diary[*].time: 角色日记中的日期标题，不是具体钟点；应填写故事内日期、年月日、某日/第几天等日期性标题。不要填 HH:mm、午後 这类时刻；若只有时刻信息，请结合上下文写成“今日”“雨夜当日”“第 X 日”等日期标题。',
+  '- diary[*].content: 角色事后写下的主观日记，可包含心境、记忆、误解、愿望、秘密或身体感受；它不是即时心声/旁白，也不是客观状态，不能覆盖数值事实。',
+  '- diary 有 24 小时冷却；同一角色在同一个故事日内最多只能写一篇。若当天已经写过，必须跳过 bsWriteDiary。',
+  '- 通常只有 bsPassedTime 跨日后才调用 bsWriteDiary，并优先写“昨日/前一日/上一天”的回顾。若剧情发生重大事件或 notify 提醒，也应写成事后补记的语气，不要像当下即时独白。',
+  '- 角色不在场也可以写日记；可根据角色性格、处境与已知生活状态补足合理的日常幕外感受，但不要把未经剧情支持的重大事件写成既成事实，也不要用日记改写客观状态。',
+  '',
+].join('\n');
+
 function buildTrackerMetabolismGuide(payload = null) {
   const fluxNames = collectRelevantFluxNames(payload || {});
+  const diaryEnabled = payload?.diary_enabled !== false;
+  const baseGuide = diaryEnabled
+    ? TRACKER_VARIABLE_GUIDE_PROMPT
+    : TRACKER_VARIABLE_GUIDE_PROMPT.replace(`${TRACKER_DIARY_SECTION}\n`, '');
   return fluxNames.length > 0
-    ? TRACKER_VARIABLE_GUIDE_PROMPT.replace(
+    ? baseGuide.replace(
       '- 若角色具有 derivedType，则 metabolism 只看 flux。它是 -150 到 150 的单一极性需求值：正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。',
       `- 若角色具有 derivedType，则 metabolism 只看 flux。它是 -150 到 150 的单一极性需求值；在本轮相关衍生种族中，flux 分别表示：${fluxNames.join(' / ')}。正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。`,
     )
-    : TRACKER_VARIABLE_GUIDE_PROMPT;
+    : baseGuide;
 }
 
 export function buildTrackerSystemPrompt(basePrompt = '', descriptionGuides = null, payload = null) {
+  const diaryEnabled = payload?.diary_enabled !== false;
   const metabolismGuide = buildTrackerMetabolismGuide(payload);
   const parts = [
     [
@@ -154,6 +180,9 @@ export function buildTrackerSystemPrompt(basePrompt = '', descriptionGuides = nu
   }
   const embryoTypeLorePrompt = buildEmbryoTypeLorePrompt(payload || {});
   if (embryoTypeLorePrompt) parts.push(embryoTypeLorePrompt);
+  if (!diaryEnabled) {
+    parts.push('[diary]\n- diary 系统当前已关闭（settings.diaryRecentLimit = 0）。本轮不要参考 diary，也不要调用 bsWriteDiary。');
+  }
 
   if (descriptionGuides) {
     parts.push([

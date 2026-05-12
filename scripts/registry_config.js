@@ -20,3 +20,6 @@ export const DEFAULT_REGISTRY_DESCRIPTION_GUIDES = Object.freeze({
   风险|角色妊娠的特性、并发症及风险评估
   护理|角色对产前护理采取的行动，包含是否产检、遵照医嘱`,
 });
+
+export const DEFAULT_DIARY_WRITING_PROMPT = `
+日期訂為角色登場的前一天，内容通常至少三段，围绕当天事件、身体感受、自我解释、情绪反刍与角色式收尾展开；可以有停顿、遮掩、否认、矛盾与记忆偏差。`.trim();

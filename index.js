@@ -16,7 +16,13 @@ import {
   OVOVIVIPAROUS_RACES,
   VIVIPAROUS_RACES,
 } from './scripts/race_config.js';
-import { LABOR_STAGES, MENSTRUAL_STAGE_DAYS, PREGNANCY_STAGE_DAYS } from './scripts/stage_config.js';
+import {
+  LABOR_STAGES,
+  LABOR_STAGE_BASE_HOURS,
+  LABOR_STAGE_INCREMENT,
+  MENSTRUAL_STAGE_DAYS,
+  PREGNANCY_STAGE_DAYS,
+} from './scripts/stage_config.js';
 import { buildMainFlowPrompt, resetPoller, runTracker } from './scripts/tracker.js';
 import { applyToolCall } from './scripts/tools.js';
 import { getEmbryoTypeReferenceText } from './scripts/embryo_prompt_context.js';
@@ -47,7 +53,7 @@ const MENU_ITEM_ID = 'bs-biotracker-menu-item';
 const MENU_API_ID = 'bs-biotracker-menu-api';
 const MAINFLOW_PROMPT_KEY = `${MODULE_NAME}_mainflow`;
 const LAST_VIEW_STORAGE_KEY = `${MODULE_NAME}_last_view`;
-const TRACK_SUBPAGES = ['overview', 'description', 'pregnancy', 'experience', 'debug'];
+const TRACK_SUBPAGES = ['overview', 'description', 'pregnancy', 'experience', 'diary'];
 const MAX_PROGRESS_BAR_CAP = 200;
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
@@ -72,6 +78,7 @@ const VITALITY_CAPS = { 1: 50, 2: 75, 3: 100, 4: 125, 5: 150, 6: 175, 7: 200 };
 const PSY_STRESS_CAPS = { 1: 20, 2: 50, 3: 80, 4: 110, 5: 140, 6: 170, 7: 200 };
 
 let selectedFullStateName = '';
+let selectedFullStateSubpage = 'variables';
 let selectedTrackName = '';
 let selectedTrackSubpage = 'overview';
 let selectedTrackCardIndexes = {};
@@ -1014,7 +1021,7 @@ function getStageProgress(profile) {
     return {
       label: '产程进度',
       value: Number(pregnant.effectiveLaborHours) || 0,
-      max: stage === '第一产程' ? 12 : stage === '第二产程' ? 2 : 1,
+      max: getLaborStageThreshold(profile, stage) || (stage === '第一产程' ? 12 : stage === '第二产程' ? 2 : 1),
       unit: 'h',
     };
   }
@@ -1025,9 +1032,88 @@ function getStageProgress(profile) {
     return { label: '阶段进度', value: Number(base.days) || 0, max: 28, unit: 'd' };
   }
   if (Object.prototype.hasOwnProperty.call(MENSTRUAL_STAGE_DAYS, stage)) {
-    return { label: '阶段进度', value: Number(base.days) || 0, max: MENSTRUAL_STAGE_DAYS[stage], unit: 'd' };
+    const ratio = Math.max(0.1, Math.min(20, Number(profile?.bio?.menstrualLengthRatio) || 1));
+    return {
+      label: '阶段进度',
+      value: Number(base.days) || 0,
+      max: Math.max(1, MENSTRUAL_STAGE_DAYS[stage] * ratio),
+      unit: 'd',
+    };
   }
   return { label: '阶段进度', value: Number(base.days) || 0, max: 1, unit: 'd' };
+}
+
+function wrapLaborAngle(angle) {
+  const normalized = Number(angle);
+  if (!Number.isFinite(normalized)) return 0;
+  return ((normalized % 360) + 360) % 360;
+}
+
+function getLaborPositionDifficulty(angle, fetus) {
+  const normalized = wrapLaborAngle(angle);
+  const embryoType = String(fetus?.embryoType || '胎生');
+
+  if (embryoType === '胎转卵生') {
+    const targetAngles = [0, 90, 180, 270, 360];
+    let minDistance = 360;
+    for (const targetAngle of targetAngles) {
+      let distance = Math.abs(normalized - targetAngle);
+      if (targetAngle === 360) distance = Math.min(distance, Math.abs(normalized - 0));
+      if (distance < minDistance) minDistance = distance;
+    }
+    if (minDistance <= 5) return 1.5;
+    return Math.min(2.25, 1.5 + ((minDistance - 5) * 0.075));
+  }
+
+  if (embryoType === '不定型') {
+    const race = String(fetus?.race || '人类');
+    const combinedSeed = Math.round(normalized * 1000) + race.charCodeAt(0) + race.charCodeAt(Math.max(0, race.length - 1));
+    const seededValue = ((combinedSeed * 1664525 + 1013904223) % 2147483648) / 2147483648;
+    return 1.0 + seededValue;
+  }
+
+  if (embryoType === '卵胎生') {
+    if ((normalized >= 0 && normalized <= 5) || (normalized >= 355 && normalized <= 360)) return 1.0;
+    if ((normalized >= 0 && normalized <= 15) || (normalized >= 345 && normalized <= 360)) return 1.25;
+    if (normalized >= 175 && normalized <= 185) return 1.5;
+    if (normalized >= 165 && normalized <= 195) return 1.75;
+    if ((normalized >= 85 && normalized <= 95) || (normalized >= 275 && normalized <= 285)) return 2.0;
+    if ((normalized >= 75 && normalized <= 105) || (normalized >= 265 && normalized <= 285)) return 2.25;
+    return 1.33;
+  }
+
+  if (embryoType === '卵生') {
+    if ((normalized >= 0 && normalized <= 15) || (normalized >= 345 && normalized <= 360)) return 1.0;
+    if (normalized >= 165 && normalized <= 195) return 1.0;
+    if ((normalized >= 75 && normalized <= 105) || (normalized >= 265 && normalized <= 285)) return 1.5;
+    return 1.33;
+  }
+
+  if ((normalized >= 0 && normalized <= 15) || (normalized >= 345 && normalized <= 360)) return 1.0;
+  if (normalized >= 165 && normalized <= 195) return 1.5;
+  if ((normalized >= 75 && normalized <= 105) || (normalized >= 265 && normalized <= 285)) return 2.0;
+  return 1.33;
+}
+
+function getLaborStageThreshold(profile, stage) {
+  if (!LABOR_STAGES.includes(stage)) return null;
+  const pregnant = profile?.pregnant || {};
+  const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+  const birthDifficulty = Math.max(0.1, Math.min(100, Number(profile?.bio?.birthDifficulty) || 1));
+  const safeCount = Math.max(1, fetuses.length);
+  const baseHours = Number(LABOR_STAGE_BASE_HOURS[stage]) || 0;
+  const increment = Number(LABOR_STAGE_INCREMENT[stage]) || 0;
+  let threshold = (baseHours + ((safeCount - 1) * increment)) * birthDifficulty;
+
+  if (stage === '第二产程' && fetuses.length > 0) {
+    const firstFetus = fetuses[0];
+    const fetalAngle = Number.isFinite(Number(firstFetus?.tendencyAngle)) ? wrapLaborAngle(firstFetus.tendencyAngle) : 0;
+    const positionDifficulty = getLaborPositionDifficulty(fetalAngle, firstFetus);
+    const fetalWeight = Math.max(0.5, Math.min(2.0, Number(firstFetus?.weight) || 1.0));
+    threshold = ((Number(LABOR_STAGE_BASE_HOURS['第二产程']) || 0) * birthDifficulty) * positionDifficulty * fetalWeight;
+  }
+
+  return Math.max(0.1, threshold);
 }
 
 function getLibidoCap(stage, profile = null) {
@@ -1189,6 +1275,9 @@ function buildRadarSvg(items) {
 }
 
 function buildTrackCharacterViewModel(character) {
+  const runtimeCtx = getContextSafe();
+  const runtimeSettings = runtimeCtx ? getSettings(runtimeCtx) : null;
+  const diaryEnabled = Math.max(0, Math.min(20, Math.floor(Number(runtimeSettings?.diaryRecentLimit) || 0))) > 0;
   const profile = character?.profile || {};
   const base = profile.base || {};
   const pregnant = profile.pregnant || {};
@@ -1203,6 +1292,9 @@ function buildTrackCharacterViewModel(character) {
   const totalSperm = (Array.isArray(base.sperms) ? base.sperms : []).reduce((sum, item) => sum + (Number(item?.value) || 0), 0);
   return {
     name: character?.name || '未命名',
+    base: {
+      stage,
+    },
     overview: {
       raceLabel: formatRaceLabel(base.race, base.derivedType),
       age: Number.isFinite(Number(base.age)) ? Math.round(Number(base.age)) : null,
@@ -1231,6 +1323,7 @@ function buildTrackCharacterViewModel(character) {
     },
     pregnancy: {
       eggs: Number(base.eggs) || 0,
+      fertilizationDays: Number(base.fertilizationDays) || 0,
       totalSperm,
       sperms: Array.isArray(base.sperms) ? base.sperms : [],
       pregnantDays: Number(pregnant.pregnantDays) || 0,
@@ -1239,7 +1332,7 @@ function buildTrackCharacterViewModel(character) {
       amnionDurability: Number(pregnant.amnionDurability) || 0,
       fetuses: Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [],
       pregnantBlocks: parseDescriptionBlocks(descriptions.pregnantDescription),
-      showPregnantFields: isPregnantStage(stage) || (Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0),
+      showPregnantFields: isPregnantStage(stage),
       showLaborFields: LABOR_STAGES.includes(stage),
       gestationModifier: {
         name: String(bio.gestationModifierName || '').trim(),
@@ -1261,6 +1354,10 @@ function buildTrackCharacterViewModel(character) {
         ['流产/堕胎', `${Number(experience.miscarriageExperience) || 0}次`],
       ],
       children: Array.isArray(profile.children) ? profile.children : [],
+    },
+    diary: {
+      enabled: diaryEnabled,
+      entries: Array.isArray(profile.diary) ? profile.diary : [],
     },
     debug: {
       immune: {
@@ -1286,8 +1383,10 @@ function buildTrackCharacterViewModel(character) {
   };
 }
 
-function renderDescriptionGroup(title, blocks) {
+function renderDescriptionGroup(title, blocks, options = {}) {
   const items = Array.isArray(blocks) ? blocks : [];
+  const sectionClass = `bs-bt-track-section${options.sectionClass ? ` ${escapeHtml(options.sectionClass)}` : ''}`;
+  const sectionStyle = options.sectionStyle ? ` style="${escapeHtml(options.sectionStyle)}"` : '';
   const html =
     items.length > 0
       ? items
@@ -1299,7 +1398,7 @@ function renderDescriptionGroup(title, blocks) {
         )
         .join('')
       : '<div class="bs-bt-track-description-empty">暂无内容</div>';
-  return `<div class="bs-bt-track-section"><div class="bs-bt-track-section-title">${escapeHtml(title)}</div><div class="bs-bt-track-description-list">${html}</div></div>`;
+  return `<div class="${sectionClass}"${sectionStyle}><div class="bs-bt-track-section-title">${escapeHtml(title)}</div><div class="bs-bt-track-description-list">${html}</div></div>`;
 }
 
 function renderProgressList(items) {
@@ -1309,8 +1408,9 @@ function renderProgressList(items) {
       const cap = Math.max(1, Number(item.cap) || 1);
       const fill = `${Math.min(100, (value / cap) * 100)}%`;
       const scale = `${Math.max(25, (cap / MAX_PROGRESS_BAR_CAP) * 100)}%`;
+      const displayValue = String(Math.floor(value));
       return `<div class="bs-bt-track-progress">
-        <div class="bs-bt-track-progress-head"><span>${escapeHtml(item.label)}</span><span>${Math.round(value)} / ${cap}</span></div>
+        <div class="bs-bt-track-progress-head"><span>${escapeHtml(item.label)}</span><span>${displayValue} / ${cap}</span></div>
         <div class="bs-bt-track-progress-bar" style="width:${scale};"><div class="bs-bt-track-progress-fill" style="width:${fill};"></div></div>
       </div>`;
     })
@@ -1324,11 +1424,21 @@ function renderCardList(items, renderCard, emptyText) {
   return `<div class="bs-bt-track-cards">${items.map((item, index) => renderCard(item, index)).join('')}</div>`;
 }
 
-function renderCardCarouselSection(title, items, renderCard, emptyText, kind) {
+function renderTrackTitle(title, badge = '') {
+  const badgeHtml = String(badge || '').trim()
+    ? `<span class="bs-bt-track-title-badge">${escapeHtml(badge)}</span>`
+    : '';
+  return `<span class="bs-bt-track-title-main">${escapeHtml(title)}</span>${badgeHtml}`;
+}
+
+function renderCardCarouselSection(title, items, renderCard, emptyText, kind, options = {}) {
+  const titleHtml = renderTrackTitle(title, options.badge);
+  const sectionClass = `bs-bt-track-section${options.sectionClass ? ` ${escapeHtml(options.sectionClass)}` : ''}`;
+  const sectionStyle = options.sectionStyle ? ` style="${escapeHtml(options.sectionStyle)}"` : '';
   if (!Array.isArray(items) || items.length === 0) {
     return `
-      <div class="bs-bt-track-section">
-        <div class="bs-bt-track-section-title">${escapeHtml(title)}</div>
+      <div class="${sectionClass}"${sectionStyle}>
+        <div class="bs-bt-track-section-title">${titleHtml}</div>
         <div class="bs-bt-track-card-empty">${escapeHtml(emptyText)}</div>
       </div>
     `;
@@ -1338,13 +1448,13 @@ function renderCardCarouselSection(title, items, renderCard, emptyText, kind) {
   const currentItem = items[currentIndex];
   const showNav = items.length > 1;
   return `
-    <div class="bs-bt-track-section">
-      <div class="bs-bt-track-section-title" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
-        <span>${escapeHtml(title)}</span>
+    <div class="${sectionClass}"${sectionStyle}>
+      <div class="bs-bt-track-section-title bs-bt-track-section-title--split">
+        <span class="bs-bt-track-title-left">${titleHtml}</span>
         <span style="display:flex;align-items:center;gap:8px;">
           ${showNav
-            ? `<button type="button" class="menu_button" data-card-nav="${escapeHtml(kind)}" data-card-step="-1" style="min-width:32px;padding:2px 8px;">◀</button>
-               <button type="button" class="menu_button" data-card-nav="${escapeHtml(kind)}" data-card-step="1" style="min-width:32px;padding:2px 8px;">▶</button>`
+            ? `<button type="button" class="menu_button" data-card-nav="${escapeHtml(kind)}" data-card-step="-1" data-card-count="${items.length}" style="min-width:32px;padding:2px 8px;">◀</button>
+               <button type="button" class="menu_button" data-card-nav="${escapeHtml(kind)}" data-card-step="1" data-card-count="${items.length}" style="min-width:32px;padding:2px 8px;">▶</button>`
             : ''
           }
         </span>
@@ -1356,6 +1466,9 @@ function renderCardCarouselSection(title, items, renderCard, emptyText, kind) {
 
 function renderTrackOverview(viewModel) {
   const progress = viewModel.overview.stageProgress;
+  const stageBadge = viewModel.pregnancy?.showLaborFields
+    ? `产程 ${Math.floor(Number(viewModel.pregnancy?.laborHours) || 0)}h`
+    : '';
   const progressHtml = progress
     ? renderProgressList([{ label: viewModel.overview.stage, value: progress.value, cap: progress.max }])
     : '';
@@ -1369,7 +1482,7 @@ function renderTrackOverview(viewModel) {
       </div>
     </div>
     <div class="bs-bt-track-section">
-      <div class="bs-bt-track-section-title">阶段</div>
+      <div class="bs-bt-track-section-title">${renderTrackTitle('阶段', stageBadge)}</div>
       ${progressHtml}
     </div>
     <div class="bs-bt-track-section">
@@ -1392,11 +1505,16 @@ function renderTrackOverview(viewModel) {
 }
 
 function renderTrackDescription(viewModel) {
-  const psychology = viewModel.description.psychology;
-  const flags = Array.isArray(psychology.flags) ? psychology.flags : [];
   return `
     ${renderDescriptionGroup('基本描述', viewModel.description.normalBlocks)}
     ${renderDescriptionGroup('特写描述', viewModel.description.closeupBlocks)}
+  `;
+}
+
+function renderTrackPsychology(viewModel) {
+  const psychology = viewModel.description.psychology;
+  const flags = Array.isArray(psychology.flags) ? psychology.flags : [];
+  return `
     <div class="bs-bt-track-section">
       <div class="bs-bt-track-section-title">${escapeHtml(psychology.title)}</div>
       <div class="bs-bt-track-radar-wrap">${buildRadarSvg(psychology.items)}</div>
@@ -1415,28 +1533,27 @@ function renderTrackDescription(viewModel) {
 function renderTrackPregnancy(viewModel) {
   const data = viewModel.pregnancy;
   const gestationModifier = data.gestationModifier || {};
+  const fertilityBadge = data.showPregnantFields
+    ? '已怀孕'
+    : (Number(data.eggs) > 0 || Number(data.fertilizationDays) > 0 || (Array.isArray(data.fetuses) && data.fetuses.length > 0))
+      ? '危险期'
+      : '安全期';
+  const pregnantDaysBadge = data.showPregnantFields
+    ? `妊娠 ${Math.floor(Number(data.pregnantDays) || 0)}d`
+    : '';
+  const amnionDurability = Math.max(0, Math.min(100, Number(data.amnionDurability) || 0));
+  const pregnantDescriptionOptions = data.showLaborFields
+    ? {
+      sectionClass: 'bs-bt-track-section--amnion',
+      sectionStyle: `--bsbt-amnion-ratio:${amnionDurability / 100};`,
+    }
+    : {};
   const hasGestationModifier = Boolean(
     String(gestationModifier.name || '').trim()
     || String(gestationModifier.description || '').trim()
     || Math.abs(Number(gestationModifier.multiplier ?? 1) - 1) > 0.000001,
   );
   return `
-    <div class="bs-bt-track-section">
-      <div class="bs-bt-track-section-title">孕育概况</div>
-      <div class="bs-bt-track-meta">
-        <div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">卵子</span><span class="bs-bt-track-meta-value">${data.eggs}</span></div>
-        <div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">精液</span><span class="bs-bt-track-meta-value">${Math.round(data.totalSperm)}</span></div>
-        ${data.showPregnantFields
-      ? `<div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">妊娠天数</span><span class="bs-bt-track-meta-value">${Math.floor(Number(data.pregnantDays) || 0)}</span></div>`
-      : ''
-    }
-        ${data.showLaborFields
-      ? `<div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">分娩时数</span><span class="bs-bt-track-meta-value">${Math.floor(Number(data.laborHours) || 0)}</span></div>
-               <div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">羊膜耐久</span><span class="bs-bt-track-meta-value">${data.amnionDurability}</span></div>`
-      : ''
-    }
-      </div>
-    </div>
     ${hasGestationModifier ? `<div class="bs-bt-track-section">
       <div class="bs-bt-track-section-title">妊娠变速效果</div>
       <div class="bs-bt-track-meta">
@@ -1456,6 +1573,7 @@ function renderTrackPregnancy(viewModel) {
         </div>`,
       '当前无精液残留',
       'sperms',
+      { badge: fertilityBadge },
     )}
     ${data.showPregnantFields
       ? `${renderCardCarouselSection(
@@ -1474,8 +1592,9 @@ function renderTrackPregnancy(viewModel) {
               </div>`,
         '当前无妊娠胎儿资料',
         'fetuses',
+        { badge: pregnantDaysBadge },
       )}
-          ${renderDescriptionGroup('孕态描述', data.pregnantBlocks)}`
+          ${renderDescriptionGroup('孕态描述', data.pregnantBlocks, pregnantDescriptionOptions)}`
       : ''
     }
   `;
@@ -1507,6 +1626,24 @@ function renderTrackExperience(viewModel) {
         '当前无孩子记录',
       'children',
     )}
+  `;
+}
+
+function renderTrackDiary(viewModel) {
+  const diaryEnabled = viewModel.diary?.enabled !== false;
+  const entries = Array.isArray(viewModel.diary?.entries) ? viewModel.diary.entries : [];
+  return `
+    ${renderTrackPsychology(viewModel)}
+    ${diaryEnabled ? renderCardCarouselSection(
+      '日记',
+      entries,
+      (item, index) => `<div class="bs-bt-track-card">
+        <div class="bs-bt-track-card-title">${escapeHtml(item?.time || `日记 ${index + 1}`)}</div>
+        <div class="bs-bt-track-card-note">${escapeHtml(item?.content || '')}</div>
+      </div>`,
+      '当前无日记记录',
+      'diary',
+    ) : ''}
   `;
 }
 
@@ -1637,7 +1774,7 @@ function renderTrackCharacterContent(viewModel) {
   if (selectedTrackSubpage === 'description') return renderTrackDescription(viewModel);
   if (selectedTrackSubpage === 'pregnancy') return renderTrackPregnancy(viewModel);
   if (selectedTrackSubpage === 'experience') return renderTrackExperience(viewModel);
-  if (selectedTrackSubpage === 'debug') return renderTrackDebug(viewModel);
+  if (selectedTrackSubpage === 'diary') return renderTrackDiary(viewModel);
   return renderTrackOverview(viewModel);
 }
 
@@ -1657,6 +1794,7 @@ function toggleSelectedTrackImmune(ctx, immuneKey) {
   recordChatStateSnapshot(ctx, chatState, { reason: `debug_immune_${immuneKey}` });
   saveSettings(ctx);
   renderStatusPanel(ctx);
+  renderFullStatePage(ctx);
   globalThis.toastr?.success?.(
     `[BS BioTracker] ${selectedTrackName} 的 ${immuneKey === 'metabolism' ? '代谢免疫' : '流产免疫'}已${nextValue ? '开启' : '关闭'}`,
   );
@@ -1691,6 +1829,7 @@ function injectSelectedTrackPregnancy(ctx) {
   recordChatStateSnapshot(ctx, chatState, { reason: 'debug_inject_pregnancy' });
   saveSettings(ctx);
   renderStatusPanel(ctx);
+  renderFullStatePage(ctx);
   globalThis.toastr?.success?.(`[BS BioTracker] 已为 ${selectedTrackName} 注入调试妊娠状态`);
 }
 
@@ -1732,6 +1871,7 @@ function applySelectedTrackGestationModifier(ctx, clear = false) {
   recordChatStateSnapshot(ctx, chatState, { reason: clear ? 'debug_clear_gestation_modifier' : 'debug_set_gestation_modifier' });
   saveSettings(ctx);
   renderStatusPanel(ctx);
+  renderFullStatePage(ctx);
   globalThis.toastr?.success?.(
     clear
       ? `[BS BioTracker] 已清除 ${selectedTrackName} 的妊娠变速效果`
@@ -1758,8 +1898,151 @@ function clearSelectedTrackContainer(ctx, container) {
   recordChatStateSnapshot(ctx, chatState, { reason: `debug_clear_${container}` });
   saveSettings(ctx);
   renderStatusPanel(ctx);
+  renderFullStatePage(ctx);
   const label = container === 'sperms' ? '精液' : container === 'fetuses' ? '胎儿' : '孩子';
   globalThis.toastr?.success?.(`[BS BioTracker] 已为 ${selectedTrackName} 淨空${label}`);
+}
+
+function bindDebugPanelControls(ctx, root, refresh = () => renderFullStatePage(ctx)) {
+  if (!root) return;
+  root.querySelectorAll('[data-debug-immune]').forEach((node) =>
+    node.addEventListener('click', () => {
+      toggleSelectedTrackImmune(ctx, String(node.dataset.debugImmune || ''));
+    }),
+  );
+  root.querySelectorAll('[data-debug-action="inject-pregnancy"]').forEach((node) =>
+    node.addEventListener('click', () => {
+      injectSelectedTrackPregnancy(ctx);
+    }),
+  );
+  root.querySelectorAll('[data-debug-action="set-gestation-modifier"]').forEach((node) =>
+    node.addEventListener('click', () => {
+      applySelectedTrackGestationModifier(ctx, false);
+    }),
+  );
+  root.querySelectorAll('[data-debug-action="clear-gestation-modifier"]').forEach((node) =>
+    node.addEventListener('click', () => {
+      applySelectedTrackGestationModifier(ctx, true);
+    }),
+  );
+  root.querySelectorAll('[data-debug-action="set-phase"]').forEach((node) =>
+    node.addEventListener('click', () => {
+      const stage = root.querySelector('#bs-bt-debug-phase-select')?.value;
+      if (!stage || !selectedTrackName) return;
+      const settings = getSettings(ctx);
+      const chatState = getChatState(ctx, settings);
+      const result = applyToolCall(chatState, {
+        name: 'bsSetMenstrualPhases',
+        arguments: { female: selectedTrackName, stage },
+      });
+      if (!result?.applied) {
+        globalThis.toastr?.warning?.(result?.message || '[BS BioTracker] 切换失败');
+        return;
+      }
+      recordChatStateSnapshot(ctx, chatState, { reason: 'debug_set_phase' });
+      saveSettings(ctx);
+      renderStatusPanel(ctx);
+      renderFullStatePage(ctx);
+      globalThis.toastr?.success?.(`[BS BioTracker] 已强制将 ${selectedTrackName} 切換至 ${stage}`);
+    }),
+  );
+  root.querySelectorAll('[data-debug-clear]').forEach((node) =>
+    node.addEventListener('click', () => {
+      clearSelectedTrackContainer(ctx, String(node.getAttribute('data-debug-clear') || ''));
+    }),
+  );
+  root.querySelector('#bs-bt-debug-father')?.addEventListener('input', (event) => {
+    debugInjectDraft.father = String(event.target?.value || '');
+  });
+  root.querySelector('#bs-bt-debug-race')?.addEventListener('input', (event) => {
+    debugInjectDraft.race = String(event.target?.value || '');
+  });
+  root.querySelector('#bs-bt-debug-count')?.addEventListener('input', (event) => {
+    debugInjectDraft.fetusCount = String(event.target?.value || '1');
+  });
+  root.querySelector('#bs-bt-debug-genders')?.addEventListener('input', (event) => {
+    debugInjectDraft.genders = String(event.target?.value || '');
+  });
+  root.querySelector('#bs-bt-debug-days')?.addEventListener('input', (event) => {
+    debugInjectDraft.equivalentDays = String(event.target?.value || '0');
+  });
+  root.querySelector('#bs-bt-debug-gestation-name')?.addEventListener('input', (event) => {
+    debugGestationModifierDraft.owner = selectedTrackName;
+    debugGestationModifierDraft.name = String(event.target?.value || '');
+  });
+  root.querySelector('#bs-bt-debug-gestation-multiplier')?.addEventListener('input', (event) => {
+    debugGestationModifierDraft.owner = selectedTrackName;
+    debugGestationModifierDraft.multiplier = String(event.target?.value || '');
+  });
+  root.querySelector('#bs-bt-debug-gestation-description')?.addEventListener('input', (event) => {
+    debugGestationModifierDraft.owner = selectedTrackName;
+    debugGestationModifierDraft.description = String(event.target?.value || '');
+  });
+  root.querySelectorAll('[data-race-picker-target]').forEach((node) =>
+    node.addEventListener('click', () => {
+      const target = String(node.dataset.racePickerTarget || '');
+      if (racePaletteState.isOpen && racePaletteState.targetInputId === target) closeRacePalettePopover();
+      else openRacePalettePopover(target);
+      refresh();
+    }),
+  );
+  root.querySelector('#bs-bt-race-derived')?.addEventListener('change', (event) => {
+    racePaletteState.selectedDerivedType = String(event.target?.value || '');
+    refresh();
+  });
+  root.querySelector('#bs-bt-race-derived-subtype')?.addEventListener('input', (event) => {
+    racePaletteState.derivedSubtype = String(event.target?.value || '');
+  });
+  root.querySelector('#bs-bt-race-primary')?.addEventListener('change', (event) => {
+    racePaletteState.selectedRace = String(event.target?.value || '人类');
+    refresh();
+  });
+  root.querySelector('#bs-bt-race-subtype')?.addEventListener('input', (event) => {
+    racePaletteState.subtype = String(event.target?.value || '');
+  });
+  root.querySelectorAll('[data-race-remove-index]').forEach((node) =>
+    node.addEventListener('click', () => {
+      const index = Number(node.getAttribute('data-race-remove-index'));
+      if (!Number.isInteger(index) || index < 0) return;
+      racePaletteState.raceTags = racePaletteState.raceTags.filter((_, entryIndex) => entryIndex !== index);
+      refresh();
+    }),
+  );
+  root.querySelector('[data-race-action="append"]')?.addEventListener('click', () => {
+    const raceName = String(racePaletteState.selectedRace || '').trim();
+    const subtype = String(racePaletteState.subtype || '').trim();
+    const raceTag = raceName ? `${raceName}${subtype ? `-${subtype}` : ''}` : '';
+    if (!raceTag) {
+      globalThis.toastr?.warning?.('[BS BioTracker] 请先选择种族');
+      return;
+    }
+    racePaletteState.raceTags = [...racePaletteState.raceTags, raceTag];
+    racePaletteState.selectedRace = '人类';
+    racePaletteState.subtype = '';
+    refresh();
+  });
+  root.querySelector('[data-race-action="cancel"]')?.addEventListener('click', () => {
+    closeRacePalettePopover();
+    refresh();
+    refreshRegisterRacePalette();
+  });
+  root.querySelector('[data-race-action="confirm"]')?.addEventListener('click', () => {
+    const descriptor = buildRacePaletteDescriptor(racePaletteState);
+    if (!descriptor) {
+      globalThis.toastr?.warning?.('[BS BioTracker] 请先加入至少一个种族 tag');
+      return;
+    }
+    const target = document.getElementById(racePaletteState.targetInputId);
+    if (!target) return;
+    const current = String(target.value || '').trim();
+    target.value = isRegisterRaceTarget(racePaletteState.targetInputId) ? descriptor : (current ? `${current},${descriptor}` : descriptor);
+    if (racePaletteState.targetInputId === 'bs-bt-debug-race') {
+      debugInjectDraft.race = target.value;
+    }
+    closeRacePalettePopover();
+    refresh();
+    refreshRegisterRacePalette();
+  });
 }
 
 function openRacePalettePopover(targetInputId) {
@@ -1850,18 +2133,21 @@ function renderStatusPanel(ctx) {
   if (latestCall) {
     const toolCalls = Array.isArray(chatState.lastRawResult?.tool_calls) ? chatState.lastRawResult.tool_calls : [];
     const operationLogs = Array.isArray(chatState.lastOperationLogs) ? chatState.lastOperationLogs : [];
-    const lastCallView = {
-      tool_calls: toolCalls,
-      operation_logs: operationLogs,
-    };
-    if (chatState.lastRawResult?.message) lastCallView.message = chatState.lastRawResult.message;
-    if (chatState.lastRawResult?.error) lastCallView.error = chatState.lastRawResult.error;
-    latestCall.textContent =
-      toolCalls.length > 0 || operationLogs.length > 0
-        ? JSON.stringify(lastCallView, null, 2)
-        : chatState.lastRawResult
-          ? JSON.stringify(chatState.lastRawResult, null, 2)
-          : '尚无数据';
+    if (toolCalls.length > 0 || operationLogs.length > 0) {
+      const toolCallView = { tool_calls: toolCalls };
+      if (chatState.lastRawResult?.message) toolCallView.message = chatState.lastRawResult.message;
+      if (chatState.lastRawResult?.error) toolCallView.error = chatState.lastRawResult.error;
+      latestCall.innerHTML = [
+        `<pre class="bs-bt-debug-json">${escapeHtml(JSON.stringify(toolCallView, null, 2))}</pre>`,
+        operationLogs.length > 0
+          ? `<details class="bs-bt-debug-details"><summary>执行结果 (${operationLogs.length})</summary><pre class="bs-bt-debug-json">${escapeHtml(JSON.stringify(operationLogs, null, 2))}</pre></details>`
+          : '',
+      ].join('');
+    } else {
+      latestCall.textContent = chatState.lastRawResult
+        ? JSON.stringify(chatState.lastRawResult, null, 2)
+        : '尚无数据';
+    }
   }
 
   if (characters.length === 0) {
@@ -1915,6 +2201,7 @@ function renderStatusPanel(ctx) {
       if (kind === 'sperms') items = Array.isArray(viewModel?.pregnancy?.sperms) ? viewModel.pregnancy.sperms : [];
       if (kind === 'fetuses') items = Array.isArray(viewModel?.pregnancy?.fetuses) ? viewModel.pregnancy.fetuses : [];
       if (kind === 'children') items = Array.isArray(viewModel?.experience?.children) ? viewModel.experience.children : [];
+      if (kind === 'diary') items = Array.isArray(viewModel?.diary?.entries) ? viewModel.diary.entries : [];
       if (items.length <= 1) return;
       const currentIndex = getTrackCardIndex(kind, items.length);
       const nextIndex = (currentIndex + step + items.length) % items.length;
@@ -2096,6 +2383,17 @@ function updateFullStateControls() {
   if (resetButton) resetButton.disabled = false;
 }
 
+function updateFullStateSubpage() {
+  if (!['variables', 'debug'].includes(selectedFullStateSubpage)) selectedFullStateSubpage = 'variables';
+  const varsPanel = document.getElementById('bs-bt-full-state-vars-panel');
+  const debugSection = document.getElementById('bs-bt-full-state-debug-section');
+  if (varsPanel) varsPanel.hidden = selectedFullStateSubpage !== 'variables';
+  if (debugSection) debugSection.hidden = selectedFullStateSubpage !== 'debug';
+  document.querySelectorAll('#bs-bt-full-state-tabs [data-full-state-tab]').forEach((node) => {
+    node.classList.toggle('is-active', String(node.getAttribute('data-full-state-tab') || '') === selectedFullStateSubpage);
+  });
+}
+
 function getFullStateEditorText(character) {
   return JSON.stringify(cloneJsonValue(character), null, 2);
 }
@@ -2265,6 +2563,7 @@ function renderFullStatePage(ctx) {
   const chatState = getChatState(ctx, settings);
   const list = document.getElementById('bs-bt-home-full-state-list');
   const output = document.getElementById('bs-bt-full-state-output');
+  const debugPanel = document.getElementById('bs-bt-full-state-debug-panel');
   if (!list || !output) return;
   const names = Object.keys(chatState.characters || {});
   list.innerHTML = '';
@@ -2276,7 +2575,9 @@ function renderFullStatePage(ctx) {
     selectedFullStateName = '';
     output.value = '请选择角色查看完整变量。';
     setFullStateEditStatus('请选择角色后再编辑。');
+    if (debugPanel) debugPanel.innerHTML = '<div class="bs-bt-connect-status">请选择角色后使用调试工具。</div>';
     updateFullStateControls();
+    updateFullStateSubpage();
     closeFullStateConfirm();
     return;
   }
@@ -2295,13 +2596,21 @@ function renderFullStatePage(ctx) {
   }
 
   if (selectedFullStateName && chatState.characters[selectedFullStateName]) {
-    output.value = getFullStateEditorText(chatState.characters[selectedFullStateName]);
+    const current = chatState.characters[selectedFullStateName];
+    selectedTrackName = selectedFullStateName;
+    output.value = getFullStateEditorText(current);
     setFullStateEditStatus('可直接编辑 JSON，应用前会检查格式与基础结构。');
+    if (debugPanel) {
+      debugPanel.innerHTML = renderTrackDebug(buildTrackCharacterViewModel(current));
+      bindDebugPanelControls(ctx, debugPanel, () => renderFullStatePage(ctx));
+    }
   } else {
     output.value = '请选择角色查看完整变量。';
     setFullStateEditStatus('请选择角色后再编辑。');
+    if (debugPanel) debugPanel.innerHTML = '<div class="bs-bt-connect-status">请选择角色后使用调试工具。</div>';
   }
   updateFullStateControls();
+  updateFullStateSubpage();
   closeFullStateConfirm();
 }
 
@@ -2328,7 +2637,7 @@ function updateClock(settings) {
     days = days % 30;
     timeEl.textContent = days > 0 ? `${m}个月${days}天` : `${m}个月`;
   } else if (days > 0) {
-    timeEl.textContent = `第 ${days} 天`;
+    timeEl.textContent = `第 ${days + 1} 天`;
   } else if (hrs > 0) {
     timeEl.textContent = `${hrs} 小时`;
   } else if (mins > 0) {
@@ -2405,6 +2714,7 @@ function applySettingsToForm(ctx) {
   setValue('bs-bt-trigger', settings.triggerTiming);
   setValue('bs-bt-poll-ms', settings.pollMs);
   setValue('bs-bt-context-size', settings.contextSize);
+  setValue('bs-bt-diary-recent-limit', settings.diaryRecentLimit);
   setValue('bs-bt-targets', settings.targetNames);
   setValue('bs-bt-tracker-worldbook-mode', normalizeWorldbookMode(settings.trackerWorldbookMode));
   setValue('bs-bt-system-prompt', settings.systemPrompt);
@@ -2412,6 +2722,7 @@ function applySettingsToForm(ctx) {
   setValue('bs-bt-registry-normal-description', settings.registryDescriptionGuides?.normalDescription);
   setValue('bs-bt-registry-closeup-description', settings.registryDescriptionGuides?.closeupDescription);
   setValue('bs-bt-registry-pregnant-description', settings.registryDescriptionGuides?.pregnantDescription);
+  setValue('bs-bt-diary-writing-prompt', settings.diaryWritingPrompt);
   populateModelList(settings);
   setConnectStatus(settings.modelOptions.length > 0 ? `已缓存 ${settings.modelOptions.length} 个模型` : '尚未连接');
   setRegisterStatus('输入名字与 Description 规则后发送注册请求，完成后可在“角色追踪”查看该角色状态变量。');
@@ -2481,6 +2792,7 @@ async function refreshTrackerPresetPage(ctx) {
   if (!select) return;
   const settings = getSettings(ctx);
   const savedName = String(settings.trackerPresetName || '').trim();
+  const previousValue = String(select.value || '').trim();
   cachedPresetPromptMap.clear();
   cachedPresetDetailsMap.clear();
 
@@ -2580,9 +2892,12 @@ async function refreshTrackerPresetPage(ctx) {
     select.appendChild(opt);
   }
 
-  const uiSelectedValue = settings.useStPresetForAsync
+  const preferredSelectedValue = previousValue && previousValue !== NO_PRESET_OPTION_VALUE
+    ? previousValue
+    : '';
+  const uiSelectedValue = preferredSelectedValue || (settings.useStPresetForAsync
     ? CURRENT_PRESET_OPTION_VALUE
-    : (savedName || NO_PRESET_OPTION_VALUE);
+    : (savedName || NO_PRESET_OPTION_VALUE));
   select.value = Array.from(select.options).some((option) => option.value === uiSelectedValue)
     ? uiSelectedValue
     : NO_PRESET_OPTION_VALUE;
@@ -2950,14 +3265,18 @@ function readSettingsFromForm(ctx) {
   const getValue = (id) => document.getElementById(id)?.value ?? '';
   settings.enabled = !!document.getElementById('bs-bt-enabled')?.checked;
   const trackerPresetSelectionValue = String(getValue('bs-bt-tracker-preset-list')).trim();
-  settings.useStPresetForAsync = trackerPresetSelectionValue === CURRENT_PRESET_OPTION_VALUE;
-  settings.trackerPresetName = normalizeTrackerPresetSelectionValue(trackerPresetSelectionValue);
+  if (trackerPresetSelectionValue) {
+    settings.useStPresetForAsync = trackerPresetSelectionValue === CURRENT_PRESET_OPTION_VALUE;
+    settings.trackerPresetName = normalizeTrackerPresetSelectionValue(trackerPresetSelectionValue);
+  }
   settings.apiUrl = String(getValue('bs-bt-api-url')).trim();
   settings.apiKey = String(getValue('bs-bt-api-key')).trim();
   settings.model = String(getValue('bs-bt-model')).trim();
   settings.triggerTiming = String(getValue('bs-bt-trigger')).trim() || 'after_ai';
   settings.pollMs = Math.max(800, Number(getValue('bs-bt-poll-ms')) || 1800);
   settings.contextSize = Math.max(2, Number(getValue('bs-bt-context-size')) || 12);
+  settings.diaryRecentLimit = Math.max(0, Math.min(20, Math.floor(Number(getValue('bs-bt-diary-recent-limit')) || 0)));
+  settings.diaryWritingPrompt = String(getValue('bs-bt-diary-writing-prompt')).trim();
   settings.targetNames = String(getValue('bs-bt-targets')).trim();
   settings.trackerWorldbookMode = normalizeWorldbookMode(getValue('bs-bt-tracker-worldbook-mode'));
   const filterNames = String(getValue('bs-bt-worldbook-filter-input')).trim();
@@ -3277,7 +3596,6 @@ async function ensureModal(ctx) {
       if (nextView === 'full-state') renderFullStatePage(ctx);
       if (nextView === 'race-encyclopedia') renderRaceEncyclopediaPage(ctx);
       if (nextView === 'tracker-preset') {
-        readSettingsFromForm(ctx);
         await refreshTrackerPresetPage(ctx).catch((error) => {
           console.error('[BS BioTracker] refreshTrackerPresetPage failed', error);
         });
@@ -3291,6 +3609,15 @@ async function ensureModal(ctx) {
       if (!TRACK_SUBPAGES.includes(nextTab)) return;
       selectedTrackSubpage = nextTab;
       renderStatusPanel(ctx);
+    }),
+  );
+  document.querySelectorAll('#bs-bt-full-state-tabs [data-full-state-tab]').forEach((node) =>
+    node.addEventListener('click', () => {
+      const nextTab = String(node.getAttribute('data-full-state-tab') || 'variables');
+      if (!['variables', 'debug'].includes(nextTab)) return;
+      selectedFullStateSubpage = nextTab;
+      updateFullStateSubpage();
+      if (nextTab === 'debug') renderFullStatePage(ctx);
     }),
   );
   document.querySelectorAll('#bs-biotracker-settings [data-theme-option]').forEach((node) =>
@@ -3332,6 +3659,7 @@ async function ensureModal(ctx) {
   });
   document.getElementById('bs-bt-tracker-preset-list')?.addEventListener('change', async () => {
     readSettingsFromForm(ctx);
+    saveSettings(ctx);
     const settings = getSettings(ctx);
     const selectedValue = String(document.getElementById('bs-bt-tracker-preset-list')?.value || '').trim();
     const targetPresetName = settings?.useStPresetForAsync

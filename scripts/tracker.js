@@ -75,7 +75,24 @@ function getTendencyAngleText(angle) {
   return '斜位';
 }
 
-function buildPromptFacingCharacterState(item) {
+function getDiaryRecentLimit(settings, characterCount) {
+  const singleLimit = Math.max(0, Math.min(20, Math.floor(Number(settings?.diaryRecentLimit) || 0)));
+  if (singleLimit <= 0) return 0;
+  return characterCount > 1 ? Math.max(1, Math.floor(singleLimit / 2)) : singleLimit;
+}
+
+function getTrackerToolDefinitions(settings) {
+  const diaryEnabled = Math.max(0, Math.min(20, Math.floor(Number(settings?.diaryRecentLimit) || 0))) > 0;
+  if (diaryEnabled) return TOOL_DEFINITIONS;
+  return TOOL_DEFINITIONS.filter((tool) => tool?.name !== 'bsWriteDiary');
+}
+
+function getRecentDiaryEntries(profile, limit) {
+  if (limit <= 0 || !Array.isArray(profile?.diary)) return [];
+  return profile.diary.slice(-limit);
+}
+
+function buildPromptFacingCharacterState(item, diaryLimit = 0) {
   const next = cloneValue(item);
   const profile = next?.profile || {};
   const base = profile.base || {};
@@ -130,6 +147,7 @@ function buildPromptFacingCharacterState(item) {
   delete profile.immune;
   delete profile.cooldown;
   if (immune.metabolism) delete profile.metabolism;
+  profile.diary = getRecentDiaryEntries(item?.profile || {}, diaryLimit);
 
   delete next.updatedAt;
   delete next.runtime;
@@ -138,10 +156,11 @@ function buildPromptFacingCharacterState(item) {
   return next;
 }
 
-function buildOffscreenCharacterState(item) {
+function buildOffscreenCharacterState(item, diaryLimit = 0) {
   const profile = item?.profile || {};
   const base = profile.base || {};
   const pregnant = profile.pregnant || {};
+  const notify = profile.notify || {};
   return {
     name: item?.name || '',
     initialized: Boolean(item?.initialized),
@@ -150,7 +169,7 @@ function buildOffscreenCharacterState(item) {
       base: {
         isHere: false,
         stage: base.stage ?? null,
-        days: base.days ?? 1,
+        days: base.days ?? 0,
         age: base.age ?? null,
         race: base.race ?? null,
         derivedType: base.derivedType ?? null,
@@ -161,15 +180,19 @@ function buildOffscreenCharacterState(item) {
         laborHours: pregnant.laborHours ?? 0,
         effectiveLaborHours: pregnant.effectiveLaborHours ?? 0,
       },
+      diary: getRecentDiaryEntries(profile, diaryLimit),
+      notify: Object.values(notify).some((value) => String(value || '').trim()) ? notify : undefined,
     },
   };
 }
 
-function buildTrackerStateView(existingState) {
+function buildTrackerStateView(existingState, settings = null) {
+  const characterCount = Object.keys(existingState || {}).length;
+  const diaryLimit = getDiaryRecentLimit(settings, characterCount);
   return Object.fromEntries(
     Object.entries(existingState).map(([name, item]) => {
-      if (item?.profile?.base?.isHere === false) return [name, buildOffscreenCharacterState(item)];
-      return [name, buildPromptFacingCharacterState(item)];
+      if (item?.profile?.base?.isHere === false) return [name, buildOffscreenCharacterState(item, diaryLimit)];
+      return [name, buildPromptFacingCharacterState(item, diaryLimit)];
     }),
   );
 }
@@ -320,6 +343,7 @@ export function buildTrackerPayload(ctx, settings, reason = 'manual', endIndexEx
     recentMessages,
   );
   const payloadWorldBook = mainflowContextSnapshot ? null : filteredWorldBook;
+  const diaryEnabled = getDiaryRecentLimit(settings, Object.keys(existingState || {}).length) > 0;
   return {
     reason,
     chat_id: getChatKey(ctx),
@@ -332,8 +356,9 @@ export function buildTrackerPayload(ctx, settings, reason = 'manual', endIndexEx
     character_worldbook: payloadWorldBook,
     mainflow_context_snapshot: mainflowContextSnapshot,
     tracked_females: getRegisteredTargetNames(ctx, settings, chatState),
-    existing_state: buildTrackerStateView(existingState),
-    available_tools: TOOL_DEFINITIONS,
+    existing_state: buildTrackerStateView(existingState, settings),
+    available_tools: getTrackerToolDefinitions(settings),
+    diary_enabled: diaryEnabled,
     recent_messages: recentMessages,
   };
 }
@@ -479,7 +504,7 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
   chatState.lastRunAt = Date.now();
   chatState.lastAttemptedSignature = buildSignature(ctx, messageIndex + 1);
   saveSettings(ctx);
-  const systemPrompt = buildTrackerSystemPrompt(settings.systemPrompt || DEFAULT_SYSTEM_PROMPT, settings.registryDescriptionGuides, payload);
+  const systemPrompt = buildTrackerSystemPrompt(settings.systemPrompt || DEFAULT_SYSTEM_PROMPT, null, payload);
   recordTrackerRequestDebug(systemPrompt, payload);
   const rawResult = await callOpenAICompatible(
     settings,

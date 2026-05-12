@@ -56,6 +56,20 @@ export const TOOL_DEFINITIONS = Object.freeze([
     },
   },
   {
+    name: 'bsWriteDiary',
+    description: '为单一角色追加一条主观日记。time 是日记的日期标题，不是具体钟点；请填写故事内日期、年月日、某日/第几天等，不要填 HH:mm、午後 这类时刻。同一角色每个故事日（24 小时）最多只能写一篇；若当天已写过，不得再次调用。content 应像角色事后写下的日记，不是即时心声或旁白；通常在跨日后回顾昨日，重大事件或 notify 提醒时也应写成事后补记。角色不在场也可以写。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        female: { type: 'string' },
+        time: { type: 'string' },
+        content: { type: 'string' },
+      },
+      required: ['female', 'time', 'content'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'bsUpdateCharacterStatus',
     description: '对单一角色的活力、情压、性欲、宫压做增减更新。会联动代谢累积、高潮排卵、羊膜耐久警告等状态。',
     input_schema: {
@@ -80,7 +94,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
   {
     name: 'bsSetDescription',
     description:
-      '只更新单一角色的描述字段，可单独更新 normalDescription / closeupDescription / pregnantDescription。描述内容必须使用旧版格式：字段名|描述内容;;字段名|描述内容;;...字段名|描述内容;;，不可改成自然段或换行文本。',
+      '只更新单一角色的描述字段，可单独更新 normalDescription / closeupDescription / pregnantDescription，也可只传其中几个既有子字段，例如 行动|描述内容;;表情|描述内容;;。未传入的子字段会保留旧值；不能新增角色原本没有的子字段。描述内容必须使用格式：字段名|描述内容;;字段名|描述内容;;...字段名|描述内容;;，不可改成自然段或换行文本。',
     input_schema: {
       type: 'object',
       properties: {
@@ -928,7 +942,7 @@ function processSimpleConception(profile, tick, notify, name) {
 
   if (Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0) {
     base.fertilizationDays = clampNumber(base.fertilizationDays, 0, 9999, 0) + deltaDays;
-    if (base.fertilizationDays >= 2) {
+    if (base.fertilizationDays > 2) {
       const vitality = clampNumber(base.vitality, 0, 200, 100);
       const implantationFailChance = vitality < 100 ? (100 - vitality) / 100 : 0;
       if (Math.random() < implantationFailChance) {
@@ -940,7 +954,7 @@ function processSimpleConception(profile, tick, notify, name) {
       } else {
         applyIdenticalSplit(profile);
         base.stage = '孕早期';
-        base.days = 1;
+        base.days = 0;
         base.fertilizationDays = 0;
         pregnant.pregnantDays = 0;
         pregnant.effectivePregnantDays = 0;
@@ -1400,7 +1414,7 @@ function applyChildbirthInternal(profile, female, isNatural) {
   clearPregnancyState(profile);
   if (runtime) restorePregnancyPhysiology(profile, runtime);
   base.stage = '产后恢复';
-  base.days = 1;
+  base.days = 0;
   experience.naturalBirthExperience = clampNumber(experience.naturalBirthExperience, 0, 999, 0) + (isNatural ? 1 : 0);
   experience.surgicalBirthExperience = clampNumber(experience.surgicalBirthExperience, 0, 999, 0) + (isNatural ? 0 : 1);
   profile.experience = experience;
@@ -1461,7 +1475,7 @@ function maybeStartLabor(profile, tick, female) {
   if (currentPressure < pressureCap * 0.66) return false;
 
   base.stage = '产前阵痛';
-  base.days = 1;
+  base.days = 0;
   pregnant.laborHours = 0;
   pregnant.effectiveLaborHours = 0;
   profile.notify = {
@@ -1523,7 +1537,7 @@ function applyPressureCrisis(profile, runtime, female) {
     clearPregnancyState(profile);
     restorePregnancyPhysiology(profile, runtime || {});
     base.stage = '产后恢复';
-    base.days = 1;
+    base.days = 0;
     experience.miscarriageExperience = clampNumber(experience.miscarriageExperience, 0, 999, 0) + 1;
     profile.experience = experience;
     profile.notify = {
@@ -1544,7 +1558,7 @@ function applyPressureCrisis(profile, runtime, female) {
 
   if ((stage === '孕晚期' || stage === '临产期' || stage === '逾期') && !cooldown.laborResistanceUsed) {
     base.stage = '产前阵痛';
-    base.days = 1;
+    base.days = 0;
     pregnant.laborHours = 0;
     pregnant.effectiveLaborHours = 0;
     profile.pregnant = pregnant;
@@ -1582,9 +1596,9 @@ function processLabor(profile, tick, female) {
     pregnant.effectiveLaborHours = currentEffectiveHours;
     applyLaborAmnionWear(profile, female, { multiplier: rawHours * 0.15, silent: true });
     const threshold = 6 * clampNumber(profile?.bio?.birthDifficulty, 0.1, 100, 1);
-    if (pregnant.effectiveLaborHours >= threshold) {
+    if (pregnant.effectiveLaborHours > threshold) {
       base.stage = '第一产程';
-      base.days = 1;
+      base.days = 0;
       pregnant.laborHours = 0;
       pregnant.effectiveLaborHours = 0;
       profile.notify = {
@@ -1652,7 +1666,7 @@ function processLabor(profile, tick, female) {
         return false;
       }
       base.stage = '第二产程';
-      base.days = 1;
+      base.days = 0;
       pregnant.laborHours = 0;
       pregnant.effectiveLaborHours = 0;
       profile.notify = {
@@ -1683,7 +1697,7 @@ function processLabor(profile, tick, female) {
       pregnant.effectiveLaborHours = 0;
       if (fetuses.length === 0) {
         base.stage = '第三产程';
-        base.days = 1;
+        base.days = 0;
         profile.notify = {
           ...notify,
           firstly: `${female}进入了第三产程`,
@@ -1720,7 +1734,7 @@ function processLabor(profile, tick, female) {
   } else if (stage === '第三产程') {
     applyLaborAmnionWear(profile, female, { forceRupture: true, silent: true });
   }
-  if (pregnant.effectiveLaborHours < threshold) {
+  if (pregnant.effectiveLaborHours <= threshold) {
     if (stage === '第二产程' && fetuses.length > 0) {
       const firstFetus = fetuses[0];
       const fetalAngle = Number.isFinite(Number(firstFetus?.tendencyAngle)) ? wrapAngle(firstFetus.tendencyAngle) : 0;
@@ -1752,7 +1766,7 @@ function processLabor(profile, tick, female) {
       return false;
     }
     base.stage = '第二产程';
-    base.days = 1;
+    base.days = 0;
     pregnant.laborHours = 0;
     pregnant.effectiveLaborHours = 0;
     profile.notify = {
@@ -1776,7 +1790,7 @@ function processLabor(profile, tick, female) {
       pregnant.effectiveLaborHours = 0;
       if (fetuses.length === 0) {
         base.stage = '第三产程';
-        base.days = 1;
+        base.days = 0;
         profile.notify = {
           ...notify,
           firstly: `${female}进入了第三产程`,
@@ -1791,7 +1805,7 @@ function processLabor(profile, tick, female) {
       return true;
     }
     base.stage = '第三产程';
-    base.days = 1;
+    base.days = 0;
     pregnant.laborHours = 0;
     pregnant.effectiveLaborHours = 0;
     return true;
@@ -1867,7 +1881,7 @@ function applyAbortion(chatState, args) {
 
   if (MENSTRUAL_STAGES.includes(stage)) {
     base.stage = '卵泡期';
-    base.days = 1;
+    base.days = 0;
     profile.notify = {
       ...notify,
       firstly: `${female}进入了卵泡期`,
@@ -1875,7 +1889,7 @@ function applyAbortion(chatState, args) {
     };
   } else {
     base.stage = '产后恢复';
-    base.days = 1;
+    base.days = 0;
     experience.miscarriageExperience = clampNumber(experience.miscarriageExperience, 0, 999, 0) + 1;
     profile.experience = experience;
     profile.notify = {
@@ -1971,7 +1985,7 @@ function applyLaborResistance(profile, female) {
 
     const reducedPressure = Math.floor(uterinePressure * 0.25);
     base.stage = targetStage;
-    base.days = 1;
+    base.days = 0;
     base.uterinePressure = reducedPressure;
     pregnant.laborHours = 0;
     pregnant.effectiveLaborHours = 0;
@@ -1988,7 +2002,7 @@ function applyLaborResistance(profile, female) {
   }
 
   base.stage = '第一产程';
-  base.days = 1;
+  base.days = 0;
   pregnant.laborHours = 0;
   pregnant.effectiveLaborHours = 0;
   profile.notify = {
@@ -2165,6 +2179,11 @@ function buildTimeTick(character, addedMinutes) {
   };
 }
 
+function appendNotifyReminder(notify, message) {
+  const current = String(notify?.thirdly || '').trim();
+  notify.thirdly = current ? `${current}；${message}` : message;
+}
+
 function getMenstrualStageFluctuation(profile, stage) {
   if (!MENSTRUAL_STAGE_DAYS[stage]) return 0;
 
@@ -2202,7 +2221,7 @@ function advanceMenstrualStage(profile, stage, daysValue) {
   let changed = false;
   while (MENSTRUAL_STAGES.includes(nextStage)) {
     const limit = getStageLimit(profile, nextStage);
-    if (limit === null || nextDays < limit) break;
+    if (limit === null || nextDays <= limit) break;
     nextDays -= limit;
     const stageIndex = MENSTRUAL_STAGES.indexOf(nextStage);
     nextStage = MENSTRUAL_STAGES[(stageIndex + 1) % MENSTRUAL_STAGES.length];
@@ -2210,7 +2229,7 @@ function advanceMenstrualStage(profile, stage, daysValue) {
   }
   return {
     stage: nextStage,
-    days: Math.max(1, nextDays + (changed ? 1 : 0)),
+    days: Math.max(0, nextDays),
     changed,
   };
 }
@@ -2244,7 +2263,7 @@ function applyTimeToCharacter(character, tick) {
   const isHere = base.isHere !== false;
 
   let stage = String(base.stage || '');
-  let days = clampNumber(base.days, 1, 9999, 1);
+  let days = clampNumber(base.days, 0, 9999, 0);
   let stageChanged = false;
   const oldStage = stage;
 
@@ -2257,13 +2276,14 @@ function applyTimeToCharacter(character, tick) {
   }
 
   if (MENSTRUAL_STAGES.includes(stage)) {
-    const advanced = advanceMenstrualStage(profile, stage, days + deltaDays);
+    const currentStageDay = Math.max(0, Number(days) || 0);
+    const advanced = advanceMenstrualStage(profile, stage, currentStageDay + deltaDays);
     stage = advanced.stage;
     days = advanced.days;
     stageChanged = advanced.changed;
     if (stageChanged && shouldEnterPseudoPregnancy(profile, oldStage, stage)) {
       stage = '假孕期';
-      days = 1;
+      days = 0;
       pregnant.pregnantDays = 0;
       pregnant.effectivePregnantDays = 0;
       notify.secondly = `${next.name}因进入月经期时心理压力偏高、性欲偏高且近期有性接触记录，出现了假孕症状`;
@@ -2286,20 +2306,20 @@ function applyTimeToCharacter(character, tick) {
     const pressureCrisis = isHere ? applyPressureCrisis(profile, next.runtime || {}, next.name) : { changed: false, warned: false };
     if (pressureCrisis.changed) {
       stage = String(base.stage || stage);
-      days = clampNumber(base.days, 1, 9999, 1);
+      days = clampNumber(base.days, 0, 9999, 0);
       stageChanged = true;
     }
     if (isHere && !pressureCrisis.warned && maybeStartLabor(profile, tick, next.name)) {
       stage = String(base.stage || stage);
-      days = clampNumber(base.days, 1, 9999, 1);
+      days = clampNumber(base.days, 0, 9999, 0);
       stageChanged = true;
     }
   } else if (stage === '产后恢复') {
     days += deltaDays;
     const recoveryDays = getStageLimit(profile, '产后恢复');
-    if (days >= recoveryDays) {
+    if (days > recoveryDays) {
       stage = '卵泡期';
-      days = 1;
+      days = 0;
       stageChanged = true;
       pregnant.pregnantDays = 0;
       pregnant.effectivePregnantDays = 0;
@@ -2313,9 +2333,9 @@ function applyTimeToCharacter(character, tick) {
   } else if (stage === '假孕期') {
     pregnant.pregnantDays = clampNumber(pregnant.pregnantDays, 0, 9999, 0) + deltaDays;
     const pseudoLimit = Math.max(1, 84 * clampNumber(getGestationEffectiveSpeed({ ...profile, bio }), 0.1, 20, 1));
-    if (pregnant.pregnantDays >= pseudoLimit) {
+    if (pregnant.pregnantDays > pseudoLimit) {
       stage = '月经期';
-      days = 1;
+      days = 0;
       stageChanged = true;
       pregnant.pregnantDays = 0;
       pregnant.effectivePregnantDays = 0;
@@ -2325,7 +2345,7 @@ function applyTimeToCharacter(character, tick) {
     updateDerivedTypeProgress(profile, tick);
     const laborChanged = processLabor(profile, tick, next.name);
     stage = String(base.stage || stage);
-    days = clampNumber(base.days, 1, 9999, 1);
+    days = clampNumber(base.days, 0, 9999, 0);
     stageChanged = stageChanged || laborChanged || stage !== oldStage;
   } else if (stage === '无经期' || stage === '未激活') {
     days += deltaDays;
@@ -2390,6 +2410,9 @@ function applyTimeToCharacter(character, tick) {
     pregnancyPressureWarning: shouldKeepPregnancyPressureWarning(profile) ? Boolean((profile.cooldown || cooldown).pregnancyPressureWarning) : false,
   };
   updateAdvisoryNotify(profile, next.name);
+  if (tick.passedDays > 0) {
+    appendNotifyReminder(profile.notify || notify, '已跨入新的一天；若角色有值得沉淀的经历、心境、关系或身体变化，可调用 bsWriteDiary 写入主观日记');
+  }
   delete profile.__runtimeRef;
   next.profile = profile;
   next.runtime = {
@@ -2402,6 +2425,35 @@ function applyTimeToCharacter(character, tick) {
     oldStage,
     newStage: stage,
   };
+}
+
+function applyWriteDiary(chatState, args) {
+  const female = String(args?.female || '').trim();
+  const character = chatState.characters?.[female];
+  if (!female || !character) return { applied: false, message: `bsWriteDiary skipped: unknown character ${female || '(empty)'}.` };
+
+  const time = String(args?.time || '').trim();
+  const content = String(args?.content || '').trim();
+  if (!time) return { applied: false, message: `bsWriteDiary skipped for ${female}: empty time.` };
+  if (!content) return { applied: false, message: `bsWriteDiary skipped for ${female}: empty content.` };
+
+  const next = cloneValue(character);
+  const profile = next.profile || {};
+  profile.diary = Array.isArray(profile.diary) ? profile.diary : [];
+  const currentStoryDayIndex = Math.floor(Math.max(0, Number(chatState?.minutesPassed) || 0) / 1440);
+  const existsSameStoryDay = profile.diary.some((entry) => Number(entry?.storyDayIndex) === currentStoryDayIndex);
+  if (existsSameStoryDay) {
+    return { applied: false, message: `bsWriteDiary skipped for ${female}: story day ${currentStoryDayIndex + 1} is still on diary cooldown.` };
+  }
+  profile.diary.push({
+    time,
+    content,
+    storyDayIndex: currentStoryDayIndex,
+    createdAt: Date.now(),
+  });
+  next.profile = profile;
+  chatState.characters[female] = next;
+  return { applied: true, message: `bsWriteDiary applied to ${female}: ${time}.` };
 }
 
 function applyPassedTime(chatState, args) {
@@ -2421,8 +2473,10 @@ function applyPassedTime(chatState, args) {
     const result = applyTimeToCharacter(current, tick);
     chatState.characters[name] = result.character;
   }
-  chatState.minutesPassed = Math.round(totalMinutes);
-  return { applied: true, message: `bsPassedTime applied ${chatState.minutesPassed} minutes.` };
+  const elapsedMinutes = Math.round(totalMinutes);
+  const previousMinutes = Math.max(0, Number(chatState.minutesPassed) || 0);
+  chatState.minutesPassed = previousMinutes + elapsedMinutes;
+  return { applied: true, message: `bsPassedTime applied ${elapsedMinutes} minutes; accumulated ${chatState.minutesPassed} minutes.` };
 }
 
 function applyCharacterStatus(chatState, args) {
@@ -2456,6 +2510,56 @@ function applyCharacterStatus(chatState, args) {
   return { applied: true, message: `bsUpdateCharacterStatus applied to ${female}.` };
 }
 
+const DESCRIPTION_FIELD_NAMES = ['normalDescription', 'closeupDescription', 'pregnantDescription'];
+
+function parseDescriptionText(text) {
+  const rawText = String(text || '').trim();
+  if (!rawText) return { entries: [], error: '' };
+
+  const entries = [];
+  const segments = rawText.split(';;').map((part) => part.trim()).filter(Boolean);
+  for (const segment of segments) {
+    const separatorIndex = segment.indexOf('|');
+    if (separatorIndex <= 0) {
+      return { entries: [], error: `invalid segment "${segment}"` };
+    }
+    const name = segment.slice(0, separatorIndex).trim();
+    const value = segment.slice(separatorIndex + 1).trim();
+    if (!name) return { entries: [], error: `invalid empty field name in "${segment}"` };
+    entries.push({ name, value });
+  }
+  return { entries, error: '' };
+}
+
+function mergeDescriptionText(currentText, patchText) {
+  const current = parseDescriptionText(currentText);
+  if (current.error) return { ok: false, value: String(currentText || ''), error: `existing description is malformed: ${current.error}` };
+
+  const patch = parseDescriptionText(patchText);
+  if (patch.error) return { ok: false, value: String(currentText || ''), error: `patch description is malformed: ${patch.error}` };
+  if (patch.entries.length === 0) return { ok: true, value: '' };
+
+  const allowedNames = new Set(current.entries.map((entry) => entry.name));
+  const unknownNames = patch.entries.map((entry) => entry.name).filter((name) => !allowedNames.has(name));
+  if (unknownNames.length > 0) {
+    return {
+      ok: false,
+      value: String(currentText || ''),
+      error: `unknown subfield(s): ${Array.from(new Set(unknownNames)).join(', ')}`,
+    };
+  }
+
+  const patchByName = new Map(patch.entries.map((entry) => [entry.name, entry.value]));
+  const merged = current.entries.map((entry) => ({
+    name: entry.name,
+    value: patchByName.has(entry.name) ? patchByName.get(entry.name) : entry.value,
+  }));
+  return {
+    ok: true,
+    value: merged.map((entry) => `${entry.name}|${entry.value};;`).join(''),
+  };
+}
+
 function applyDescription(chatState, args) {
   const female = String(args?.female || '').trim();
   const options = args?.options && typeof args.options === 'object' ? args.options : {};
@@ -2466,11 +2570,22 @@ function applyDescription(chatState, args) {
   next.profile.descriptions = {
     ...(next.profile?.descriptions || {}),
   };
-  for (const key of ['normalDescription', 'closeupDescription', 'pregnantDescription']) {
-    if (options[key] !== undefined) next.profile.descriptions[key] = String(options[key] || '');
+  const failures = [];
+  const appliedKeys = [];
+  for (const key of DESCRIPTION_FIELD_NAMES) {
+    if (options[key] === undefined) continue;
+    const merged = mergeDescriptionText(next.profile.descriptions[key] || '', options[key]);
+    if (!merged.ok) {
+      failures.push(`${key}: ${merged.error}`);
+      continue;
+    }
+    next.profile.descriptions[key] = merged.value;
+    appliedKeys.push(key);
   }
+  if (failures.length > 0) return { applied: false, message: `bsSetDescription skipped for ${female}: ${failures.join('; ')}.` };
+  if (appliedKeys.length === 0) return { applied: false, message: `bsSetDescription skipped for ${female}: empty options.` };
   chatState.characters[female] = next;
-  return { applied: true, message: `bsSetDescription applied to ${female}.` };
+  return { applied: true, message: `bsSetDescription applied to ${female}: ${appliedKeys.join(', ')}.` };
 }
 
 function applySetCharacterPresence(chatState, args) {
@@ -2711,7 +2826,7 @@ function applySetMenstrualPhases(chatState, args) {
   }
 
   base.stage = stage;
-  base.days = 1;
+  base.days = 0;
   if (stage === '排卵期') {
     profile.cooldown = {
       ...cooldown,
@@ -2821,7 +2936,7 @@ function applyDebugInjectPregnancy(chatState, args) {
   pregnant.laborHours = 0;
   pregnant.effectiveLaborHours = 0;
   pregnant.amnionDurability = equivalentDays === 0 ? 0 : 100;
-  pregnant.pregnantDays = equivalentDays === 0 ? 0 : 1;
+  pregnant.pregnantDays = 0;
   pregnant.effectivePregnantDays = equivalentDays === 0 ? 0 : equivalentDays;
 
   profile.base = base;
@@ -2830,8 +2945,8 @@ function applyDebugInjectPregnancy(chatState, args) {
   } else {
     applyPregnancyPhysiology(profile, next.runtime || {});
     const actualGestationSpeed = clampNumber(getGestationEffectiveSpeed(profile), 0, 20, 1);
-    pregnant.pregnantDays = actualGestationSpeed > 0 ? Math.max(1, Math.round(equivalentDays / actualGestationSpeed)) : 1;
-    pregnant.effectivePregnantDays = Math.max(1, equivalentDays);
+    pregnant.pregnantDays = actualGestationSpeed > 0 ? Math.max(0, equivalentDays / actualGestationSpeed) : equivalentDays;
+    pregnant.effectivePregnantDays = Math.max(0, equivalentDays);
     const derived = derivePregnancyStageState(pregnant.effectivePregnantDays, 1);
     base.stage = derived.stage;
     base.days = derived.days;
@@ -2914,7 +3029,7 @@ function applyDebugClearContainers(chatState, args) {
   restorePregnancyPhysiology(profile, next.runtime || {});
   if (implantedPregnancy) {
     base.stage = '产后恢复';
-    base.days = 1;
+    base.days = 0;
     experience.miscarriageExperience = clampNumber(experience.miscarriageExperience, 0, 999, 0) + 1;
     profile.experience = experience;
     profile.notify = {
@@ -3000,6 +3115,7 @@ export function applyToolCall(chatState, call) {
   const args = normalizeToolCallArguments(call?.arguments);
   if (!name) return { applied: false, message: 'Empty tool call name.' };
   if (name === 'bsPassedTime') return applyPassedTime(chatState, args);
+  if (name === 'bsWriteDiary') return applyWriteDiary(chatState, args);
   if (name === 'bsUpdateCharacterStatus') return applyCharacterStatus(chatState, args);
   if (name === 'bsSetDescription') return applyDescription(chatState, args);
   if (name === 'bsSetCharacterPresence') return applySetCharacterPresence(chatState, args);

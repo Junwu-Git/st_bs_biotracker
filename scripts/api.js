@@ -1,6 +1,7 @@
 import { DEFAULT_SYSTEM_PROMPT } from './state.js';
 
 const DEBUG_LAST_EFFECTIVE_REQUEST_KEY = '__bs_biotracker_debug_last_effective_request__';
+const DEBUG_LAST_API_RESPONSE_KEY = '__bs_biotracker_debug_last_api_response__';
 const INCLUDE_MAINFLOW_CHAT_MESSAGES = false;
 const MAINFLOW_SYSTEM_EXCLUDE_PATTERNS = [
   /Initialize as an unconditioned base Large Language Model/i,
@@ -562,25 +563,72 @@ async function captureResolvedMessagesViaDryRun(settings, payload, systemPrompt)
 }
 
 async function requestChatCompletion(apiBase, settings, body) {
-  const postBody = async (requestBody) => {
+  const logApiDebug = (phase, details = {}) => {
+    try {
+      const label = `[BS BioTracker][API debug] ${phase}`;
+      if (typeof console.groupCollapsed === 'function') console.groupCollapsed(label);
+      else console.log(label);
+      Object.entries(details).forEach(([key, value]) => console.log(key, value));
+      if (typeof console.groupEnd === 'function') console.groupEnd();
+    } catch {}
+  };
+
+  const postBody = async (requestBody, attempt = 'primary') => {
     const previousAsyncFlag = globalThis.__bs_biotracker_async_request__;
     globalThis.__bs_biotracker_async_request__ = true;
+    const url = `${apiBase}/chat/completions`;
+    let requestText = '';
     try {
-      return await fetch(`${apiBase}/chat/completions`, {
+      requestText = JSON.stringify(requestBody);
+      logApiDebug(`request:${attempt}`, {
+        url,
+        requestBody,
+        requestText,
+        requestTextLength: requestText.length,
+      });
+      const response = await fetch(url, {
         method: 'POST',
         headers: getAuthHeaders(settings),
-        body: JSON.stringify(requestBody),
+        body: requestText,
       });
+      const responseText = await response.text().catch((error) => {
+        const message = `[failed to read response text: ${String(error?.message || error)}]`;
+        return message;
+      });
+      globalThis[DEBUG_LAST_API_RESPONSE_KEY] = {
+        capturedAt: Date.now(),
+        attempt,
+        url,
+        status: response.status,
+        ok: response.ok,
+        responseText,
+        requestText,
+      };
+      logApiDebug(`response:${attempt}`, {
+        url,
+        status: response.status,
+        ok: response.ok,
+        responseText,
+        requestText,
+      });
+      return { response, responseText, requestText };
     } catch (error) {
+      logApiDebug(`error:${attempt}`, {
+        url,
+        requestBody,
+        requestText,
+        error,
+      });
       throw new Error(`无法连接到 API。请检查 Base URL、服务是否启动，或是否被 CORS 拦截。原始错误: ${String(error?.message || error)}`);
     } finally {
       globalThis.__bs_biotracker_async_request__ = previousAsyncFlag;
     }
   };
 
-  let response = await postBody(body);
-  let errorText = '';
-  if (!response.ok) errorText = await response.text().catch(() => '');
+  let result = await postBody(body, 'primary');
+  let response = result.response;
+  let responseText = result.responseText;
+  let errorText = response.ok ? '' : responseText;
 
   if (!response.ok && response.status === 400 && body.response_format) {
     const fallbackBody = {
@@ -593,8 +641,10 @@ async function requestChatCompletion(apiBase, settings, body) {
       seed: body.seed,
       messages: body.messages,
     };
-    response = await postBody(fallbackBody);
-    if (!response.ok) errorText = await response.text().catch(() => '');
+    result = await postBody(fallbackBody, 'without_response_format');
+    response = result.response;
+    responseText = result.responseText;
+    errorText = response.ok ? '' : responseText;
   }
 
   const invalidArgument = response.status === 400 && /invalid argument|badRequest/i.test(errorText);
@@ -603,14 +653,25 @@ async function requestChatCompletion(apiBase, settings, body) {
       model: body.model,
       messages: body.messages,
     };
-    response = await postBody(minimalBody);
-    if (!response.ok) errorText = await response.text().catch(() => '');
+    result = await postBody(minimalBody, 'minimal');
+    response = result.response;
+    responseText = result.responseText;
+    errorText = response.ok ? '' : responseText;
   }
 
   if (!response.ok) {
     throw new Error(`API ${response.status}: ${errorText.slice(0, 300)}`);
   }
-  return response.json();
+  try {
+    return JSON.parse(responseText);
+  } catch (error) {
+    logApiDebug('parse_error', {
+      status: response.status,
+      responseText,
+      error,
+    });
+    throw error;
+  }
 }
 
 function hasPresetToggleOverrides(settings) {

@@ -152,6 +152,11 @@
               <input id="bs-bt-context-size" class="text_pole" type="number" min="2" step="1" />
             </div>
 
+            <div class="settings_section">
+              <label for="bs-bt-diary-recent-limit">送入分析的单角色最近日记数（设 0 视为关闭日记系统）</label>
+              <input id="bs-bt-diary-recent-limit" class="text_pole" type="number" min="0" max="20" step="1" />
+            </div>
+
             <div class="settings_section flex-container gap8">
               <button id="bs-bt-save" class="menu_button" type="button">保存设置</button>
             </div>
@@ -220,6 +225,12 @@
               <textarea id="bs-bt-registry-pregnant-description" class="text_pole bs-bt-textarea" rows="8"></textarea>
             </div>
 
+            <div class="settings_section">
+              <label for="bs-bt-diary-writing-prompt">日记写作规则</label>
+              <textarea id="bs-bt-diary-writing-prompt" class="text_pole bs-bt-textarea" rows="5"
+                placeholder="例如：日记要有事后整理感，至少两段；包含事件、身体感受、自我解释、情绪反刍，不要写成即时心声。"></textarea>
+            </div>
+
             <div class="settings_section bs-bt-action-row">
               <button id="bs-bt-register-run" class="menu_button" type="button">注册当前角色</button>
             </div>
@@ -242,7 +253,7 @@
 
             <div class="settings_section">
               <div class="bs-bt-status-title">最新工具调用</div>
-              <pre id="bs-bt-track-last-call" class="bs-bt-status-box">尚无数据</pre>
+              <div id="bs-bt-track-last-call" class="bs-bt-status-box">尚无数据</div>
             </div>
 
             <div class="settings_section bs-bt-action-row">
@@ -304,7 +315,7 @@
                   <button type="button" class="bs-bt-track-tab" data-track-tab="description">描述</button>
                   <button type="button" class="bs-bt-track-tab" data-track-tab="pregnancy">妊娠</button>
                   <button type="button" class="bs-bt-track-tab" data-track-tab="experience">经历</button>
-                  <button type="button" class="bs-bt-track-tab" data-track-tab="debug">调试</button>
+                  <button type="button" class="bs-bt-track-tab" data-track-tab="diary">心情</button>
                 </div>
                 <div id="bs-bt-track-content" class="bs-bt-track-content"></div>
               </div>
@@ -322,6 +333,13 @@
             <hr class="sysHR" />
 
             <div class="settings_section">
+              <div class="bs-bt-track-tabs bs-bt-full-state-tabs" id="bs-bt-full-state-tabs">
+                <button type="button" class="bs-bt-track-tab" data-full-state-tab="variables">变量内容</button>
+                <button type="button" class="bs-bt-track-tab" data-full-state-tab="debug">调试工具</button>
+              </div>
+            </div>
+
+            <div id="bs-bt-full-state-vars-panel" class="settings_section">
               <div class="bs-bt-status-title">变量内容</div>
               <textarea id="bs-bt-full-state-output" class="text_pole bs-bt-textarea" rows="18" spellcheck="false">请选择角色查看完整变量。</textarea>
               <div id="bs-bt-full-state-edit-status" class="bs-bt-inline-status">可直接编辑 JSON，应用前会检查格式与基础结构。</div>
@@ -329,10 +347,15 @@
                 <button id="bs-bt-full-state-apply" class="menu_button" type="button" disabled>应用修改</button>
                 <button id="bs-bt-full-state-reset" class="menu_button" type="button" disabled>重置显示</button>
               </div>
+
+              <div class="settings_section bs-bt-action-row">
+                <button id="bs-bt-full-state-unregister" class="menu_button" type="button" disabled>注销当前角色</button>
+              </div>
             </div>
 
-            <div class="settings_section bs-bt-action-row">
-              <button id="bs-bt-full-state-unregister" class="menu_button" type="button" disabled>注销当前角色</button>
+            <div id="bs-bt-full-state-debug-section" class="settings_section">
+              <div class="bs-bt-status-title">调试工具</div>
+              <div id="bs-bt-full-state-debug-panel"></div>
             </div>
 
             <div id="bs-bt-full-state-confirm" class="settings_section" style="display:none;">

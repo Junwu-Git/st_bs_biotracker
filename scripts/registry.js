@@ -1,7 +1,7 @@
 import { callOpenAICompatible } from './api.js';
 import { buildEmbryoTypeLorePrompt } from './embryo_prompt_context.js';
 import { buildRegistryRacePhysiologyPrompt } from './race_prompt_context.js';
-import { DEFAULT_REGISTRY_DESCRIPTION_GUIDES } from './registry_config.js';
+import { DEFAULT_DIARY_WRITING_PROMPT, DEFAULT_REGISTRY_DESCRIPTION_GUIDES } from './registry_config.js';
 import {
   buildEmptyPsychologyGroup,
   normalizePsychologyGroup,
@@ -219,6 +219,7 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     ...(settings?.registryDescriptionGuides || {}),
     ...(options.descriptionGuides || {}),
   };
+  const diaryWritingPrompt = String(options.diaryWritingPrompt || settings?.diaryWritingPrompt || DEFAULT_DIARY_WRITING_PROMPT).trim();
   const customNotes = String(options.customNotes || settings?.registryCustomNotes || '').trim();
   const declaredRace = String(options.declaredRace || '').trim();
   const embryoTypeLorePrompt = buildEmbryoTypeLorePrompt(options.payload || {}, { includeAllIfEmpty: true });
@@ -245,7 +246,7 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '2. 情感与妊娠经验：experience',
     '3. 繁育心理：psychology.mens 或 psychology.preg（二选一，互斥）',
     '4. 既有孩子记录：children',
-    '5. 初登场即怀孕：pregnant.pregnantDays、pregnant.effectivePregnantDays、pregnant.fetusesCount、pregnant.fetuses',
+    '5. 初登场即怀孕：pregnant.pregnantDays、pregnant.fetusesCount、pregnant.fetuses',
     '6. 文字描述栏位：descriptions',
     '如果资料不足，可以省略字段或给 null；不要为了凑完整而编造。',
     embryoTypeLorePrompt,
@@ -307,19 +308,19 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '- [{"name":"冬月 露花","fathers":"前夫","gender":"女","race":"人类","age":5}]',
     '【5. 初登场即怀孕】',
     '参数说明：',
-    '- pregnant.pregnantDays: 这次妊娠在现实中已持续的天数，必须按天数填写。',
-    '- pregnant.effectivePregnantDays: 真正计入胎儿发育与阶段推进的有效妊娠天数。若存在时间冻结、祝福加速、缓慢孕育、闭关多年但胎儿仅成长数月等情况，必须单独填写，不可默认等同于 pregnantDays。',
+    '- pregnant.pregnantDays: 这次妊娠在现实中已持续的天数，必须按天数填写；初始怀孕只能填这个实际天数。',
+    '- 不要填写 pregnant.effectivePregnantDays；系统会依据角色种族妊娠速度与 bio.gestationModifierMultiplier 自动换算有效妊娠天数。',
     '- pregnant.fetusesCount: 这次怀孕的怀胎数',
     '- pregnant.fetuses: 每个胎儿包含 fathers、provider、race、gender、embryoType',
     '- provider: 代孕母方、寄生等提供者名称，正常情况下为 null',
     '示例：',
-    '- 人类怀单胎8周: {"pregnant":{"pregnantDays":56,"effectivePregnantDays":56,"fetusesCount":1,"fetuses":[{"fathers":"丈夫","provider":null,"race":"人类","gender":"男","embryoType":"胎生"}]}}',
-    '- 妖怪猫又怀双胎20周: {"pregnant":{"pregnantDays":140,"effectivePregnantDays":140,"fetusesCount":2,"fetuses":[{"fathers":"监狱囚犯","provider":null,"race":"[妖怪]兽耳族-猫又x蜥蜴人","gender":"女","embryoType":"胎生"},{"fathers":"监狱囚犯","provider":null,"race":"[妖怪]兽耳族-猫又x蜥蜴人","gender":"女","embryoType":"胎生"}]}}',
-    '- 代孕情节: {"pregnant":{"pregnantDays":84,"effectivePregnantDays":84,"fetusesCount":1,"fetuses":[{"fathers":"委托人","provider":"代孕者A","race":"人类","gender":"女","embryoType":"胎生"}]}}',
-    '- 女散修闭关三年、胎儿仅成长三个月: {"pregnant":{"pregnantDays":1095,"effectivePregnantDays":90,"fetusesCount":1,"fetuses":[{"fathers":"道侣","provider":null,"race":"人类","gender":"女","embryoType":"胎生"}]}}',
+    '- 人类怀单胎8周: {"pregnant":{"pregnantDays":56,"fetusesCount":1,"fetuses":[{"fathers":"丈夫","provider":null,"race":"人类","gender":"男","embryoType":"胎生"}]}}',
+    '- 精灵怀孕500天: {"base":{"race":"精灵"},"pregnant":{"pregnantDays":500,"fetusesCount":1,"fetuses":[{"fathers":"伴侣","provider":null,"race":"精灵","gender":"女","embryoType":"胎生"}]}}',
+    '- 妖怪猫又怀双胎20周: {"pregnant":{"pregnantDays":140,"fetusesCount":2,"fetuses":[{"fathers":"监狱囚犯","provider":null,"race":"[妖怪]兽耳族-猫又x蜥蜴人","gender":"女","embryoType":"胎生"},{"fathers":"监狱囚犯","provider":null,"race":"[妖怪]兽耳族-猫又x蜥蜴人","gender":"女","embryoType":"胎生"}]}}',
+    '- 代孕情节: {"pregnant":{"pregnantDays":84,"fetusesCount":1,"fetuses":[{"fathers":"委托人","provider":"代孕者A","race":"人类","gender":"女","embryoType":"胎生"}]}}',
     '【5.1 妊娠變速类补充设定（注册自订补充设定可直接体现到 bio）】',
     '参数说明：',
-    '- bio.gestationModifierMultiplier: 妊娠速度倍率。1 为正常，大于 1 为加速，小于 1 为减速，可与 pregnant.effectivePregnantDays 同时出现。',
+    '- bio.gestationModifierMultiplier: 妊娠速度倍率。1 为正常，大于 1 为加速，小于 1 为减速；初始怀孕仍只填 pregnant.pregnantDays，系统会用倍率换算 effectivePregnantDays。',
     '- bio.gestationModifierName: 该倍率效果的名称，例如祝福、诅咒、体质、术式。',
     '- bio.gestationModifierDescription: 对该倍率来源与表现的简短说明。',
     '- 注意：未怀孕角色也可以填写这组 bio 字段；是否怀孕只影响 pregnant，不影响该 buff 是否存在。',
@@ -339,7 +340,15 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     String(guides.closeupDescription || DEFAULT_REGISTRY_DESCRIPTION_GUIDES.closeupDescription),
     '[pregnantDescription]',
     String(guides.pregnantDescription || DEFAULT_REGISTRY_DESCRIPTION_GUIDES.pregnantDescription),
-    '【7. 用户自订补充设定】',
+    '【7. 首篇日记（可选）】',
+    '参数说明：diary 是角色主观日记数组；注册时可按角色个性决定是否直接写下第一篇日记。',
+    '- diary[*].time: 日记的日期标题，不是具体钟点；应填写故事内日期、年月日、某日/第几天等日期性标题。不要填 HH:mm、午後 这类时刻。',
+    '- diary[*].content: 像角色事后写下的私人记录，而不是即时心声、旁白或客观状态摘要。',
+    '- 若角色本来就不爱写、不会写、或当前没有合理的起始日记，可直接省略 diary 或返回空数组。',
+    '- 若要填写首篇日记，内容与起始时间必须严格遵守下列用户自订规则：',
+    '[diary]',
+    diaryWritingPrompt || DEFAULT_DIARY_WRITING_PROMPT,
+    '【8. 用户自订补充设定】',
     customNotes ? customNotes : '无',
     '若提供了自订补充设定，必须优先视为该角色已明确声明的特征，并在相关字段中如实体现；不要忽略，也不要擅自扩写超出原意的内容。',
     '若用户自订补充设定描述的是一种未来也会持续生效的妊娠体质、祝福、诅咒、冻结或延长效果，即使角色当前未怀孕，也必须写入 bio.gestationModifierMultiplier、bio.gestationModifierName、bio.gestationModifierDescription。',
@@ -361,7 +370,6 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '    },',
     '    "pregnant": {',
     '      "pregnantDays": 0,',
-    '      "effectivePregnantDays": 0,',
     '      "fetusesCount": 0,',
     '      "fetuses": []',
     '    },',
@@ -409,6 +417,12 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '      "gestationModifierDescription": "string"',
     '    },',
     '    "children": [],',
+    '    "diary": [',
+    '      {',
+    '        "time": "string",',
+    '        "content": "string"',
+    '      }',
+    '    ],',
     '    "descriptions": {',
     '      "normalDescription": "string",',
     '      "closeupDescription": "string",',
@@ -521,7 +535,6 @@ function sanitizePregnant(value) {
     : [];
   return {
     pregnantDays: Number.isFinite(Number(value.pregnantDays)) ? Number(value.pregnantDays) : 0,
-    effectivePregnantDays: Number.isFinite(Number(value.effectivePregnantDays)) ? Number(value.effectivePregnantDays) : null,
     fetusesCount: Number.isFinite(Number(value.fetusesCount)) ? Number(value.fetusesCount) : fetuses.length,
     fetuses,
   };
@@ -541,6 +554,17 @@ function sanitizeRegistryBio(value) {
     nextBio.gestationModifierDescription = value.gestationModifierDescription === null ? '' : String(value.gestationModifierDescription || '').trim();
   }
   return Object.keys(nextBio).length > 0 ? nextBio : null;
+}
+
+function sanitizeDiaryEntries(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => ({
+      time: String(item.time || '').trim(),
+      content: String(item.content || '').trim(),
+    }))
+    .filter((item) => item.time && item.content);
 }
 
 function getRegistryEmbryoTypeRecoveryCoefficient(embryoType) {
@@ -593,9 +617,7 @@ function normalizeRegisteredPregnancy(profile) {
   pregnant.fetusesCount = pregnant.fetuses.length;
   pregnant.pregnantDays = Math.max(1, Math.floor(Number(pregnant.pregnantDays) || 1));
   const gestationSpeed = clampNumber(getGestationEffectiveSpeed(profile), 0.1, 20, 1.0);
-  pregnant.effectivePregnantDays = Number.isFinite(Number(pregnant.effectivePregnantDays))
-    ? Math.max(1, Number(pregnant.effectivePregnantDays))
-    : Math.max(1, pregnant.pregnantDays * gestationSpeed);
+  pregnant.effectivePregnantDays = Math.max(1, pregnant.pregnantDays * gestationSpeed);
   pregnant.amnionDurability = 100;
 
   const bio = profile.bio || {};
@@ -711,6 +733,8 @@ function sanitizeRegistryProfile(profile, baseProfile) {
     if (bio) sanitized.bio = bio;
   }
 
+  if (profile.diary !== undefined) sanitized.diary = sanitizeDiaryEntries(profile.diary);
+
   const descriptions = pickObjectFields(profile.descriptions, DESCRIPTION_FIELDS);
   if (Object.keys(descriptions).length > 0) sanitized.descriptions = descriptions;
 
@@ -746,6 +770,7 @@ export function applyRegistryResult(chatState, result) {
         ...base.profile.experience,
         ...(sanitizedProfile.experience || {}),
       },
+      diary: sanitizedProfile.diary ?? base.profile.diary,
       psychology: sanitizedProfile.psychology?.preg
         ? {
           mens: buildEmptyPsychologyGroup(PSY_MENS_FIELDS, PSY_MENS_BOOL_FIELDS),
