@@ -175,6 +175,19 @@ export const DERIVED_TYPE_FLUX_PROFILES = Object.freeze({
   })
 });
 
+export const DERIVED_TYPE_METABOLISM_EXEMPTIONS = Object.freeze({
+  "血族": Object.freeze(["hunger", "stool", "urine"]),
+  "不死": Object.freeze(["odor", "sleep", "milk"]),
+  "修行": Object.freeze(["hunger", "stool", "sleep"]),
+  "妖怪": Object.freeze(["hunger", "urine", "stool"]),
+  "神祇": Object.freeze(["hunger", "sleep", "odor"]),
+  "机械": Object.freeze(["hunger", "stool", "milk"]),
+  "器灵": Object.freeze(["hunger", "urine", "milk"]),
+  "星际": Object.freeze(["sleep", "urine", "milk"]),
+  "变异": Object.freeze(["sleep", "hunger", "odor"]),
+  "序列": Object.freeze(["sleep", "odor", "milk"]),
+});
+
 export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
   "人类": {
     "menstrualLengthRatio": 1,
@@ -925,6 +938,12 @@ export function getDerivedTypeFluxProfile(derivedType) {
   const baseName = getBaseDerivedTypeName(derivedType);
   if (!baseName) return null;
   return DERIVED_TYPE_FLUX_PROFILES[baseName] || null;
+}
+
+export function getDerivedTypeMetabolismExemptions(derivedType) {
+  const baseName = getBaseDerivedTypeName(derivedType);
+  if (!baseName) return [];
+  return DERIVED_TYPE_METABOLISM_EXEMPTIONS[baseName] || [];
 }
 
 export function parseRaceDescriptor(rawRace) {

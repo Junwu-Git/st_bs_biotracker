@@ -10,14 +10,16 @@ import {
 import { LABOR_STAGES, MENSTRUAL_STAGES, MENSTRUAL_STAGE_DAYS, PREGNANCY_STAGE_DAYS, PREGNANCY_STAGES } from './stage_config.js';
 
 export const MODULE_NAME = 'bs_biotracker';
-const MAX_CHAT_STATE_SNAPSHOTS = 48;
-const MAX_RAW_RESULT_TEXT_LENGTH = 1200;
+const MAX_CHAT_STATE_SNAPSHOTS = 24;
+const MAX_RAW_RESULT_TEXT_LENGTH = 600;
+const MAX_SNAPSHOT_DEBUG_ITEMS = 24;
 const MIN_CHAT_INHERIT_MESSAGE_COUNT = 2;
 const MESSAGE_DIGEST_SEED = 2166136261;
 const SNAPSHOT_FULL_INTERVAL = 8;
 const SNAPSHOT_PATCH_SIZE_RATIO = 0.85;
 const SNAPSHOT_DELETE_SENTINEL_KEY = '__bs_bt_deleted__';
 const SNAPSHOT_ARRAY_APPEND_KEY = '__bs_bt_array_append__';
+const RESTORED_SNAPSHOT_RUNTIME_KEY = Symbol('bsBtRestoredSnapshotKey');
 
 export const THEME_CONFIG = {
   retro: {},
@@ -57,7 +59,7 @@ export const DEFAULT_SYSTEM_PROMPT = [
   '跨日、重大事件或 notify 提醒时，可用 bsWriteDiary 为角色追加主观日记。',
   '月经阶段、排卵期、假孕期切换用 bsSetMenstrualPhases；不要用它覆盖正在进行的受精、真妊娠或产程。',
   '流产用 bsAbortion；立即结束分娩用 bsChildbirth；角色在场状态变化用 bsSetCharacterPresence。',
-  '母胎互动用 bsMaternalFetalInteraction；当角色处于产前阵痛且 direction=maternal 时，它表示分娩抵抗。',
+  '母胎互动用 bsMaternalFetalInteraction；当角色处于产前阵痛且 direction=maternal 时，它表示分娩抵抗。若 notify 提示妊娠不适，调用此工具可额外补充营养。',
   '不要编造怀孕天数、胎数、流产、分娩或其他高影响事件。',
 ].join('\n');
 
@@ -179,6 +181,17 @@ function sanitizeObjectPatch(value, allowedFields, sanitizerMap = {}) {
     if (next !== undefined) result[field] = next;
   }
   return Object.keys(result).length > 0 ? result : null;
+}
+
+function sanitizePregnancyBlockage(value) {
+  if (value === null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const key = String(value.key || '').trim();
+  if (!key) return null;
+  return {
+    key,
+    severity: sanitizeNumber(value.severity, { min: 0, max: 0.75 }) ?? 0,
+  };
 }
 
 export function getVitalityInitByLevel(level) {
@@ -406,7 +419,7 @@ function sanitizeFetusList(value) {
         if (next !== undefined) fetus[field] = next;
       }
       const numberFields = {
-        weight: { min: 0.5, max: 2.0 },
+        weight: { min: 0.33, max: 3.0 },
         tendencyAngle: { min: 0, max: 360 },
         affinity: { min: -50, max: 50 },
         maternalDerivedTypeProgress: { min: -100, max: 100 },
@@ -436,10 +449,11 @@ function sanitizeChildrenList(value) {
 
 function sanitizeProfilePatch(profilePatch) {
   if (!profilePatch || typeof profilePatch !== 'object' || Array.isArray(profilePatch)) return null;
-  const cooldown = sanitizeObjectPatch(profilePatch.cooldown, ['orgasmOvulationUsed', 'laborResistanceUsed', 'pregnancyPressureWarning'], {
+  const cooldown = sanitizeObjectPatch(profilePatch.cooldown, ['orgasmOvulationUsed', 'laborResistanceUsed', 'pregnancyPressureWarning', 'pregnancySymptomActive'], {
     orgasmOvulationUsed: (value) => Boolean(value),
     laborResistanceUsed: (value) => Boolean(value),
     pregnancyPressureWarning: (value) => Boolean(value),
+    pregnancySymptomActive: (value) => Boolean(value),
   });
   const base = sanitizeObjectPatch(
     profilePatch.base,
@@ -482,7 +496,7 @@ function sanitizeProfilePatch(profilePatch) {
   );
   const pregnant = sanitizeObjectPatch(
     profilePatch.pregnant,
-    ['pregnantDays', 'effectivePregnantDays', 'laborHours', 'effectiveLaborHours', 'fetusesCount', 'fetalEnergyDrain', 'fetuses'],
+    ['pregnantDays', 'effectivePregnantDays', 'laborHours', 'effectiveLaborHours', 'fetusesCount', 'fetalEnergyDrain', 'nutrition', 'blockage', 'fetuses'],
     {
       pregnantDays: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
       effectivePregnantDays: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
@@ -490,6 +504,8 @@ function sanitizeProfilePatch(profilePatch) {
       effectiveLaborHours: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
       fetusesCount: (value) => sanitizeInteger(value, { min: 0, max: 99 }),
       fetalEnergyDrain: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
+      nutrition: (value) => sanitizeNumber(value, { min: -999, max: 999 }),
+      blockage: sanitizePregnancyBlockage,
       fetuses: sanitizeFetusList,
     },
   );
@@ -556,12 +572,14 @@ function sanitizeProfilePatch(profilePatch) {
     includeDefaults: false,
     booleanFields: PSY_PREG_BOOL_FIELDS,
   });
-  const metabolism = sanitizeObjectPatch(profilePatch.metabolism, ['urine', 'stool', 'hunger', 'sleep', 'flux'], {
+  const metabolism = sanitizeObjectPatch(profilePatch.metabolism, ['urine', 'stool', 'hunger', 'sleep', 'flux', 'milk', 'odor'], {
     urine: (value) => sanitizeInteger(value, { min: 0, max: 150 }),
     stool: (value) => sanitizeInteger(value, { min: 0, max: 150 }),
     hunger: (value) => sanitizeInteger(value, { min: 0, max: 150 }),
     sleep: (value) => sanitizeInteger(value, { min: 0, max: 150 }),
     flux: (value) => sanitizeInteger(value, { min: -150, max: 150 }),
+    milk: (value) => sanitizeInteger(value, { min: 0, max: 150 }),
+    odor: (value) => sanitizeInteger(value, { min: 0, max: 150 }),
   });
   const descriptions = sanitizeObjectPatch(profilePatch.descriptions, ['normalDescription', 'closeupDescription', 'pregnantDescription'], {
     normalDescription: sanitizeString,
@@ -622,6 +640,7 @@ export function createDefaultFemaleState(name = '') {
         orgasmOvulationUsed: false,
         laborResistanceUsed: false,
         pregnancyPressureWarning: false,
+        pregnancySymptomActive: false,
       },
       base: {
         isHere: true,
@@ -649,6 +668,8 @@ export function createDefaultFemaleState(name = '') {
         fetusesCount: 0,
         fetalEnergyDrain: 0,
         amnionDurability: 0,
+        nutrition: 0,
+        blockage: null,
         fetuses: [],
       },
       experience: {
@@ -686,6 +707,8 @@ export function createDefaultFemaleState(name = '') {
         stool: 0,
         hunger: 0,
         sleep: 0,
+        milk: 0,
+        odor: 0,
         flux: 0,
       },
       descriptions: {
@@ -779,10 +802,19 @@ export function getChatState(ctx, settings) {
     chatState.lastOperationLogs = sanitizedCurrentPayload.lastOperationLogs;
     shouldSave = true;
   }
-  compactChatStateSnapshots(chatState);
-  if (repackChatStateSnapshots(chatState)) shouldSave = true;
+  if (compactChatStateSnapshots(chatState)) shouldSave = true;
+  if (chatState.snapshots.length > MAX_CHAT_STATE_SNAPSHOTS) {
+    trimChatStateSnapshots(chatState);
+    shouldSave = true;
+  }
+  if (needsRepackChatStateSnapshots(chatState) && repackChatStateSnapshots(chatState)) shouldSave = true;
   if (shouldSave) saveSettings(ctx);
-  restoreChatStateFromSnapshot(chatState, getLatestMatchingSnapshot(ctx, chatState));
+  const latestSnapshot = getLatestMatchingSnapshot(ctx, chatState);
+  const latestSnapshotKey = getSnapshotRuntimeKey(latestSnapshot);
+  if (chatState[RESTORED_SNAPSHOT_RUNTIME_KEY] !== latestSnapshotKey) {
+    restoreChatStateFromSnapshot(chatState, latestSnapshot);
+    markRestoredSnapshot(chatState, latestSnapshot);
+  }
   const characters = chatState.characters;
   if (characters && typeof characters === 'object') {
     for (const item of Object.values(characters)) {
@@ -1017,6 +1049,7 @@ function createSnapshotCharacterBaseline(name = '') {
         orgasmOvulationUsed: false,
         laborResistanceUsed: false,
         pregnancyPressureWarning: false,
+        pregnancySymptomActive: false,
       },
       base: {
         isHere: true,
@@ -1044,6 +1077,8 @@ function createSnapshotCharacterBaseline(name = '') {
         fetusesCount: 0,
         fetalEnergyDrain: 0,
         amnionDurability: 0,
+        nutrition: 0,
+        blockage: null,
         fetuses: [],
       },
       experience: {
@@ -1082,6 +1117,8 @@ function createSnapshotCharacterBaseline(name = '') {
         hunger: 0,
         sleep: 0,
         flux: 0,
+        milk: 0,
+        odor: 0,
       },
       descriptions: {
         normalDescription: '',
@@ -1204,7 +1241,7 @@ function summarizeSnapshotDebugValue(value, depth = 0) {
   if (typeof value === 'string') return value.slice(0, MAX_RAW_RESULT_TEXT_LENGTH);
   if (!value || typeof value !== 'object') return value;
   if (depth >= 8) return '[Object]';
-  if (Array.isArray(value)) return value.slice(0, 80).map((item) => summarizeSnapshotDebugValue(item, depth + 1));
+  if (Array.isArray(value)) return value.slice(0, MAX_SNAPSHOT_DEBUG_ITEMS).map((item) => summarizeSnapshotDebugValue(item, depth + 1));
   const result = {};
   for (const [key, child] of Object.entries(value)) {
     result[key] = summarizeSnapshotDebugValue(child, depth + 1);
@@ -1233,7 +1270,7 @@ export function summarizeRawResult(value) {
 
 export function summarizeOperationLogs(value) {
   if (!Array.isArray(value)) return [];
-  return value.map((item) => {
+  return value.slice(0, MAX_SNAPSHOT_DEBUG_ITEMS).map((item) => {
     const log = {
       name: String(item?.name || ''),
       applied: Boolean(item?.applied),
@@ -1402,20 +1439,38 @@ function createStoredSnapshotState(snapshots, payload, metadata = {}, cache = ne
 }
 
 function compactChatStateSnapshots(chatState) {
-  if (!Array.isArray(chatState?.snapshots)) return;
+  if (!Array.isArray(chatState?.snapshots)) return false;
+  let changed = false;
   for (const snapshot of chatState.snapshots) {
     if (!snapshot || typeof snapshot !== 'object') continue;
     if (!Number.isInteger(snapshot.messageCount)) {
       snapshot.messageCount = Array.isArray(snapshot.messageSignatures) ? snapshot.messageSignatures.length : 0;
+      changed = true;
     }
     if (!snapshot.messageDigest && Array.isArray(snapshot.messageSignatures)) {
       snapshot.messageDigest = buildMessageDigestFromSignatures(snapshot.messageSignatures, snapshot.messageCount);
+      changed = true;
     }
     if (!snapshot.snapshotMode) {
       snapshot.snapshotMode = snapshot.stateDelta ? 'patch' : 'full';
+      changed = true;
     }
-    delete snapshot.messageSignatures;
+    if (Array.isArray(snapshot.messageSignatures)) {
+      delete snapshot.messageSignatures;
+      changed = true;
+    }
   }
+  return changed;
+}
+
+function needsRepackChatStateSnapshots(chatState) {
+  if (!Array.isArray(chatState?.snapshots) || chatState.snapshots.length === 0) return false;
+  return chatState.snapshots.some((snapshot) => {
+    if (!snapshot || typeof snapshot !== 'object') return false;
+    if (!snapshot.snapshotMode) return true;
+    if (Array.isArray(snapshot.messageSignatures)) return true;
+    return false;
+  });
 }
 
 function repackChatStateSnapshots(chatState) {
@@ -1452,6 +1507,26 @@ function repackChatStateSnapshots(chatState) {
   return changed;
 }
 
+function getSnapshotRuntimeKey(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return '';
+  return [
+    Number.isInteger(snapshot.messageCount) ? snapshot.messageCount : 0,
+    String(snapshot.messageDigest || ''),
+    String(snapshot.reason || ''),
+    Number(snapshot.createdAt || 0),
+  ].join('|');
+}
+
+function markRestoredSnapshot(chatState, snapshot) {
+  if (!chatState || typeof chatState !== 'object') return;
+  Object.defineProperty(chatState, RESTORED_SNAPSHOT_RUNTIME_KEY, {
+    value: getSnapshotRuntimeKey(snapshot),
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+}
+
 export function restoreChatStateFromSnapshot(chatState, snapshot) {
   const snapshotIndex = findSnapshotIndex(chatState, snapshot);
   const payload = snapshotIndex >= 0
@@ -1484,6 +1559,7 @@ export function recordChatStateSnapshot(ctx, chatState, options = {}) {
   );
   chatState.snapshots.push(snapshot);
   trimChatStateSnapshots(chatState);
+  markRestoredSnapshot(chatState, snapshot);
   return snapshot;
 }
 

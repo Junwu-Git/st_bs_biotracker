@@ -20,6 +20,8 @@ import {
   saveSettings,
   shouldTriggerForMessage,
 } from './state.js';
+import { getDerivedTypeMetabolismExemptions } from './race_config.js';
+import { LABOR_STAGES, PREGNANCY_STAGES } from './stage_config.js';
 
 export const POLL_RUNTIME_KEY = '__bs_biotracker_poll__';
 export const RUN_RUNTIME_KEY = '__bs_biotracker_running__';
@@ -92,6 +94,30 @@ function getRecentDiaryEntries(profile, limit) {
   return profile.diary.slice(-limit);
 }
 
+function shouldSendPregnantState(base = {}, pregnant = {}) {
+  const stage = String(base.stage || '');
+  const hasFetuses = Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0;
+  return hasFetuses
+    || PREGNANCY_STAGES.includes(stage)
+    || stage === '产前阵痛'
+    || LABOR_STAGES.includes(stage)
+    || stage === '产后恢复'
+    || stage === '假孕期';
+}
+
+function getPromptFacingBlockage(pregnant = {}) {
+  const blockage = pregnant.blockage;
+  if (!blockage || typeof blockage !== 'object') return {};
+  const key = String(blockage.key || '').trim();
+  if (!key) return {};
+  return {
+    blockage: {
+      key,
+      severity: Number.isFinite(Number(blockage.severity)) ? Number(blockage.severity) : 0,
+    },
+  };
+}
+
 function buildPromptFacingCharacterState(item, diaryLimit = 0) {
   const next = cloneValue(item);
   const profile = next?.profile || {};
@@ -99,6 +125,8 @@ function buildPromptFacingCharacterState(item, diaryLimit = 0) {
   const pregnant = profile.pregnant || {};
   const immune = profile.immune || {};
   const metabolism = profile.metabolism || {};
+  const hasFetuses = Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0;
+  const sendPregnantState = shouldSendPregnantState(base, pregnant);
 
   profile.base = {
     ...base,
@@ -106,13 +134,17 @@ function buildPromptFacingCharacterState(item, diaryLimit = 0) {
     psyStressLevelText: getPsyStressLevelText(base.psyStressLevel),
   };
 
-  if (Array.isArray(pregnant.fetuses)) {
+  if (!sendPregnantState) {
+    delete profile.pregnant;
+  } else if (Array.isArray(pregnant.fetuses)) {
     profile.pregnant = {
       pregnantDays: Number.isFinite(Number(pregnant.pregnantDays)) ? Number(pregnant.pregnantDays) : 0,
       effectivePregnantDays: Number.isFinite(Number(pregnant.effectivePregnantDays)) ? Number(pregnant.effectivePregnantDays) : 0,
       laborHours: Number.isFinite(Number(pregnant.laborHours)) ? Number(pregnant.laborHours) : 0,
       effectiveLaborHours: Number.isFinite(Number(pregnant.effectiveLaborHours)) ? Number(pregnant.effectiveLaborHours) : 0,
       amnionDurability: Number.isFinite(Number(pregnant.amnionDurability)) ? Number(pregnant.amnionDurability) : 0,
+      ...(hasFetuses ? { nutrition: Number.isFinite(Number(pregnant.nutrition)) ? Number(pregnant.nutrition) : 0 } : {}),
+      ...getPromptFacingBlockage(pregnant),
       fetuses: pregnant.fetuses.map((fetus) => ({
         ...fetus,
         tendencyAngleText: getTendencyAngleText(fetus?.tendencyAngle),
@@ -126,13 +158,22 @@ function buildPromptFacingCharacterState(item, diaryLimit = 0) {
       laborHours: Number.isFinite(Number(pregnant.laborHours)) ? Number(pregnant.laborHours) : 0,
       effectiveLaborHours: Number.isFinite(Number(pregnant.effectiveLaborHours)) ? Number(pregnant.effectiveLaborHours) : 0,
       amnionDurability: Number.isFinite(Number(pregnant.amnionDurability)) ? Number(pregnant.amnionDurability) : 0,
+      ...getPromptFacingBlockage(pregnant),
       fetuses: [],
     };
   }
 
   if (base.derivedType) {
+    const exemptions = new Set(getDerivedTypeMetabolismExemptions(base.derivedType));
+    const includeNeed = (key) => (exemptions.has(key) ? {} : { [key]: metabolism[key] ?? 0 });
     profile.metabolism = {
       flux: Number.isFinite(Number(metabolism.flux)) ? Number(metabolism.flux) : 0,
+      ...includeNeed('urine'),
+      ...includeNeed('stool'),
+      ...includeNeed('hunger'),
+      ...includeNeed('sleep'),
+      ...includeNeed('milk'),
+      ...includeNeed('odor'),
     };
   } else {
     profile.metabolism = {
@@ -140,6 +181,8 @@ function buildPromptFacingCharacterState(item, diaryLimit = 0) {
       stool: metabolism.stool ?? 0,
       hunger: metabolism.hunger ?? 0,
       sleep: metabolism.sleep ?? 0,
+      milk: metabolism.milk ?? 0,
+      odor: metabolism.odor ?? 0,
     };
   }
 
@@ -161,6 +204,8 @@ function buildOffscreenCharacterState(item, diaryLimit = 0) {
   const base = profile.base || {};
   const pregnant = profile.pregnant || {};
   const notify = profile.notify || {};
+  const hasFetuses = Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0;
+  const sendPregnantState = shouldSendPregnantState(base, pregnant);
   return {
     name: item?.name || '',
     initialized: Boolean(item?.initialized),
@@ -174,12 +219,16 @@ function buildOffscreenCharacterState(item, diaryLimit = 0) {
         race: base.race ?? null,
         derivedType: base.derivedType ?? null,
       },
-      pregnant: {
-        pregnantDays: pregnant.pregnantDays ?? 0,
-        effectivePregnantDays: pregnant.effectivePregnantDays ?? 0,
-        laborHours: pregnant.laborHours ?? 0,
-        effectiveLaborHours: pregnant.effectiveLaborHours ?? 0,
-      },
+      ...(sendPregnantState ? {
+        pregnant: {
+          pregnantDays: pregnant.pregnantDays ?? 0,
+          effectivePregnantDays: pregnant.effectivePregnantDays ?? 0,
+          laborHours: pregnant.laborHours ?? 0,
+          effectiveLaborHours: pregnant.effectiveLaborHours ?? 0,
+          fetusesCount: hasFetuses ? pregnant.fetuses.length : 0,
+          ...getPromptFacingBlockage(pregnant),
+        },
+      } : {}),
       diary: getRecentDiaryEntries(profile, diaryLimit),
       notify: Object.values(notify).some((value) => String(value || '').trim()) ? notify : undefined,
     },

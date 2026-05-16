@@ -1,4 +1,4 @@
-import { getDerivedTypeFluxProfile, getEmbryoTypeByRace, getMergedRacePhysiologyProfile, getRaceComponents, getRaceIntroductionLine, getRacePhysiologyProfile } from './race_config.js';
+import { getDerivedTypeFluxProfile, getDerivedTypeMetabolismExemptions, getEmbryoTypeByRace, getMergedRacePhysiologyProfile, getRaceComponents, getRaceIntroductionLine, getRacePhysiologyProfile } from './race_config.js';
 
 function formatNumber(value, digits = 2) {
   const num = Number(value);
@@ -227,9 +227,11 @@ function buildDerivedFluxLoreBlock(derivedType) {
   const fluxProfile = getDerivedTypeFluxProfile(value);
   const fluxDefinition = String(fluxProfile?.fluxDefinition || '').trim();
   if (!fluxDefinition) return '';
+  const exemptions = getDerivedTypeMetabolismExemptions(value);
   return [
     '[衍生需求补充设定]',
     `【${value}】`,
+    `该衍生类型由 flux 抵免的普通需求：${exemptions.length > 0 ? exemptions.join(' / ') : '无'}。未被抵免的需求仍会作为 metabolism 保留。`,
     fluxDefinition,
   ].join('\n');
 }
@@ -308,7 +310,7 @@ function buildPregnancyShiftBlock(characterState) {
   let recoveryAccumulator = 0;
 
   for (const fetus of fetuses) {
-    const weight = Math.max(0.5, Math.min(2.0, Number(fetus?.weight) || 1.0));
+    const weight = Math.max(0.33, Math.min(3.0, Number(fetus?.weight) || 1.0));
     const raceProfile = getMergedRacePhysiologyProfile(fetus?.race) || {};
     totalWeight += weight;
     gestationAccumulator += weight * Math.max(0.1, Math.min(20, Number(raceProfile?.gestationSpeciesSpeed) || 1.0));

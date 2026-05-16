@@ -8,6 +8,7 @@ import {
   getEmbryoTypeByRace,
   getBuiltinRacePhysiologyProfile,
   getDerivedTypeFluxProfile,
+  getDerivedTypeMetabolismExemptions,
   getRaceIntroductionLine,
   getRacePhysiologyOverride,
   setRacePhysiologyOverrides,
@@ -667,9 +668,11 @@ function renderRaceEncyclopediaPage(ctx = null) {
   const fluxProfile = getDerivedTypeFluxProfile(selectedDerivedEncyclopedia);
   const fluxName = String(fluxProfile?.fluxName || '未知').trim() || '未知';
   const fluxDefinition = String(fluxProfile?.fluxDefinition || '').trim();
+  const exemptions = getDerivedTypeMetabolismExemptions(selectedDerivedEncyclopedia);
   derivedOutputNode.textContent = [
     `【${selectedDerivedEncyclopedia}】`,
     `- Flux: ${fluxName}`,
+    `- 代谢抵免: ${exemptions.length > 0 ? exemptions.join(' / ') : '无'}`,
     fluxDefinition || '- 暂无额外说明。',
   ].join('\n\n');
 }
@@ -687,6 +690,12 @@ function formatIntegerDisplay(value, fallback = '未知') {
   const next = Number(value);
   if (!Number.isFinite(next)) return fallback;
   return String(Math.round(next));
+}
+
+function formatFixedDisplay(value, digits = 1, fallback = '未知') {
+  const next = Number(value);
+  if (!Number.isFinite(next)) return fallback;
+  return next.toFixed(digits);
 }
 
 function getTrackCardIndexKey(kind) {
@@ -730,10 +739,9 @@ function getCharacterStateForDisplay(character) {
   const metabolism = cloned?.profile?.metabolism;
   if (!metabolism || typeof metabolism !== 'object') return cloned;
   if (derivedType) {
-    delete metabolism.urine;
-    delete metabolism.stool;
-    delete metabolism.hunger;
-    delete metabolism.sleep;
+    for (const key of getDerivedTypeMetabolismExemptions(derivedType)) {
+      delete metabolism[key];
+    }
   } else {
     delete metabolism.flux;
   }
@@ -1109,7 +1117,7 @@ function getLaborStageThreshold(profile, stage) {
     const firstFetus = fetuses[0];
     const fetalAngle = Number.isFinite(Number(firstFetus?.tendencyAngle)) ? wrapLaborAngle(firstFetus.tendencyAngle) : 0;
     const positionDifficulty = getLaborPositionDifficulty(fetalAngle, firstFetus);
-    const fetalWeight = Math.max(0.5, Math.min(2.0, Number(firstFetus?.weight) || 1.0));
+    const fetalWeight = Math.max(0.33, Math.min(3.0, Number(firstFetus?.weight) || 1.0));
     threshold = ((Number(LABOR_STAGE_BASE_HOURS['第二产程']) || 0) * birthDifficulty) * positionDifficulty * fetalWeight;
   }
 
@@ -1175,15 +1183,138 @@ function getDerivedFluxSummary(value) {
   return `${stage} (${Math.round(next)})：${description}`;
 }
 
-function getMetabolismSummary(metabolism = {}, immune = {}, derivedType = null) {
-  if (immune?.metabolism) return '代谢免疫';
-  if (derivedType) return getDerivedFluxSummary(metabolism.flux);
+const METABOLISM_NEED_LABELS = Object.freeze({
+  urine: '尿意',
+  stool: '便意',
+  hunger: '饿意',
+  sleep: '困意',
+  milk: '奶意',
+  odor: '臭意',
+  flux: '极需',
+});
+
+const DEBUG_BLOCKAGE_LABELS = Object.freeze({
+  urine: '尿意',
+  stool: '便意',
+  hunger: '饿意',
+  sleep: '困意',
+  milk: '奶意',
+  odor: '臭意',
+  fluxPositive: '极需正极',
+  fluxNegative: '极需负极',
+});
+
+const DEBUG_BLOCKAGE_DEFAULT_SEVERITY = Object.freeze({
+  urine: 0.60,
+  stool: 0.80,
+  hunger: 0.55,
+  sleep: 0.55,
+  milk: 0.55,
+  odor: 0.45,
+  fluxPositive: 0.65,
+  fluxNegative: 0.65,
+});
+
+function clampUiNumber(value, min, max, fallback = 0) {
+  const next = Number(value);
+  if (!Number.isFinite(next)) return fallback;
+  return Math.max(min, Math.min(max, next));
+}
+
+function normalizeMetabolismNeed(key, metabolism = {}, blockage = null) {
+  const value = key === 'flux'
+    ? clampUiNumber(metabolism[key], -150, 150, 0)
+    : clampUiNumber(metabolism[key], 0, 150, 0);
+  const blockageKey = String(blockage?.key || '');
+  const blocked = key === 'flux'
+    ? (value > 0 && blockageKey === 'fluxPositive') || (value < 0 && blockageKey === 'fluxNegative')
+    : blockageKey === key;
   return {
-    hunger: getMetabolismLevel(metabolism.hunger),
-    sleep: getMetabolismLevel(metabolism.sleep),
-    urine: getMetabolismLevel(metabolism.urine),
-    stool: getMetabolismLevel(metabolism.stool),
+    key,
+    label: METABOLISM_NEED_LABELS[key] || key,
+    value,
+    level: key === 'flux' ? getDerivedFluxSummary(value) : getMetabolismLevel(value),
+    blocked,
+    blockageSeverity: blocked ? clampUiNumber(blockage?.severity, 0, 1, 0) : 0,
   };
+}
+
+function getMetabolismSummary(metabolism = {}, immune = {}, derivedType = null, blockage = null) {
+  if (immune?.metabolism) return '代谢免疫';
+  if (derivedType) {
+    const exemptions = new Set(getDerivedTypeMetabolismExemptions(derivedType));
+    const visible = (key) => (exemptions.has(key) ? null : normalizeMetabolismNeed(key, metabolism, blockage));
+    return {
+      flux: normalizeMetabolismNeed('flux', metabolism, blockage),
+      hunger: visible('hunger'),
+      sleep: visible('sleep'),
+      urine: visible('urine'),
+      stool: visible('stool'),
+      milk: visible('milk'),
+      odor: visible('odor'),
+      derived: true,
+    };
+  }
+  return {
+    hunger: normalizeMetabolismNeed('hunger', metabolism, blockage),
+    sleep: normalizeMetabolismNeed('sleep', metabolism, blockage),
+    urine: normalizeMetabolismNeed('urine', metabolism, blockage),
+    stool: normalizeMetabolismNeed('stool', metabolism, blockage),
+    milk: normalizeMetabolismNeed('milk', metabolism, blockage),
+    odor: normalizeMetabolismNeed('odor', metabolism, blockage),
+  };
+}
+
+const METABOLISM_DISPLAY_ORDER = Object.freeze(['urine', 'stool', 'hunger', 'sleep', 'milk', 'odor']);
+
+function getMetabolismNeedItems(summary) {
+  if (!summary || typeof summary !== 'object') return [];
+  const items = summary.derived ? [summary.flux] : [];
+  for (const key of METABOLISM_DISPLAY_ORDER) {
+    if (summary[key]) items.push(summary[key]);
+  }
+  return items.filter(Boolean);
+}
+
+function renderMetabolismNeedIcon(item) {
+  const key = String(item?.key || '');
+  const value = Number(item?.value) || 0;
+  const fillValue = key === 'flux' ? Math.abs(value) : value;
+  const fill = key === 'flux'
+    ? Math.max(0, Math.min(100, (fillValue / 150) * 100))
+    : Math.max(0, Math.min(100, (fillValue / 100) * 100));
+  const overfill = key === 'flux'
+    ? 0
+    : Math.max(0, Math.min(100, ((fillValue - 100) / 50) * 100));
+  const tone = key === 'flux'
+    ? value > 0 ? 'positive' : value < 0 ? 'negative' : 'neutral'
+    : value >= 100 ? 'high' : 'normal';
+  const title = `${item.label}: ${item.level}${key === 'flux' ? '' : ` (${Math.round(value)})`}${item.blocked ? `；阻塞 ${Math.round((item.blockageSeverity || 0) * 100)}%` : ''}`;
+  const displayValue = key === 'flux'
+    ? (value > 0 ? '正极' : value < 0 ? '负极' : '平衡')
+    : String(Math.round(value));
+  return `
+    <div class="bs-bt-need-tile bs-bt-need-tile--${escapeHtml(key)} bs-bt-need-tile--${tone}${item.blocked ? ' is-blocked' : ''}" aria-label="${escapeHtml(title)}">
+      ${item.blocked ? '<span class="bs-bt-need-blockage" aria-hidden="true"></span>' : ''}
+      <span class="bs-bt-need-icon-wrap" style="--bs-bt-need-fill: ${fill.toFixed(1)}%; --bs-bt-need-overfill: ${overfill.toFixed(1)}%;">
+        <span class="bs-bt-need-icon bs-bt-need-icon--${escapeHtml(key)} bs-bt-need-icon-base" aria-hidden="true"></span>
+        <span class="bs-bt-need-icon-fill" aria-hidden="true">
+          <span class="bs-bt-need-icon bs-bt-need-icon--${escapeHtml(key)}"></span>
+        </span>
+        ${key === 'flux' ? '' : `<span class="bs-bt-need-icon-overfill" aria-hidden="true">
+          <span class="bs-bt-need-icon bs-bt-need-icon--${escapeHtml(key)}"></span>
+        </span>`}
+      </span>
+      <span class="bs-bt-need-label">${escapeHtml(item.label)}</span>
+      <span class="bs-bt-need-value">${escapeHtml(displayValue)}</span>
+    </div>
+  `;
+}
+
+function renderMetabolismSummary(summary) {
+  if (typeof summary === 'string') return `<div>${escapeHtml(summary)}</div>`;
+  const items = getMetabolismNeedItems(summary);
+  return `<div class="bs-bt-track-metabolism-grid${summary?.derived ? ' is-derived' : ''}">${items.map(renderMetabolismNeedIcon).join('')}</div>`;
 }
 
 function parseDescriptionBlocks(text) {
@@ -1314,7 +1445,7 @@ function buildTrackCharacterViewModel(character) {
         },
         { label: '宫压', value: Number(base.uterinePressure) || 0, cap: getUterinePressureCap(stage, profile) },
       ],
-      metabolismSummary: getMetabolismSummary(profile.metabolism, immune, base.derivedType),
+      metabolismSummary: getMetabolismSummary(profile.metabolism, immune, base.derivedType, pregnant.blockage),
     },
     description: {
       normalBlocks: parseDescriptionBlocks(descriptions.normalDescription),
@@ -1376,6 +1507,11 @@ function buildTrackCharacterViewModel(character) {
         fetuses: Array.isArray(pregnant.fetuses) ? pregnant.fetuses.length : 0,
         children: Array.isArray(profile.children) ? profile.children.length : 0,
       },
+      derivedType: String(base.derivedType || '').trim(),
+      blockage: pregnant.blockage && typeof pregnant.blockage === 'object' ? {
+        key: String(pregnant.blockage.key || ''),
+        severity: Number(pregnant.blockage.severity) || 0,
+      } : null,
       hasConceptionState: (Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0)
         || (Number(base.fertilizationDays) || 0) > 0
         || isPregnantStage(stage),
@@ -1491,15 +1627,7 @@ function renderTrackOverview(viewModel) {
     </div>
     <div class="bs-bt-track-section">
       <div class="bs-bt-track-section-title">代谢需求</div>
-      ${typeof viewModel.overview.metabolismSummary === 'string'
-      ? `<div>${escapeHtml(viewModel.overview.metabolismSummary)}</div>`
-      : `<div class="bs-bt-track-metabolism-grid">
-              <div class="bs-bt-track-metabolism-item"><span class="bs-bt-track-metabolism-label">饿意:</span><span>${escapeHtml(viewModel.overview.metabolismSummary.hunger)}</span></div>
-              <div class="bs-bt-track-metabolism-item"><span class="bs-bt-track-metabolism-label">困意:</span><span>${escapeHtml(viewModel.overview.metabolismSummary.sleep)}</span></div>
-              <div class="bs-bt-track-metabolism-item"><span class="bs-bt-track-metabolism-label">尿意:</span><span>${escapeHtml(viewModel.overview.metabolismSummary.urine)}</span></div>
-              <div class="bs-bt-track-metabolism-item"><span class="bs-bt-track-metabolism-label">便意:</span><span>${escapeHtml(viewModel.overview.metabolismSummary.stool)}</span></div>
-            </div>`
-    }
+      ${renderMetabolismSummary(viewModel.overview.metabolismSummary)}
     </div>
   `;
 }
@@ -1589,6 +1717,9 @@ function renderTrackPregnancy(viewModel) {
                 <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">父方种族</span><span class="bs-bt-track-list-value">${escapeHtml(formatRaceLabel(item?.fatherRace, item?.fatherDerivedType))}</span></div>
                 <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">胚型</span><span class="bs-bt-track-list-value">${escapeHtml(item?.embryoType || '未知')}</span></div>
                 <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">性别</span><span class="bs-bt-track-list-value">${escapeHtml(item?.gender || '未知')}</span></div>
+                <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">体重倍率</span><span class="bs-bt-track-list-value">${escapeHtml(formatFixedDisplay(item?.weight, 2))}</span></div>
+                <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">胎位角</span><span class="bs-bt-track-list-value">${escapeHtml(`${formatIntegerDisplay(item?.tendencyAngle)}°`)}</span></div>
+                <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">亲和</span><span class="bs-bt-track-list-value">${escapeHtml(formatIntegerDisplay(item?.affinity))}</span></div>
               </div>`,
         '当前无妊娠胎儿资料',
         'fetuses',
@@ -1652,6 +1783,17 @@ function renderTrackDebug(viewModel) {
   const counts = viewModel.debug?.counts || {};
   const hasConceptionState = Boolean(viewModel.debug?.hasConceptionState);
   const gestationModifier = viewModel.debug?.gestationModifier || {};
+  const derivedType = String(viewModel.debug?.derivedType || '').trim();
+  const currentBlockageKey = String(viewModel.debug?.blockage?.key || '');
+  const blockageExemptions = derivedType ? new Set(getDerivedTypeMetabolismExemptions(derivedType)) : new Set();
+  const blockageKeys = METABOLISM_DISPLAY_ORDER.filter((key) => !blockageExemptions.has(key));
+  if (derivedType) blockageKeys.push('fluxPositive', 'fluxNegative');
+  const blockageOptions = [
+    `<option value=""${currentBlockageKey ? '' : ' selected'}>无</option>`,
+    ...blockageKeys.map((key) =>
+      `<option value="${escapeHtml(key)}"${currentBlockageKey === key ? ' selected' : ''}>${escapeHtml(DEBUG_BLOCKAGE_LABELS[key] || key)}</option>`,
+    ),
+  ].join('');
 
   const currentStage = viewModel.base?.stage || '';
   const hasProtectedPregnancyState = hasConceptionState || ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产前阵痛', '第一产程', '第二产程', '第三产程'].includes(currentStage);
@@ -1699,6 +1841,18 @@ function renderTrackDebug(viewModel) {
         </button>
       </div>
       <div class="bs-bt-track-debug-hint">淨空胎儿时，若当前已是着床后的妊娠状态，会追加一次流产/堕胎经验；尚未着床的受精卵不计入。</div>
+    </div>
+    <div class="bs-bt-track-section" style="margin-top: 10px;">
+      <div class="bs-bt-track-section-title">妊娠阻塞调适</div>
+      <fieldset class="bs-bt-track-debug-form">
+        <div class="bs-bt-track-inline-action">
+          <select id="bs-bt-debug-blockage-select" class="text_pole">
+            ${blockageOptions}
+          </select>
+          <button type="button" class="menu_button bs-bt-inline-button" data-debug-action="set-blockage">应用阻塞</button>
+        </div>
+      </fieldset>
+      <div class="bs-bt-track-debug-hint">衍生角色只会列出未被代谢抵免的需求；非衍生角色不会出现 flux。当前强度 ${Number(viewModel.debug?.blockage?.severity || 0).toFixed(2)}。</div>
     </div>
     <div class="bs-bt-track-section" style="margin-top: 10px;">
       <div class="bs-bt-track-section-title">生理周期强制切換</div>
@@ -1903,6 +2057,47 @@ function clearSelectedTrackContainer(ctx, container) {
   globalThis.toastr?.success?.(`[BS BioTracker] 已为 ${selectedTrackName} 淨空${label}`);
 }
 
+function setSelectedTrackBlockage(ctx, key) {
+  if (!selectedTrackName) return;
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const character = chatState.characters?.[selectedTrackName];
+  if (!character?.profile) return;
+
+  const profile = character.profile;
+  const derivedType = String(profile?.base?.derivedType || '').trim();
+  const exemptions = derivedType ? new Set(getDerivedTypeMetabolismExemptions(derivedType)) : new Set();
+  const allowed = new Set(METABOLISM_DISPLAY_ORDER.filter((item) => !exemptions.has(item)));
+  if (derivedType) {
+    allowed.add('fluxPositive');
+    allowed.add('fluxNegative');
+  }
+
+  const nextKey = String(key || '').trim();
+  profile.pregnant = profile.pregnant && typeof profile.pregnant === 'object' ? profile.pregnant : {};
+  if (!nextKey) {
+    profile.pregnant.blockage = null;
+  } else if (!allowed.has(nextKey)) {
+    globalThis.toastr?.warning?.('[BS BioTracker] 该角色不能使用这个妊娠阻塞项');
+    return;
+  } else {
+    profile.pregnant.blockage = {
+      key: nextKey,
+      severity: DEBUG_BLOCKAGE_DEFAULT_SEVERITY[nextKey] || 0.5,
+    };
+  }
+
+  recordChatStateSnapshot(ctx, chatState, { reason: 'debug_set_pregnancy_blockage' });
+  saveSettings(ctx);
+  renderStatusPanel(ctx);
+  renderFullStatePage(ctx);
+  globalThis.toastr?.success?.(
+    nextKey
+      ? `[BS BioTracker] 已设置 ${selectedTrackName} 的妊娠阻塞：${DEBUG_BLOCKAGE_LABELS[nextKey] || nextKey}`
+      : `[BS BioTracker] 已清除 ${selectedTrackName} 的妊娠阻塞`,
+  );
+}
+
 function bindDebugPanelControls(ctx, root, refresh = () => renderFullStatePage(ctx)) {
   if (!root) return;
   root.querySelectorAll('[data-debug-immune]').forEach((node) =>
@@ -1944,6 +2139,12 @@ function bindDebugPanelControls(ctx, root, refresh = () => renderFullStatePage(c
       renderStatusPanel(ctx);
       renderFullStatePage(ctx);
       globalThis.toastr?.success?.(`[BS BioTracker] 已强制将 ${selectedTrackName} 切換至 ${stage}`);
+    }),
+  );
+  root.querySelectorAll('[data-debug-action="set-blockage"]').forEach((node) =>
+    node.addEventListener('click', () => {
+      const key = root.querySelector('#bs-bt-debug-blockage-select')?.value || '';
+      setSelectedTrackBlockage(ctx, key);
     }),
   );
   root.querySelectorAll('[data-debug-clear]').forEach((node) =>
@@ -2385,10 +2586,13 @@ function updateFullStateControls() {
 
 function updateFullStateSubpage() {
   if (!['variables', 'debug'].includes(selectedFullStateSubpage)) selectedFullStateSubpage = 'variables';
+  const hasSelectedCharacter = Boolean(selectedFullStateName);
+  const tabs = document.getElementById('bs-bt-full-state-tabs');
   const varsPanel = document.getElementById('bs-bt-full-state-vars-panel');
   const debugSection = document.getElementById('bs-bt-full-state-debug-section');
-  if (varsPanel) varsPanel.hidden = selectedFullStateSubpage !== 'variables';
-  if (debugSection) debugSection.hidden = selectedFullStateSubpage !== 'debug';
+  if (tabs?.parentElement) tabs.parentElement.hidden = !hasSelectedCharacter;
+  if (varsPanel) varsPanel.hidden = !hasSelectedCharacter || selectedFullStateSubpage !== 'variables';
+  if (debugSection) debugSection.hidden = !hasSelectedCharacter || selectedFullStateSubpage !== 'debug';
   document.querySelectorAll('#bs-bt-full-state-tabs [data-full-state-tab]').forEach((node) => {
     node.classList.toggle('is-active', String(node.getAttribute('data-full-state-tab') || '') === selectedFullStateSubpage);
   });
@@ -2521,11 +2725,18 @@ function showFullState(ctx, name) {
     return;
   }
   selectedFullStateName = name;
-  renderSelectedFullStateEditor(ctx);
-  updateFullStateControls();
-  closeFullStateConfirm();
+  selectedFullStateSubpage = ['variables', 'debug'].includes(selectedFullStateSubpage) ? selectedFullStateSubpage : 'variables';
+  renderFullStatePage(ctx);
   setView('full-state');
   globalThis.toastr?.success?.(`[BS BioTracker] 已显示 ${name} 的完整变量`);
+}
+
+function openFullStateMenu(ctx) {
+  selectedFullStateName = '';
+  selectedFullStateSubpage = 'variables';
+  closeFullStateConfirm();
+  renderFullStatePage(ctx);
+  setView('full-state');
 }
 
 function openFullStateConfirm() {
@@ -2582,14 +2793,12 @@ function renderFullStatePage(ctx) {
     return;
   }
 
-  if (!chatState.characters[selectedFullStateName]) {
-    selectedFullStateName = names[0];
-  }
+  if (selectedFullStateName && !chatState.characters[selectedFullStateName]) selectedFullStateName = '';
 
   for (const name of names) {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'bs-bt-theme-option';
+    button.className = `bs-bt-theme-option${name === selectedFullStateName ? ' is-active' : ''}`;
     button.textContent = name;
     button.addEventListener('click', () => showFullState(ctx, name));
     list.appendChild(button);
@@ -3593,7 +3802,10 @@ async function ensureModal(ctx) {
           console.error('[BS BioTracker] refreshWorldbookFilterPage failed', error);
         });
       }
-      if (nextView === 'full-state') renderFullStatePage(ctx);
+      if (nextView === 'full-state') {
+        openFullStateMenu(ctx);
+        return;
+      }
       if (nextView === 'race-encyclopedia') renderRaceEncyclopediaPage(ctx);
       if (nextView === 'tracker-preset') {
         await refreshTrackerPresetPage(ctx).catch((error) => {

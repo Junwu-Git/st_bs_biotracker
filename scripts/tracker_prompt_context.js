@@ -56,11 +56,14 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '- vitalityLevelText / psyStressLevelText: 系统额外附带的等级文字说明，方便直接理解体质与精神倾向。',
   '',
   '[pregnant]',
+  '- pregnant 只会在已有 fetuses、妊娠阶段、产前阵痛/产程、产后恢复或假孕期发送；幕外角色发送时只保留少量 pregnant 摘要，并用 fetusesCount 表示胎儿数量。',
   '- pregnantDays: 这次妊娠在现实中已经过的天数，使用 0 起算的 elapsed/progress 语义。',
   '- effectivePregnantDays: 真正计入胎儿发育与阶段推进的有效妊娠天数，使用 0 起算的 elapsed/progress 语义；当妊娠被冻结时，它可以停在原地而 pregnantDays 继续增加。',
   '- laborHours: 产程已消耗的实际时长。',
   '- effectiveLaborHours: 真正推动产程前进的有效时长。',
   '- amnionDurability: 母体层的膜耐性；过低代表接近或已经破水。',
+  '- nutrition: 妊娠供养力盈余/赤字。正值代表供养充足，负值代表供养亏空；每周会参与胎儿体重结算。',
+  '- blockage: 当日妊娠阻塞状态，格式为 {key, severity}。key 可为 urine/stool/hunger/sleep/milk/odor/fluxPositive/fluxNegative；它会让当天对应需求的 bsExcreteMetabolism 排解不顺畅，severity 已按需求类型校正强度。非衍生角色不会出现 fluxPositive/fluxNegative；衍生角色不会出现其 derivedType 已抵免的普通需求。',
   '- fetuses: 胎儿列表。',
   '- fetuses[*].fathers: 父方对象名称。',
   '- fetuses[*].provider: 提供子宫或代孕来源；正常情况下为 null。',
@@ -68,7 +71,7 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '- fetuses[*].fatherDerivedType: 父方衍生类型；若没有则为 null。',
   '- fetuses[*].gender: 胎儿性别。',
   '- fetuses[*].embryoType: 胚胎型态，如 胎生、卵生、卵胎生、胎转卵生、不定型。',
-  '- fetuses[*].weight: 胎重系数，標準1.0，会影响妊娠负担、分娩难度与恢复期。',
+  '- fetuses[*].weight: 胎重系数，標準1.0，范围0.33~3.0。影响妊娠负担、分娩难度与恢复期。',
   '- fetuses[*].tendencyAngle: 胎位倾向角度，影响孕期调位与产程顺序。',
   '- fetuses[*].tendencyAngleText: 系统额外附带的胎位文字说明，如 正位/倒位/横位/斜位。',
   '- fetuses[*].affinity: 母胎之間的親密度，也会参与 derivedType 进展。',
@@ -112,9 +115,11 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '- 角色不在场也可以写日记；可根据角色性格、处境与已知生活状态补足合理的日常幕外感受，但不要把未经剧情支持的重大事件写成既成事实，也不要用日记改写客观状态。',
   '',
   '[metabolism]',
-  '- 普通种族使用 urine / stool / hunger / sleep，分别对应尿意、便意、饿意、困意。',
-  '- 若角色具有 derivedType，则 metabolism 只看 flux。它是 -150 到 150 的单一极性需求值：正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。',
-  '- 对 derivedType 角色来说，四项常规代谢需求不再作为主要判读依据。',
+  '- 普通种族使用 urine / stool / hunger / sleep / milk / odor，分别对应尿意、便意、饿意、困意、奶意、臭意。',
+  '- 若角色具有 derivedType，则 metabolism 一定包含 flux，并只保留该衍生类型未抵免的普通需求。flux 是 -150 到 150 的单一极性需求值：正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。',
+  '- milk 代表妊娠、产后恢复或假孕造成的奶意/乳胀；odor 代表需要清理的臭意。若它们出现在 metabolism 中，就可随时间、排解、排乳或性交留精变化。',
+  '- pregnant.blockage 会影响 bsExcreteMetabolism 的当日滞留感：stool=便秘，urine=频尿/尿瀦留，sleep=失眠/暈眩，milk=乳房胀痛，hunger=孕吐/消化不良，odor=发汗/陰道分泌物气味；fluxPositive/fluxNegative 需按该衍生种族的正负极需求解释。',
+  '- 对 derivedType 角色来说，被衍生代谢抵免的需求不会出现在 metabolism 中；未出现的需求不要主动提醒或要求处理。',
   '',
   '[descriptions]',
   '- normalDescription / closeupDescription / pregnantDescription 为文字描述栏位。',
@@ -149,8 +154,8 @@ function buildTrackerMetabolismGuide(payload = null) {
     : TRACKER_VARIABLE_GUIDE_PROMPT.replace(`${TRACKER_DIARY_SECTION}\n`, '');
   return fluxNames.length > 0
     ? baseGuide.replace(
-      '- 若角色具有 derivedType，则 metabolism 只看 flux。它是 -150 到 150 的单一极性需求值：正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。',
-      `- 若角色具有 derivedType，则 metabolism 只看 flux。它是 -150 到 150 的单一极性需求值；在本轮相关衍生种族中，flux 分别表示：${fluxNames.join(' / ')}。正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。`,
+      '- 若角色具有 derivedType，则 metabolism 一定包含 flux，并只保留该衍生类型未抵免的普通需求。flux 是 -150 到 150 的单一极性需求值：正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。',
+      `- 若角色具有 derivedType，则 metabolism 一定包含 flux，并只保留该衍生类型未抵免的普通需求。flux 是 -150 到 150 的单一极性需求值；在本轮相关衍生种族中，flux 分别表示：${fluxNames.join(' / ')}。正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。`,
     )
     : baseGuide;
 }

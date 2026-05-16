@@ -261,8 +261,9 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '- base.uterinePressure: 初始宫压。非妊娠上限50；妊娠後会随进度平滑提升，臨產期上限达150。【危险警告】孕早期与孕中期前期上限极低，超过15便极易触发流产警告！除非开局正在临盆或剧烈腹痛，否则强烈建议填 0。',
     '- base.latestSexDays: 距最近一次性行为经过的天数。若 experience.latestSexPartner 有意义，建议一并填写；若已超过最近一月经周期或无从判断，可为 null。',
     '- base.sperms: 体内残留精液来源列表。适用于刚性交结束、仍有精液残留的开局；每项包含 male、race、value。race 可直接写 [衍生]种族，系统会自动拆出 derivedType。',
-    '- metabolism: 初始代谢状态。普通种族上限皆為150，包含 urine、stool、hunger、sleep；可用于表达一开始很饿、很困、憋尿等状态。',
-    '- 若 base.derivedType 不为 null，则 metabolism 可改填 flux（范围 -150 到 150）。这是衍生种族专用的单一极性需求值：正值与负值分别代表两种相反的释放需求，绝对值越高需求越强；此时四项常规代谢可省略。',
+    '- metabolism: 初始代谢状态。普通种族上限皆為150，包含 urine、stool、hunger、sleep、milk、odor；可用于表达一开始很饿、很困、憋尿、乳胀或需要清理等状态。',
+    '- 若 base.derivedType 不为 null，则 metabolism 可填写 flux（范围 -150 到 150），并保留该衍生类型未抵免的普通需求。flux 是衍生种族专用的单一极性需求值：正值与负值分别代表两种相反的释放需求，绝对值越高需求越强。',
+    '- pregnant.nutrition 是妊娠供养力盈余/赤字，专注参与胎儿体重/供养结算，不作为 metabolism 排解阻塞来源。',
     '注意：vitalityLevel 与 psyStressLevel 是角色内在特质等级，不根据当前疲劳、刚哭过、当下崩溃等暂时状态调整。',
     '注意：base.vitality 与 base.psyStress 不由你直接填写，系统会根据 vitalityLevel 与 psyStressLevel 自动计算初始值。',
     '示例：',
@@ -311,10 +312,13 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '- pregnant.pregnantDays: 这次妊娠在现实中已持续的天数，必须按天数填写；初始怀孕只能填这个实际天数。',
     '- 不要填写 pregnant.effectivePregnantDays；系统会依据角色种族妊娠速度与 bio.gestationModifierMultiplier 自动换算有效妊娠天数。',
     '- pregnant.fetusesCount: 这次怀孕的怀胎数',
-    '- pregnant.fetuses: 每个胎儿包含 fathers、provider、race、gender、embryoType',
+    '- pregnant.fetuses: 每个胎儿包含 fathers、provider、race、gender、embryoType；也可填写 weight、tendencyAngle、affinity',
     '- provider: 代孕母方、寄生等提供者名称，正常情况下为 null',
+    '- weight: 胎儿体重/发育量倍率，范围 0.33-3.0；不确定可省略，系统会补 1.0',
+    '- tendencyAngle: 胎位/趋向角度，范围 0-360；不确定可省略，系统会随机补值',
+    '- affinity: 胎儿对母体的亲和/排斥倾向，范围 -50 到 50；正值亲和，负值排斥，不确定可省略',
     '示例：',
-    '- 人类怀单胎8周: {"pregnant":{"pregnantDays":56,"fetusesCount":1,"fetuses":[{"fathers":"丈夫","provider":null,"race":"人类","gender":"男","embryoType":"胎生"}]}}',
+    '- 人类怀单胎8周: {"pregnant":{"pregnantDays":56,"fetusesCount":1,"fetuses":[{"fathers":"丈夫","provider":null,"race":"人类","gender":"男","embryoType":"胎生","weight":1.0,"tendencyAngle":180,"affinity":10}]}}',
     '- 精灵怀孕500天: {"base":{"race":"精灵"},"pregnant":{"pregnantDays":500,"fetusesCount":1,"fetuses":[{"fathers":"伴侣","provider":null,"race":"精灵","gender":"女","embryoType":"胎生"}]}}',
     '- 妖怪猫又怀双胎20周: {"pregnant":{"pregnantDays":140,"fetusesCount":2,"fetuses":[{"fathers":"监狱囚犯","provider":null,"race":"[妖怪]兽耳族-猫又x蜥蜴人","gender":"女","embryoType":"胎生"},{"fathers":"监狱囚犯","provider":null,"race":"[妖怪]兽耳族-猫又x蜥蜴人","gender":"女","embryoType":"胎生"}]}}',
     '- 代孕情节: {"pregnant":{"pregnantDays":84,"fetusesCount":1,"fetuses":[{"fathers":"委托人","provider":"代孕者A","race":"人类","gender":"女","embryoType":"胎生"}]}}',
@@ -371,7 +375,18 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '    "pregnant": {',
     '      "pregnantDays": 0,',
     '      "fetusesCount": 0,',
-    '      "fetuses": []',
+    '      "fetuses": [',
+    '        {',
+    '          "fathers": "string|null",',
+    '          "provider": "string|null",',
+    '          "race": "string|null",',
+    '          "gender": "string|null",',
+    '          "embryoType": "string|null",',
+    '          "weight": 1.0,',
+    '          "tendencyAngle": 0,',
+    '          "affinity": 0',
+    '        }',
+    '      ]',
     '    },',
     '    "experience": {',
     '      "virginity": "string|null",',
@@ -409,7 +424,9 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '      "urine": 0,',
     '      "stool": 0,',
     '      "hunger": 0,',
-    '      "sleep": 0',
+    '      "sleep": 0,',
+    '      "milk": 0,',
+    '      "odor": 0',
     '    },',
     '    "bio": {',
     '      "gestationModifierMultiplier": 1,',
@@ -449,7 +466,7 @@ const EXPERIENCE_FIELDS = [
 ];
 
 const DESCRIPTION_FIELDS = ['normalDescription', 'closeupDescription', 'pregnantDescription'];
-const METABOLISM_FIELDS = ['urine', 'stool', 'hunger', 'sleep'];
+const METABOLISM_FIELDS = ['urine', 'stool', 'hunger', 'sleep', 'milk', 'odor', 'flux'];
 
 function clampNumber(value, min, max, fallback = 0) {
   const next = Number(value);
@@ -527,7 +544,7 @@ function sanitizePregnant(value) {
           gender: item.gender ?? null,
           embryoType: item.embryoType ?? null,
           maternalDerivedTypeProgress: Number.isFinite(Number(item.maternalDerivedTypeProgress)) ? clampNumber(item.maternalDerivedTypeProgress, -100, 100, 0) : undefined,
-          weight: Number.isFinite(Number(item.weight)) ? clampNumber(item.weight, 0.5, 2.0, 1.0) : undefined,
+          weight: Number.isFinite(Number(item.weight)) ? clampNumber(item.weight, 0.33, 3.0, 1.0) : undefined,
           tendencyAngle: Number.isFinite(Number(item.tendencyAngle)) ? clampNumber(item.tendencyAngle, 0, 360, 0) : undefined,
           affinity: Number.isFinite(Number(item.affinity)) ? clampNumber(item.affinity, -50, 50, 0) : undefined,
         };
@@ -609,7 +626,7 @@ function normalizeRegisteredPregnancy(profile) {
       race: fetusRace,
       fatherRace,
       embryoType: fetus?.embryoType || getEmbryoTypeByRace(fetusRace),
-      weight: Number.isFinite(Number(fetus?.weight)) ? clampNumber(fetus.weight, 0.5, 2.0, 1.0) : 1.0,
+      weight: Number.isFinite(Number(fetus?.weight)) ? clampNumber(fetus.weight, 0.33, 3.0, 1.0) : 1.0,
       tendencyAngle: Number.isFinite(Number(fetus?.tendencyAngle)) ? clampNumber(fetus.tendencyAngle, 0, 360, 0) : randomInt(0, 360),
       affinity: Number.isFinite(Number(fetus?.affinity)) ? clampNumber(fetus.affinity, -50, 50, 0) : 0,
     };
@@ -623,7 +640,7 @@ function normalizeRegisteredPregnancy(profile) {
   const bio = profile.bio || {};
   const motherBreedTolerance = clampNumber(bio.breedTolerance, 0.1, 100, 1.0);
   pregnant.fetalEnergyDrain = pregnant.fetuses.reduce((sum, fetus) => {
-    const weight = clampNumber(fetus?.weight, 0.5, 2.0, 1.0);
+    const weight = clampNumber(fetus?.weight, 0.33, 3.0, 1.0);
     const ageInDays = pregnant.effectivePregnantDays * weight;
     const fetalAgeWeeks = ageInDays / 7;
     const fetalLoad = fetalAgeWeeks / 40;
@@ -635,9 +652,9 @@ function normalizeRegisteredPregnancy(profile) {
   profile.experience = experience;
 
   const recoveryBase = Math.max(1, Math.round(clampNumber(bio.recoveryDays, 1, 9999, 56)));
-  const totalWeight = pregnant.fetuses.reduce((sum, fetus) => sum + clampNumber(fetus?.weight, 0.5, 2.0, 1.0), 0);
+  const totalWeight = pregnant.fetuses.reduce((sum, fetus) => sum + clampNumber(fetus?.weight, 0.33, 3.0, 1.0), 0);
   const recoveryAccumulator = pregnant.fetuses.reduce((sum, fetus) => {
-    const weight = clampNumber(fetus?.weight, 0.5, 2.0, 1.0);
+    const weight = clampNumber(fetus?.weight, 0.33, 3.0, 1.0);
     return sum + (weight * getRegistryEmbryoTypeRecoveryCoefficient(fetus?.embryoType));
   }, 0);
   const averageRecovery = recoveryAccumulator / Math.max(totalWeight, 0.5);
@@ -713,7 +730,9 @@ function sanitizeRegistryProfile(profile, baseProfile) {
   if (Object.keys(metabolism).length > 0) {
     const nextMetabolism = {};
     for (const [key, value] of Object.entries(metabolism)) {
-      const meter = sanitizeMeter(value, { min: 0, max: 100 });
+      const meter = key === 'flux'
+        ? sanitizeMeter(value, { min: -150, max: 150 })
+        : sanitizeMeter(value, { min: 0, max: 150 });
       if (meter !== null) nextMetabolism[key] = meter;
     }
     if (Object.keys(nextMetabolism).length > 0) sanitized.metabolism = nextMetabolism;
