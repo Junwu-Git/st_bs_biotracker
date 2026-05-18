@@ -433,7 +433,9 @@ function normalizeTrackerResult(result) {
 
 function reconcileChatStateSnapshots(ctx, chatState) {
   const matchedSnapshot = getLatestMatchingSnapshot(ctx, chatState);
-  restoreChatStateFromSnapshot(chatState, matchedSnapshot);
+  if (matchedSnapshot) {
+    restoreChatStateFromSnapshot(chatState, matchedSnapshot);
+  }
   return {
     nextMessageIndex: matchedSnapshot ? matchedSnapshot.messageCount : 0,
   };
@@ -441,12 +443,13 @@ function reconcileChatStateSnapshots(ctx, chatState) {
 
 function prepareManualReplay(ctx, chatState, chatLength) {
   if (chatLength <= 0) {
-    restoreChatStateFromSnapshot(chatState, null);
     return { nextMessageIndex: 0 };
   }
   const replayStart = Math.max(0, chatLength - 1);
   const baseSnapshot = replayStart > 0 ? getLatestMatchingSnapshot(ctx, chatState, replayStart) : null;
-  restoreChatStateFromSnapshot(chatState, baseSnapshot);
+  if (baseSnapshot) {
+    restoreChatStateFromSnapshot(chatState, baseSnapshot);
+  }
   return { nextMessageIndex: replayStart };
 }
 

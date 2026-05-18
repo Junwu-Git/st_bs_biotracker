@@ -810,10 +810,12 @@ export function getChatState(ctx, settings) {
   if (needsRepackChatStateSnapshots(chatState) && repackChatStateSnapshots(chatState)) shouldSave = true;
   if (shouldSave) saveSettings(ctx);
   const latestSnapshot = getLatestMatchingSnapshot(ctx, chatState);
-  const latestSnapshotKey = getSnapshotRuntimeKey(latestSnapshot);
-  if (chatState[RESTORED_SNAPSHOT_RUNTIME_KEY] !== latestSnapshotKey) {
-    restoreChatStateFromSnapshot(chatState, latestSnapshot);
-    markRestoredSnapshot(chatState, latestSnapshot);
+  if (latestSnapshot) {
+    const latestSnapshotKey = getSnapshotRuntimeKey(latestSnapshot);
+    if (chatState[RESTORED_SNAPSHOT_RUNTIME_KEY] !== latestSnapshotKey) {
+      restoreChatStateFromSnapshot(chatState, latestSnapshot);
+      markRestoredSnapshot(chatState, latestSnapshot);
+    }
   }
   const characters = chatState.characters;
   if (characters && typeof characters === 'object') {
@@ -1528,6 +1530,7 @@ function markRestoredSnapshot(chatState, snapshot) {
 }
 
 export function restoreChatStateFromSnapshot(chatState, snapshot) {
+  if (!snapshot) return;
   const snapshotIndex = findSnapshotIndex(chatState, snapshot);
   const payload = snapshotIndex >= 0
     ? materializeSnapshotPayloadAt(chatState.snapshots, snapshotIndex)
@@ -1569,11 +1572,6 @@ export function getLatestMatchingSnapshot(ctx, chatState, messageCount = null) {
   const requestedCount = Number.isInteger(messageCount)
     ? Math.max(0, Math.min(chatLength, messageCount))
     : null;
-  const digestCache = new Map();
-  const getDigestForCount = (count) => {
-    if (!digestCache.has(count)) digestCache.set(count, buildMessageDigest(ctx, count));
-    return digestCache.get(count);
-  };
   const snapshots = Array.isArray(chatState.snapshots) ? chatState.snapshots : [];
   for (let index = snapshots.length - 1; index >= 0; index -= 1) {
     const snapshot = snapshots[index];
@@ -1583,7 +1581,7 @@ export function getLatestMatchingSnapshot(ctx, chatState, messageCount = null) {
     } else if (count > chatLength) {
       continue;
     }
-    if (String(snapshot?.messageDigest || '') === getDigestForCount(count)) return snapshot;
+    return snapshot;
   }
   return null;
 }
