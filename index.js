@@ -34,6 +34,7 @@ import {
   DEFAULT_SYSTEM_PROMPT,
   getCharacterWorldBookName,
   getCharacterWorldBookNameViaSTscript,
+  getActiveGlobalWorldBookNames,
   getGestationEffectiveSpeed,
   getGestationSpeciesSpeed,
   getChatKey,
@@ -42,6 +43,7 @@ import {
   inheritChatStateFromMatchingChat,
   getResolvedCharacter,
   getSettings,
+  loadGlobalWorldBook,
   MODULE_NAME,
   normalizeCharacterPsychologyState,
   recordChatStateSnapshot,
@@ -89,6 +91,9 @@ let selectedDerivedEncyclopedia = '';
 let racePhysiologyEditorOpen = false;
 let worldbookEntrySearch = '';
 let latestWorldbookEntries = [];
+let globalWorldbookEntrySearch = '';
+let latestGlobalWorldbookEntries = [];
+let selectedWorldbookScopeTab = 'character';
 let racePaletteState = {
   targetInputId: '',
   isOpen: false,
@@ -176,13 +181,28 @@ function getWorldbookFilterInputNames(ctx) {
   return parseWorldbookExcludeNamesInput(settings.trackerWorldbookExcludeNames);
 }
 
+function getGlobalWorldbookFilterInputNames(ctx) {
+  const settings = getSettings(ctx);
+  const mode = normalizeWorldbookMode(settings.trackerWorldbookMode);
+  if (mode === 'allowlist_all') return parseWorldbookExcludeNamesInput(settings.trackerGlobalWorldbookIncludeNames);
+  return parseWorldbookExcludeNamesInput(settings.trackerGlobalWorldbookExcludeNames);
+}
+
+function formatGlobalWorldbookSelectionName(bookName, entryName) {
+  return `${String(bookName || '').trim()} :: ${String(entryName || '').trim()}`;
+}
+
 function syncWorldbookFilterInput(ctx) {
   const settings = getSettings(ctx);
   const mode = normalizeWorldbookMode(settings.trackerWorldbookMode);
   const label = document.getElementById('bs-bt-worldbook-filter-input-label');
   const input = document.getElementById('bs-bt-worldbook-filter-input');
   const names = getWorldbookFilterInputNames(ctx);
-  if (label) label.textContent = mode === 'allowlist_all' ? '可参考' : '可排除';
+  const globalLabel = document.getElementById('bs-bt-global-worldbook-filter-input-label');
+  const globalInput = document.getElementById('bs-bt-global-worldbook-filter-input');
+  const globalNames = getGlobalWorldbookFilterInputNames(ctx);
+  if (label) label.textContent = mode === 'allowlist_all' ? '角色可参考' : '角色可排除';
+  if (globalLabel) globalLabel.textContent = mode === 'allowlist_all' ? '全域可参考' : '全域可排除';
   if (input) {
     input.value = names.join('\n');
     input.placeholder = mode === 'allowlist_all'
@@ -190,6 +210,12 @@ function syncWorldbookFilterInput(ctx) {
       : mode === 'mainflow'
         ? '每行一个条目名。主流模式下，tracker 优先引用上次 ST 主流 request 上下文；没有快照时会按常驻/关键字触发，并套用这些排除条目。'
         : '每行一个条目名。正常模式下，这些条目会从 worldbook 传输中排除。';
+  }
+  if (globalInput) {
+    globalInput.value = globalNames.join('\n');
+    globalInput.placeholder = mode === 'allowlist_all'
+      ? '每行一个“书名 :: 条目名”。参考模式下，仅这些全域条目会传给 tracker。'
+      : '每行一个“书名 :: 条目名”。正常模式下，这些全域条目会从 worldbook 传输中排除。';
   }
 }
 
@@ -283,33 +309,59 @@ function saveWorldbookIncludeNamesFromList(ctx, names) {
   resetPoller(ctx, trackerDeps);
 }
 
-function applyWorldbookFilterSelection(ctx, entries = [], selectedNames = []) {
-  latestWorldbookEntries = Array.isArray(entries) ? entries : [];
+function saveGlobalWorldbookExcludeNamesFromList(ctx, names) {
+  const normalized = Array.from(new Set((Array.isArray(names) ? names : []).map((item) => String(item || '').trim()).filter(Boolean)));
   const settings = getSettings(ctx);
-  const mode = normalizeWorldbookMode(settings.trackerWorldbookMode);
-  if (mode === 'allowlist_all') {
-    settings.trackerWorldbookIncludeNames = parseWorldbookExcludeNamesInput(selectedNames.join('\n')).join('\n');
-  } else {
-    settings.trackerWorldbookExcludeNames = parseWorldbookExcludeNamesInput(selectedNames.join('\n')).join('\n');
-  }
+  settings.trackerGlobalWorldbookExcludeNames = normalized.join('\n');
   syncWorldbookFilterInput(ctx);
-  renderWorldbookEntryList(ctx, latestWorldbookEntries, selectedNames);
+  saveSettings(ctx);
+  updateMainFlowPrompt(ctx);
+  resetPoller(ctx, trackerDeps);
 }
 
-function renderWorldbookEntryList(ctx, entries = [], selectedNames = null) {
-  const container = document.getElementById('bs-bt-worldbook-entry-list');
-  const title = document.querySelector('#bs-bt-view-worldbook-filter .bs-bt-status-title');
-  const clearButton = document.getElementById('bs-bt-worldbook-clear-all');
-  const searchInput = document.getElementById('bs-bt-worldbook-entry-search');
+function saveGlobalWorldbookIncludeNamesFromList(ctx, names) {
+  const normalized = Array.from(new Set((Array.isArray(names) ? names : []).map((item) => String(item || '').trim()).filter(Boolean)));
+  const settings = getSettings(ctx);
+  settings.trackerGlobalWorldbookIncludeNames = normalized.join('\n');
+  syncWorldbookFilterInput(ctx);
+  saveSettings(ctx);
+  updateMainFlowPrompt(ctx);
+  resetPoller(ctx, trackerDeps);
+}
+
+function applyWorldbookFilterSelection(ctx, entries = []) {
+  latestWorldbookEntries = Array.isArray(entries) ? entries : [];
+  renderWorldbookEntryList(ctx, latestWorldbookEntries);
+}
+
+function applyGlobalWorldbookFilterSelection(ctx, entries = []) {
+  latestGlobalWorldbookEntries = Array.isArray(entries) ? entries : [];
+  renderWorldbookEntryList(ctx, latestGlobalWorldbookEntries, { scope: 'global' });
+}
+
+function setWorldbookScopeTab(scope = 'character') {
+  selectedWorldbookScopeTab = scope === 'global' ? 'global' : 'character';
+  document.querySelectorAll('#bs-bt-worldbook-scope-tabs [data-worldbook-scope-tab]').forEach((node) => {
+    node.classList.toggle('is-active', node.dataset.worldbookScopeTab === selectedWorldbookScopeTab);
+  });
+  document.querySelectorAll('#bs-bt-view-worldbook-filter [data-worldbook-scope-panel]').forEach((node) => {
+    node.classList.toggle('is-active', node.dataset.worldbookScopePanel === selectedWorldbookScopeTab);
+  });
+}
+
+function renderWorldbookEntryList(ctx, entries = [], { scope = 'character' } = {}) {
+  const isGlobal = scope === 'global';
+  const container = document.getElementById(isGlobal ? 'bs-bt-global-worldbook-entry-list' : 'bs-bt-worldbook-entry-list');
+  const title = isGlobal
+    ? document.getElementById('bs-bt-global-worldbook-title')
+    : document.querySelector('#bs-bt-view-worldbook-filter .bs-bt-status-title');
+  const searchInput = document.getElementById(isGlobal ? 'bs-bt-global-worldbook-entry-search' : 'bs-bt-worldbook-entry-search');
   if (!container) return;
   const settings = getSettings(ctx);
   const mode = normalizeWorldbookMode(settings.trackerWorldbookMode);
-  if (searchInput && searchInput.value !== worldbookEntrySearch) searchInput.value = worldbookEntrySearch;
-  const selected = new Set(
-    Array.isArray(selectedNames)
-      ? parseWorldbookExcludeNamesInput(selectedNames.join('\n'))
-      : getWorldbookFilterInputNames(ctx),
-  );
+  const activeSearch = isGlobal ? globalWorldbookEntrySearch : worldbookEntrySearch;
+  if (searchInput && searchInput.value !== activeSearch) searchInput.value = activeSearch;
+  const selected = new Set(isGlobal ? getGlobalWorldbookFilterInputNames(ctx) : getWorldbookFilterInputNames(ctx));
 
   const normalizedEntries = [];
   for (const item of (Array.isArray(entries) ? entries : [])) {
@@ -319,24 +371,32 @@ function renderWorldbookEntryList(ctx, entries = [], selectedNames = null) {
       if (name && !normalizedEntries.find((e) => e.name === name)) normalizedEntries.push({ name, mode: '' });
     } else if (item.name) {
       const name = String(item.name).trim();
-      if (name && !normalizedEntries.find((e) => e.name === name)) normalizedEntries.push({ name, mode: item.mode || '' });
+      const bookName = String(item.bookName || '').trim();
+      const selectionName = isGlobal ? formatGlobalWorldbookSelectionName(bookName, name) : name;
+      if (name && !normalizedEntries.find((e) => e.selectionName === selectionName)) {
+        normalizedEntries.push({ name, bookName, selectionName, mode: item.mode || '' });
+      }
     }
   }
-  const keyword = String(worldbookEntrySearch || '').trim().toLowerCase();
+  const keyword = String(activeSearch || '').trim().toLowerCase();
   const filteredEntries = keyword
     ? normalizedEntries.filter((entry) =>
       String(entry?.name || '').toLowerCase().includes(keyword)
+      || String(entry?.bookName || '').toLowerCase().includes(keyword)
       || String(entry?.mode || '').toLowerCase().includes(keyword))
     : normalizedEntries;
 
   container.innerHTML = '';
-  if (title) title.textContent = mode === 'allowlist_all' ? '当前世界书条目（仅供参考）' : '可排除条目';
-  if (clearButton) clearButton.textContent = '清空当前文本框';
+  if (title) {
+    title.textContent = isGlobal
+      ? (mode === 'allowlist_all' ? '全域世界书条目（仅供参考）' : '全域世界书条目')
+      : (mode === 'allowlist_all' ? '角色世界书条目（仅供参考）' : '角色世界书条目');
+  }
 
   if (normalizedEntries.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'bs-bt-connect-status';
-    empty.textContent = '当前角色世界书暂无可识别条目';
+    empty.textContent = isGlobal ? '目前没有启用中的全域世界书条目' : '当前角色世界书暂无可识别条目';
     container.appendChild(empty);
     return;
   }
@@ -350,7 +410,7 @@ function renderWorldbookEntryList(ctx, entries = [], selectedNames = null) {
   }
 
   for (const entryObj of filteredEntries) {
-    const { name, mode } = entryObj;
+    const { name, bookName, selectionName = name, mode } = entryObj;
     const label = document.createElement('label');
     label.className = 'bs-bt-theme-option';
     label.style.display = 'grid';
@@ -360,27 +420,40 @@ function renderWorldbookEntryList(ctx, entries = [], selectedNames = null) {
 
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
-    checkbox.checked = selected.has(name);
-    checkbox.addEventListener('change', async () => {
-      const nextSelected = new Set(getWorldbookFilterInputNames(ctx));
-      if (checkbox.checked) nextSelected.add(name);
-      else nextSelected.delete(name);
+    checkbox.checked = selected.has(selectionName);
+
+    const toggleEntrySelection = () => {
+      const nextSelected = new Set(isGlobal ? getGlobalWorldbookFilterInputNames(ctx) : getWorldbookFilterInputNames(ctx));
+      if (nextSelected.has(selectionName)) nextSelected.delete(selectionName);
+      else nextSelected.add(selectionName);
       if (normalizeWorldbookMode(getSettings(ctx).trackerWorldbookMode) === 'allowlist_all') {
-        saveWorldbookIncludeNamesFromList(ctx, Array.from(nextSelected));
+        if (isGlobal) saveGlobalWorldbookIncludeNamesFromList(ctx, Array.from(nextSelected));
+        else saveWorldbookIncludeNamesFromList(ctx, Array.from(nextSelected));
       } else {
-        saveWorldbookExcludeNamesFromList(ctx, Array.from(nextSelected));
+        if (isGlobal) saveGlobalWorldbookExcludeNamesFromList(ctx, Array.from(nextSelected));
+        else saveWorldbookExcludeNamesFromList(ctx, Array.from(nextSelected));
       }
-      try {
-        await refreshWorldbookFilterPage(ctx);
-      } catch (error) {
-        console.error('[BS BioTracker] refreshWorldbookFilterPage after checkbox change failed', error);
-      }
+      renderWorldbookEntryList(ctx, isGlobal ? latestGlobalWorldbookEntries : latestWorldbookEntries, { scope });
+    };
+
+    label.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleEntrySelection();
     });
 
     const textWrap = document.createElement('div');
     textWrap.style.display = 'flex';
     textWrap.style.gap = '8px';
     textWrap.style.alignItems = 'baseline';
+
+    if (isGlobal && bookName) {
+      const bookBadge = document.createElement('span');
+      bookBadge.textContent = `[${bookName}]`;
+      bookBadge.style.fontSize = '0.8em';
+      bookBadge.style.color = 'var(--bs-bt-text-dim, #888)';
+      textWrap.appendChild(bookBadge);
+    }
 
     if (mode) {
       const badge = document.createElement('span');
@@ -759,7 +832,7 @@ function parseWorldbookExcludeNamesInput(value) {
   return Array.from(
     new Set(
       String(value || '')
-        .split(/[\r\n,]+/)
+        .split(/\r?\n+/)
         .map((item) => item.trim())
         .filter(Boolean),
     ),
@@ -857,6 +930,7 @@ async function getCurrentCharacterWorldbook(ctx) {
       }
       continue;
     }
+    if (collectWorldbookEntryNames(candidate.value, { includeDisabled: true }).length === 0) continue;
     return candidate.value;
   }
   const scriptWorldBookName = await getCharacterWorldBookNameViaSTscript();
@@ -878,8 +952,30 @@ async function getCurrentCharacterWorldbook(ctx) {
   return null;
 }
 
+async function getGlobalWorldbookEntries(ctx) {
+  const boundWorldBookName = String(getCharacterWorldBookName(ctx) || await getCharacterWorldBookNameViaSTscript() || '').trim();
+  try {
+    const bookNames = (await getActiveGlobalWorldBookNames()).filter((name) => name !== boundWorldBookName);
+    const books = await Promise.all(bookNames.map(async (bookName) => {
+      try {
+        const worldBook = await loadGlobalWorldBook(ctx, bookName);
+        return collectWorldbookEntryNames(worldBook, { includeDisabled: normalizeWorldbookMode(getSettings(ctx).trackerWorldbookMode) === 'allowlist_all' })
+          .map((entry) => ({ ...entry, bookName }));
+      } catch (error) {
+        console.warn(`[BS BioTracker] get global worldbook "${bookName}" failed`, error);
+        return [];
+      }
+    }));
+    return books.flat();
+  } catch (error) {
+    console.warn('[BS BioTracker] load active global worldbooks failed', error);
+    return [];
+  }
+}
+
 async function inspectCurrentCharacterWorldbook(ctx) {
   const worldBook = await getCurrentCharacterWorldbook(ctx);
+  const globalEntries = await getGlobalWorldbookEntries(ctx);
   const settings = getSettings(ctx);
   const mode = normalizeWorldbookMode(settings.trackerWorldbookMode);
   const foundEntries = collectWorldbookEntryNames(worldBook, { includeDisabled: mode === 'allowlist_all' });
@@ -948,6 +1044,7 @@ async function inspectCurrentCharacterWorldbook(ctx) {
     foundNames,
     matched,
     missing,
+    globalEntries,
   };
 }
 
@@ -2939,6 +3036,8 @@ function applySettingsToForm(ctx) {
   setRegisterStatus('输入名字与 Description 规则后发送注册请求，完成后可在“角色追踪”查看该角色状态变量。');
   syncWorldbookFilterInput(ctx);
   renderWorldbookEntryList(ctx, parseWorldbookExcludeNamesInput(settings.trackerWorldbookExcludeNames));
+  renderWorldbookEntryList(ctx, [], { scope: 'global' });
+  setWorldbookScopeTab(selectedWorldbookScopeTab);
   applyTheme(settings);
   renderStatusPanel(ctx);
   renderFullStatePage(ctx);
@@ -2956,7 +3055,10 @@ function getWorldbookFilterSnapshot(ctx) {
   const names = mode === 'allowlist_all'
     ? settings.trackerWorldbookIncludeNames
     : settings.trackerWorldbookExcludeNames;
-  return `${mode}\n${String(names || '').trim()}`;
+  const globalNames = mode === 'allowlist_all'
+    ? settings.trackerGlobalWorldbookIncludeNames
+    : settings.trackerGlobalWorldbookExcludeNames;
+  return `${mode}\n${String(names || '').trim()}\n---global---\n${String(globalNames || '').trim()}`;
 }
 
 function persistWorldbookFilterIfChanged(ctx, beforeSnapshot) {
@@ -2970,10 +3072,12 @@ async function refreshWorldbookFilterPage(ctx) {
   const beforeSnapshot = getWorldbookFilterSnapshot(ctx);
   try {
     const result = await inspectCurrentCharacterWorldbook(ctx);
-    applyWorldbookFilterSelection(ctx, result.foundEntries, result.matched);
+    applyWorldbookFilterSelection(ctx, result.foundEntries);
+    applyGlobalWorldbookFilterSelection(ctx, result.globalEntries);
     persistWorldbookFilterIfChanged(ctx, beforeSnapshot);
   } catch (error) {
-    applyWorldbookFilterSelection(ctx, [], []);
+    applyWorldbookFilterSelection(ctx, []);
+    applyGlobalWorldbookFilterSelection(ctx, []);
     throw error;
   }
 }
@@ -3460,6 +3564,16 @@ async function clearCurrentWorldbookExcludeSelections(ctx) {
   await refreshWorldbookFilterPage(ctx);
 }
 
+async function clearCurrentGlobalWorldbookSelections(ctx) {
+  const settings = getSettings(ctx);
+  if (normalizeWorldbookMode(settings.trackerWorldbookMode) === 'allowlist_all') {
+    saveGlobalWorldbookIncludeNamesFromList(ctx, []);
+  } else {
+    saveGlobalWorldbookExcludeNamesFromList(ctx, []);
+  }
+  await refreshWorldbookFilterPage(ctx);
+}
+
 function updateMainFlowPrompt(ctx) {
   const settings = getSettings(ctx);
   syncRacePhysiologyOverrides(settings);
@@ -3493,6 +3607,9 @@ function readSettingsFromForm(ctx) {
   const filterNames = String(getValue('bs-bt-worldbook-filter-input')).trim();
   if (settings.trackerWorldbookMode === 'allowlist_all') settings.trackerWorldbookIncludeNames = filterNames;
   else settings.trackerWorldbookExcludeNames = filterNames;
+  const globalFilterNames = String(getValue('bs-bt-global-worldbook-filter-input')).trim();
+  if (settings.trackerWorldbookMode === 'allowlist_all') settings.trackerGlobalWorldbookIncludeNames = globalFilterNames;
+  else settings.trackerGlobalWorldbookExcludeNames = globalFilterNames;
   settings.systemPrompt = String(getValue('bs-bt-system-prompt')).trim() || DEFAULT_SYSTEM_PROMPT;
   settings.registryCustomNotes = String(getValue('bs-bt-register-custom-notes')).trim();
   settings.registryDescriptionGuides = {
@@ -3912,9 +4029,26 @@ async function ensureModal(ctx) {
       console.error('[BS BioTracker] refreshWorldbookFilterPage after filter change failed', error);
     }
   });
+  document.querySelectorAll('#bs-bt-worldbook-scope-tabs [data-worldbook-scope-tab]').forEach((node) => {
+    node.addEventListener('click', () => setWorldbookScopeTab(node.dataset.worldbookScopeTab));
+  });
+  document.getElementById('bs-bt-global-worldbook-filter-input')?.addEventListener('change', async (event) => {
+    const names = parseWorldbookExcludeNamesInput(String(event.target?.value || ''));
+    if (normalizeWorldbookMode(getSettings(ctx).trackerWorldbookMode) === 'allowlist_all') saveGlobalWorldbookIncludeNamesFromList(ctx, names);
+    else saveGlobalWorldbookExcludeNamesFromList(ctx, names);
+    try {
+      await refreshWorldbookFilterPage(ctx);
+    } catch (error) {
+      console.error('[BS BioTracker] refreshWorldbookFilterPage after global filter change failed', error);
+    }
+  });
   document.getElementById('bs-bt-worldbook-entry-search')?.addEventListener('input', (event) => {
     worldbookEntrySearch = String(event.target?.value || '').trim();
     renderWorldbookEntryList(ctx, latestWorldbookEntries);
+  });
+  document.getElementById('bs-bt-global-worldbook-entry-search')?.addEventListener('input', (event) => {
+    globalWorldbookEntrySearch = String(event.target?.value || '').trim();
+    renderWorldbookEntryList(ctx, latestGlobalWorldbookEntries, { scope: 'global' });
   });
   document.getElementById('bs-bt-derived-select')?.addEventListener('change', (event) => {
     selectedDerivedEncyclopedia = String(event.target?.value || '');
@@ -3956,10 +4090,23 @@ async function ensureModal(ctx) {
       syncWorldbookFilterInput(ctx);
       const mode = normalizeWorldbookMode(getSettings(ctx).trackerWorldbookMode);
       globalThis.toastr?.success?.(mode === 'allowlist_all'
-        ? '[BS BioTracker] 已清空当前角色的可参考条目文本框'
-        : '[BS BioTracker] 已清空当前角色的可排除条目文本框');
+        ? '[BS BioTracker] 已清空角色可参考条目文本框'
+        : '[BS BioTracker] 已清空角色可排除条目文本框');
     } catch (error) {
       console.error('[BS BioTracker] clearCurrentWorldbookExcludeSelections failed', error);
+      globalThis.toastr?.error?.(String(error?.message || error), '[BS BioTracker]');
+    }
+  });
+  document.getElementById('bs-bt-global-worldbook-clear-all')?.addEventListener('click', async () => {
+    try {
+      await clearCurrentGlobalWorldbookSelections(ctx);
+      syncWorldbookFilterInput(ctx);
+      const mode = normalizeWorldbookMode(getSettings(ctx).trackerWorldbookMode);
+      globalThis.toastr?.success?.(mode === 'allowlist_all'
+        ? '[BS BioTracker] 已清空全域可参考条目文本框'
+        : '[BS BioTracker] 已清空全域可排除条目文本框');
+    } catch (error) {
+      console.error('[BS BioTracker] clearCurrentGlobalWorldbookSelections failed', error);
       globalThis.toastr?.error?.(String(error?.message || error), '[BS BioTracker]');
     }
   });

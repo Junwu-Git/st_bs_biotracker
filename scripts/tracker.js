@@ -10,11 +10,13 @@ import {
   getCharacterCard,
   getCharacterWorldBookName,
   getCharacterWorldBookNameViaSTscript,
+  getActiveGlobalWorldBookNames,
   getChatKey,
   getChatState,
   getRegisteredTargetNames,
   getSettings,
   getLatestMatchingSnapshot,
+  loadGlobalWorldBook,
   recordChatStateSnapshot,
   restoreChatStateFromSnapshot,
   saveSettings,
@@ -249,7 +251,7 @@ function buildTrackerStateView(existingState, settings = null) {
 function parseTrackerWorldbookExcludeNames(settings) {
   return new Set(
     String(settings?.trackerWorldbookExcludeNames || '')
-      .split(/[\r\n,]+/)
+      .split(/\r?\n+/)
       .map((item) => item.trim())
       .filter(Boolean),
   );
@@ -258,10 +260,32 @@ function parseTrackerWorldbookExcludeNames(settings) {
 function parseTrackerWorldbookIncludeNames(settings) {
   return new Set(
     String(settings?.trackerWorldbookIncludeNames || '')
-      .split(/[\r\n,]+/)
+      .split(/\r?\n+/)
       .map((item) => item.trim())
       .filter(Boolean),
   );
+}
+
+function parseTrackerGlobalWorldbookExcludeNames(settings) {
+  return new Set(
+    String(settings?.trackerGlobalWorldbookExcludeNames || '')
+      .split(/\r?\n+/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+}
+
+function parseTrackerGlobalWorldbookIncludeNames(settings) {
+  return new Set(
+    String(settings?.trackerGlobalWorldbookIncludeNames || '')
+      .split(/\r?\n+/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+}
+
+function formatGlobalWorldbookSelectionName(bookName, entryName) {
+  return `${String(bookName || '').trim()} :: ${String(entryName || '').trim()}`;
 }
 
 function normalizeWorldbookKeywords(value) {
@@ -307,19 +331,21 @@ function worldbookKeywordMatches(entry, activationText) {
   return true;
 }
 
-function filterTrackerWorldbookEntries(value, excludedNames, settings = null, recentMessages = []) {
+function filterTrackerWorldbookEntries(value, excludedNames, settings = null, recentMessages = [], options = {}) {
   if (!value || typeof value !== 'object') return value;
   const mode = normalizeWorldbookMode(settings?.trackerWorldbookMode);
-  const includedNames = parseTrackerWorldbookIncludeNames(settings);
+  const globalBookName = String(options.globalBookName || '').trim();
+  const includedNames = globalBookName ? parseTrackerGlobalWorldbookIncludeNames(settings) : parseTrackerWorldbookIncludeNames(settings);
   const activationText = mode === 'mainflow' ? buildWorldbookActivationText(recentMessages) : '';
 
   const normalizeEntryName = (entry) => String(entry?.name || entry?.comment || entry?.title || entry?.displayName || entry?.uid || '').trim();
 
   const keepEntry = (entry) => {
     const name = normalizeEntryName(entry);
-    if (mode === 'allowlist_all') return Boolean(name) && includedNames.has(name);
+    const selectionName = globalBookName ? formatGlobalWorldbookSelectionName(globalBookName, name) : name;
+    if (mode === 'allowlist_all') return Boolean(name) && includedNames.has(selectionName);
     if (entry?.enabled === false || entry?.disable === true) return false;
-    if (name && excludedNames.has(name)) return false;
+    if (name && excludedNames.has(selectionName)) return false;
     if (mode === 'mainflow') {
       const activationMode = getWorldbookEntryActivationMode(entry);
       if (activationMode === 'always' || activationMode === 'constant') return true;
@@ -348,6 +374,27 @@ function filterTrackerWorldbookEntries(value, excludedNames, settings = null, re
   }
 
   return value;
+}
+
+async function getFilteredGlobalWorldbooks(ctx, settings, recentMessages = []) {
+  const boundName = String(getCharacterWorldBookName(ctx) || await getCharacterWorldBookNameViaSTscript() || '').trim();
+  try {
+    const names = (await getActiveGlobalWorldBookNames()).filter((name) => name !== boundName);
+    const excludedNames = parseTrackerGlobalWorldbookExcludeNames(settings);
+    const books = await Promise.all(names.map(async (name) => {
+      try {
+        const worldBook = await loadGlobalWorldBook(ctx, name);
+        return filterTrackerWorldbookEntries(worldBook || null, excludedNames, settings, recentMessages, { globalBookName: name });
+      } catch (error) {
+        console.warn(`[BS BioTracker] load global worldbook "${name}" for tracker failed`, error);
+        return null;
+      }
+    }));
+    return books.filter((book) => book && ((Array.isArray(book.entries) && book.entries.length > 0) || (book.entries && typeof book.entries === 'object' && Object.keys(book.entries).length > 0)));
+  } catch (error) {
+    console.warn('[BS BioTracker] load active global worldbooks for tracker failed', error);
+    return [];
+  }
 }
 
 function getMainflowContextSnapshot() {
@@ -553,6 +600,9 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
       console.warn('[BS BioTracker] loadWorldInfo for tracker failed', error);
     }
   }
+  payload.global_worldbooks = payload.mainflow_context_snapshot
+    ? []
+    : await getFilteredGlobalWorldbooks(ctx, settings, payload.recent_messages);
   chatState.lastRunAt = Date.now();
   chatState.lastAttemptedSignature = buildSignature(ctx, messageIndex + 1);
   saveSettings(ctx);

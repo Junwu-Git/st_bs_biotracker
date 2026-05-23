@@ -732,6 +732,25 @@
   gap: 6px;
 }
 
+#bs-biotracker-settings .bs-bt-worldbook-scope-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-worldbook-scope-tabs .bs-bt-track-tab {
+  border-right: 0;
+}
+
+#bs-biotracker-settings .bs-bt-worldbook-scope-panel {
+  display: none;
+  gap: 10px;
+}
+
+#bs-biotracker-settings .bs-bt-worldbook-scope-panel.is-active {
+  display: grid;
+}
+
 #bs-biotracker-settings .bs-bt-size-options {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));

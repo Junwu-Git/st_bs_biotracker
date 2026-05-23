@@ -285,19 +285,43 @@
               </select>
             </div>
 
-            <div class="settings_section bs-bt-action-row">
-              <button id="bs-bt-worldbook-clear-all" class="menu_button" type="button">清空当前文本框</button>
+            <div class="settings_section bs-bt-worldbook-scope-tabs" id="bs-bt-worldbook-scope-tabs">
+              <button class="bs-bt-track-tab is-active" type="button" data-worldbook-scope-tab="character">角色世界书</button>
+              <button class="bs-bt-track-tab" type="button" data-worldbook-scope-tab="global">全域世界书</button>
             </div>
 
-            <div class="settings_section">
-              <div class="bs-bt-status-title">可排除条目</div>
-              <input id="bs-bt-worldbook-entry-search" class="text_pole" type="text" placeholder="搜索条目名，缩小勾选范围" style="margin-bottom:8px;" />
-              <div id="bs-bt-worldbook-entry-list" class="bs-bt-theme-list"></div>
+            <div class="bs-bt-worldbook-scope-panel is-active" data-worldbook-scope-panel="character">
+              <div class="settings_section bs-bt-action-row">
+                <button id="bs-bt-worldbook-clear-all" class="menu_button" type="button">清空角色文本框</button>
+              </div>
+
+              <div class="settings_section">
+                <div class="bs-bt-status-title">角色世界书条目</div>
+                <input id="bs-bt-worldbook-entry-search" class="text_pole" type="text" placeholder="搜索条目名，缩小勾选范围" style="margin-bottom:8px;" />
+                <div id="bs-bt-worldbook-entry-list" class="bs-bt-theme-list"></div>
+              </div>
+
+              <div class="settings_section">
+                <label for="bs-bt-worldbook-filter-input" id="bs-bt-worldbook-filter-input-label">角色可排除</label>
+                <textarea id="bs-bt-worldbook-filter-input" class="text_pole bs-bt-textarea" rows="6" placeholder="每行一个条目名。正常模式下，这些条目会从 worldbook 传输中排除。"></textarea>
+              </div>
             </div>
 
-            <div class="settings_section">
-              <label for="bs-bt-worldbook-filter-input" id="bs-bt-worldbook-filter-input-label">可排除</label>
-              <textarea id="bs-bt-worldbook-filter-input" class="text_pole bs-bt-textarea" rows="6" placeholder="每行一个条目名。正常模式下，这些条目会从 worldbook 传输中排除。"></textarea>
+            <div class="bs-bt-worldbook-scope-panel" data-worldbook-scope-panel="global">
+              <div class="settings_section bs-bt-action-row">
+                <button id="bs-bt-global-worldbook-clear-all" class="menu_button" type="button">清空全域文本框</button>
+              </div>
+
+              <div class="settings_section">
+                <div class="bs-bt-status-title" id="bs-bt-global-worldbook-title">全域世界书条目</div>
+                <input id="bs-bt-global-worldbook-entry-search" class="text_pole" type="text" placeholder="搜索全域书名或条目名" style="margin-bottom:8px;" />
+                <div id="bs-bt-global-worldbook-entry-list" class="bs-bt-theme-list"></div>
+              </div>
+
+              <div class="settings_section">
+                <label for="bs-bt-global-worldbook-filter-input" id="bs-bt-global-worldbook-filter-input-label">全域可排除</label>
+                <textarea id="bs-bt-global-worldbook-filter-input" class="text_pole bs-bt-textarea" rows="6" placeholder="每行一个“书名 :: 条目名”。正常模式下，这些全域条目会从 worldbook 传输中排除。"></textarea>
+              </div>
             </div>
           </div>
         </section>

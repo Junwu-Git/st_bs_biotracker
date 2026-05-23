@@ -317,8 +317,9 @@ async function buildResolvedWorldInfo(stCtx) {
   }
 }
 
-async function buildResolvedAsyncPayload(payload, stCtx) {
+async function buildResolvedAsyncPayload(payload, stCtx, settings = null) {
   const resolvedPayload = resolvePayloadValueWithStMacros(payload, stCtx);
+  if (settings?.trackerWorldbookMode) return resolvedPayload;
   const resolvedWorldInfo = await buildResolvedWorldInfo(stCtx);
   if (!resolvedWorldInfo) return resolvedPayload;
   return {
@@ -756,7 +757,7 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
   const apiBase = getApiBase(settings);
   const model = String(settings.model || '').trim();
   const stCtx = getSillyTavernContext();
-  const resolvedPayload = await buildResolvedAsyncPayload(payload, stCtx);
+  const resolvedPayload = await buildResolvedAsyncPayload(payload, stCtx, settings);
   const mainflowCopy = buildPayloadWithMainflowCopy(resolvedPayload, settings);
   const safePayload = sanitizeTransportValue(mainflowCopy.payload);
   const safeSystemPrompt = sanitizeTransportString(resolveWithStMacros(systemPrompt || DEFAULT_SYSTEM_PROMPT, stCtx));

@@ -20,6 +20,7 @@ const SNAPSHOT_PATCH_SIZE_RATIO = 0.85;
 const SNAPSHOT_DELETE_SENTINEL_KEY = '__bs_bt_deleted__';
 const SNAPSHOT_ARRAY_APPEND_KEY = '__bs_bt_array_append__';
 const RESTORED_SNAPSHOT_RUNTIME_KEY = Symbol('bsBtRestoredSnapshotKey');
+let worldInfoModulePromise = null;
 
 export const THEME_CONFIG = {
   retro: {},
@@ -85,6 +86,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   trackerWorldbookMode: 'exclude',
   trackerWorldbookExcludeNames: '',
   trackerWorldbookIncludeNames: '',
+  trackerGlobalWorldbookExcludeNames: '',
+  trackerGlobalWorldbookIncludeNames: '',
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   registryCustomNotes: '',
   registryDescriptionGuides: DEFAULT_REGISTRY_DESCRIPTION_GUIDES,
@@ -890,6 +893,13 @@ export function inheritChatStateFromMatchingChat(ctx, settings) {
   };
 }
 
+function hasWorldBookEntries(value) {
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (Array.isArray(value.entries)) return value.entries.length > 0;
+  return Boolean(value.entries && typeof value.entries === 'object' && Object.keys(value.entries).length > 0);
+}
+
 export function getCharacterCard(ctx) {
   const card = getResolvedCharacter(ctx)?.card;
   if (!card) return {};
@@ -900,7 +910,7 @@ export function getCharacterCard(ctx) {
     scenario: card.scenario || '',
     first_mes: card.first_mes || '',
     mes_example: card.mes_example || '',
-    worldBook: card.worldBook || null,
+    worldBook: hasWorldBookEntries(card.worldBook) ? card.worldBook : null,
   };
 }
 
@@ -956,6 +966,49 @@ export async function getCharacterWorldBookNameViaSTscript() {
     console.warn('[BS BioTracker] /getcharbook failed', error);
     return '';
   }
+}
+
+async function getWorldInfoModule() {
+  if (!worldInfoModulePromise) {
+    const moduleUrl = new URL('../../../../world-info.js', import.meta.url).href;
+    worldInfoModulePromise = import(moduleUrl).catch((error) => {
+      console.warn('[BS BioTracker] import world-info module failed', error);
+      return null;
+    });
+  }
+  return worldInfoModulePromise;
+}
+
+export async function getActiveGlobalWorldBookNames() {
+  const worldInfoModule = await getWorldInfoModule();
+  return Array.from(
+    new Set(
+      (Array.isArray(worldInfoModule?.selected_world_info) ? worldInfoModule.selected_world_info : [])
+        .map((name) => String(name || '').trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+export async function loadGlobalWorldBook(ctx, name) {
+  const normalizedName = String(name || '').trim();
+  if (!normalizedName) return null;
+  if (typeof ctx?.loadWorldInfo === 'function') {
+    try {
+      return await ctx.loadWorldInfo(normalizedName);
+    } catch (error) {
+      console.warn(`[BS BioTracker] load active global worldbook "${normalizedName}" failed`, error);
+    }
+  }
+  if (typeof globalThis.ST_API?.worldBook?.get === 'function') {
+    try {
+      const result = await globalThis.ST_API.worldBook.get({ name: normalizedName, scope: 'global' });
+      return result?.worldBook || null;
+    } catch (error) {
+      console.warn(`[BS BioTracker] ST_API get active global worldbook "${normalizedName}" failed`, error);
+    }
+  }
+  return null;
 }
 
 export function getTargetNames(ctx, settings) {
