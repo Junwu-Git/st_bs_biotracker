@@ -23,6 +23,7 @@ import {
   LABOR_STAGE_INCREMENT,
   MENSTRUAL_STAGE_DAYS,
   PREGNANCY_STAGE_DAYS,
+  PREGNANCY_STAGES,
 } from './scripts/stage_config.js';
 import { buildMainFlowPrompt, resetPoller, runTracker } from './scripts/tracker.js';
 import { applyToolCall } from './scripts/tools.js';
@@ -1017,7 +1018,7 @@ function renderRacePaletteBody() {
 }
 
 function isPregnantStage(stage) {
-  return ['已着床', ...Object.keys(PREGNANCY_STAGE_DAYS), ...LABOR_STAGES].includes(String(stage || ''));
+  return ['已着床', ...PREGNANCY_STAGES, '产前阵痛', ...LABOR_STAGES].includes(String(stage || ''));
 }
 
 function getStageProgress(profile) {
@@ -1037,7 +1038,7 @@ function getStageProgress(profile) {
     return { label: '阶段进度', value: Number(base.days) || 0, max: PREGNANCY_STAGE_DAYS[stage], unit: 'd' };
   }
   if (stage === '逾期') {
-    return { label: '阶段进度', value: Number(base.days) || 0, max: 28, unit: 'd' };
+    return { label: '阶段进度', value: Number(base.days) || 0, unbounded: true, unit: 'd' };
   }
   if (Object.prototype.hasOwnProperty.call(MENSTRUAL_STAGE_DAYS, stage)) {
     const ratio = Math.max(0.1, Math.min(20, Number(profile?.bio?.menstrualLengthRatio) || 1));
@@ -1541,12 +1542,13 @@ function renderProgressList(items) {
   return items
     .map((item) => {
       const value = Math.max(0, Number(item.value) || 0);
+      const unbounded = item.unbounded === true;
       const cap = Math.max(1, Number(item.cap) || 1);
-      const fill = `${Math.min(100, (value / cap) * 100)}%`;
-      const scale = `${Math.max(25, (cap / MAX_PROGRESS_BAR_CAP) * 100)}%`;
-      const displayValue = String(Math.floor(value));
+      const fill = unbounded ? '100%' : `${Math.min(100, (value / cap) * 100)}%`;
+      const scale = unbounded ? '100%' : `${Math.max(25, (cap / MAX_PROGRESS_BAR_CAP) * 100)}%`;
+      const displayValue = unbounded ? String(Math.floor(value)) : `${Math.floor(value)} / ${cap}`;
       return `<div class="bs-bt-track-progress">
-        <div class="bs-bt-track-progress-head"><span>${escapeHtml(item.label)}</span><span>${displayValue} / ${cap}</span></div>
+        <div class="bs-bt-track-progress-head"><span>${escapeHtml(item.label)}</span><span>${displayValue}</span></div>
         <div class="bs-bt-track-progress-bar" style="width:${scale};"><div class="bs-bt-track-progress-fill" style="width:${fill};"></div></div>
       </div>`;
     })
@@ -1606,7 +1608,7 @@ function renderTrackOverview(viewModel) {
     ? `产程 ${Math.floor(Number(viewModel.pregnancy?.laborHours) || 0)}h`
     : '';
   const progressHtml = progress
-    ? renderProgressList([{ label: viewModel.overview.stage, value: progress.value, cap: progress.max }])
+    ? renderProgressList([{ label: viewModel.overview.stage, value: progress.value, cap: progress.max, unbounded: progress.unbounded }])
     : '';
   return `
     <div class="bs-bt-track-section">
