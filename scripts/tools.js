@@ -1311,8 +1311,9 @@ function applyHourlyPregnancyMetabolism(profile, tick, female) {
   if (!isTruePregnancyStage(stage)) return;
   if (tick.passedHours <= 0) return;
 
+  const pregnant = profile?.pregnant || {};
   const metabolism = profile?.metabolism || {};
-  const fetalEnergyDrain = clampNumber(profile?.pregnant?.fetalEnergyDrain, 0, 9999, 0);
+  const fetalEnergyDrain = clampNumber(pregnant.fetalEnergyDrain, 0, 9999, 0);
   const delta = (1 + fetalEnergyDrain) * 2 * tick.passedHours;
 
   if (hasDerivedMetabolism(profile)) {
