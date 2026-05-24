@@ -60,7 +60,7 @@ export const DEFAULT_SYSTEM_PROMPT = [
   '跨日、重大事件或 notify 提醒时，可用 bsWriteDiary 为角色追加主观日记。',
   '月经阶段、排卵期、假孕期切换用 bsSetMenstrualPhases；不要用它覆盖正在进行的受精、真妊娠或产程。',
   '流产用 bsAbortion；立即结束分娩用 bsChildbirth；角色在场状态变化用 bsSetCharacterPresence。',
-  '母胎互动用 bsMaternalFetalInteraction；当角色处于产前阵痛且 direction=maternal 时，它表示分娩抵抗。若 notify 提示妊娠不适，调用此工具可额外补充营养。',
+  '母胎互动用 bsMaternalFetalInteraction；当角色处于产兆前驱且 direction=maternal 时，它表示分娩抵抗。若 notify 提示妊娠不适，调用此工具可额外补充营养。',
   '不要编造怀孕天数、胎数、流产、分娩或其他高影响事件。',
 ].join('\n');
 
@@ -292,7 +292,7 @@ export function syncCharacterStageFromProfile(characterState) {
       return next;
     }
 
-    if (currentStage === '产前阵痛' || LABOR_STAGES.includes(currentStage)) {
+    if (currentStage === '产兆前驱' || LABOR_STAGES.includes(currentStage)) {
       next.profile.base = {
         ...base,
         days: Math.max(0, Number(base.days) || 0),
@@ -312,7 +312,7 @@ export function syncCharacterStageFromProfile(characterState) {
   if (
     MENSTRUAL_STAGES.includes(currentStage)
     || currentStage === '假孕期'
-    || currentStage === '产前阵痛'
+    || currentStage === '产兆前驱'
     || currentStage === '产后恢复'
     || LABOR_STAGES.includes(currentStage)
     || currentStage === '无经期'
@@ -499,12 +499,18 @@ function sanitizeProfilePatch(profilePatch) {
   );
   const pregnant = sanitizeObjectPatch(
     profilePatch.pregnant,
-    ['pregnantDays', 'effectivePregnantDays', 'laborHours', 'effectiveLaborHours', 'fetusesCount', 'fetalEnergyDrain', 'nutrition', 'blockage', 'fetuses'],
+    ['pregnantDays', 'effectivePregnantDays', 'laborHours', 'effectiveLaborHours', 'laborPhase', 'laborFetusIndex', 'laborPain', 'prodromalOriginStage', 'prodromalRemainingHours', 'prodromalDelayProgressHours', 'fetusesCount', 'fetalEnergyDrain', 'nutrition', 'blockage', 'fetuses'],
     {
       pregnantDays: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
       effectivePregnantDays: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
       laborHours: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
       effectiveLaborHours: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
+      laborPhase: sanitizeString,
+      laborFetusIndex: (value) => sanitizeInteger(value, { min: 0, max: 99 }),
+      laborPain: (value) => sanitizeNumber(value, { min: 0, max: 10 }),
+      prodromalOriginStage: sanitizeString,
+      prodromalRemainingHours: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
+      prodromalDelayProgressHours: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
       fetusesCount: (value) => sanitizeInteger(value, { min: 0, max: 99 }),
       fetalEnergyDrain: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
       nutrition: (value) => sanitizeNumber(value, { min: -999, max: 999 }),
@@ -594,9 +600,10 @@ function sanitizeProfilePatch(profilePatch) {
     secondly: sanitizeString,
     thirdly: sanitizeString,
   });
-  const immune = sanitizeObjectPatch(profilePatch.immune, ['metabolism', 'miscarriage'], {
+  const immune = sanitizeObjectPatch(profilePatch.immune, ['metabolism', 'miscarriage', 'realisticLabor'], {
     metabolism: (value) => Boolean(value),
     miscarriage: (value) => Boolean(value),
+    realisticLabor: (value) => Boolean(value),
   });
   const result = {};
   if (cooldown) result.cooldown = cooldown;
@@ -668,6 +675,12 @@ export function createDefaultFemaleState(name = '') {
         effectivePregnantDays: 0,
         laborHours: 0,
         effectiveLaborHours: 0,
+        laborPhase: null,
+        laborFetusIndex: 0,
+        laborPain: 0,
+        prodromalOriginStage: null,
+        prodromalRemainingHours: 0,
+        prodromalDelayProgressHours: 0,
         fetusesCount: 0,
         fetalEnergyDrain: 0,
         amnionDurability: 0,
@@ -727,6 +740,7 @@ export function createDefaultFemaleState(name = '') {
       immune: {
         metabolism: false,
         miscarriage: false,
+        realisticLabor: false,
       },
     },
   };
@@ -1129,6 +1143,12 @@ function createSnapshotCharacterBaseline(name = '') {
         effectivePregnantDays: 0,
         laborHours: 0,
         effectiveLaborHours: 0,
+        laborPhase: null,
+        laborFetusIndex: 0,
+        laborPain: 0,
+        prodromalOriginStage: null,
+        prodromalRemainingHours: 0,
+        prodromalDelayProgressHours: 0,
         fetusesCount: 0,
         fetalEnergyDrain: 0,
         amnionDurability: 0,
@@ -1188,6 +1208,7 @@ function createSnapshotCharacterBaseline(name = '') {
       immune: {
         metabolism: false,
         miscarriage: false,
+        realisticLabor: false,
       },
     },
   };

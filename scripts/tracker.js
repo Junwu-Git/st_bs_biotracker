@@ -101,7 +101,7 @@ function shouldSendPregnantState(base = {}, pregnant = {}) {
   const hasFetuses = Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0;
   return hasFetuses
     || PREGNANCY_STAGES.includes(stage)
-    || stage === '产前阵痛'
+    || stage === '产兆前驱'
     || LABOR_STAGES.includes(stage)
     || stage === '产后恢复'
     || stage === '假孕期';
@@ -117,6 +117,18 @@ function getPromptFacingBlockage(pregnant = {}) {
       key,
       severity: Number.isFinite(Number(blockage.severity)) ? Number(blockage.severity) : 0,
     },
+  };
+}
+
+function getPromptFacingLaborState(base = {}, pregnant = {}) {
+  const stage = String(base.stage || '');
+  if (stage !== '产兆前驱' && !LABOR_STAGES.includes(stage)) return {};
+  return {
+    laborHours: Number.isFinite(Number(pregnant.laborHours)) ? Number(pregnant.laborHours) : 0,
+    effectiveLaborHours: Number.isFinite(Number(pregnant.effectiveLaborHours)) ? Number(pregnant.effectiveLaborHours) : 0,
+    laborPhase: pregnant.laborPhase ?? null,
+    laborFetusIndex: Number.isFinite(Number(pregnant.laborFetusIndex)) ? Number(pregnant.laborFetusIndex) : 0,
+    laborPain: Number.isFinite(Number(pregnant.laborPain)) ? Number(pregnant.laborPain) : 0,
   };
 }
 
@@ -142,8 +154,7 @@ function buildPromptFacingCharacterState(item, diaryLimit = 0) {
     profile.pregnant = {
       pregnantDays: Number.isFinite(Number(pregnant.pregnantDays)) ? Number(pregnant.pregnantDays) : 0,
       effectivePregnantDays: Number.isFinite(Number(pregnant.effectivePregnantDays)) ? Number(pregnant.effectivePregnantDays) : 0,
-      laborHours: Number.isFinite(Number(pregnant.laborHours)) ? Number(pregnant.laborHours) : 0,
-      effectiveLaborHours: Number.isFinite(Number(pregnant.effectiveLaborHours)) ? Number(pregnant.effectiveLaborHours) : 0,
+      ...getPromptFacingLaborState(base, pregnant),
       amnionDurability: Number.isFinite(Number(pregnant.amnionDurability)) ? Number(pregnant.amnionDurability) : 0,
       ...(hasFetuses ? { nutrition: Number.isFinite(Number(pregnant.nutrition)) ? Number(pregnant.nutrition) : 0 } : {}),
       ...getPromptFacingBlockage(pregnant),
@@ -157,8 +168,7 @@ function buildPromptFacingCharacterState(item, diaryLimit = 0) {
     profile.pregnant = {
       pregnantDays: Number.isFinite(Number(pregnant.pregnantDays)) ? Number(pregnant.pregnantDays) : 0,
       effectivePregnantDays: Number.isFinite(Number(pregnant.effectivePregnantDays)) ? Number(pregnant.effectivePregnantDays) : 0,
-      laborHours: Number.isFinite(Number(pregnant.laborHours)) ? Number(pregnant.laborHours) : 0,
-      effectiveLaborHours: Number.isFinite(Number(pregnant.effectiveLaborHours)) ? Number(pregnant.effectiveLaborHours) : 0,
+      ...getPromptFacingLaborState(base, pregnant),
       amnionDurability: Number.isFinite(Number(pregnant.amnionDurability)) ? Number(pregnant.amnionDurability) : 0,
       ...getPromptFacingBlockage(pregnant),
       fetuses: [],
@@ -225,8 +235,7 @@ function buildOffscreenCharacterState(item, diaryLimit = 0) {
         pregnant: {
           pregnantDays: pregnant.pregnantDays ?? 0,
           effectivePregnantDays: pregnant.effectivePregnantDays ?? 0,
-          laborHours: pregnant.laborHours ?? 0,
-          effectiveLaborHours: pregnant.effectiveLaborHours ?? 0,
+          ...getPromptFacingLaborState(base, pregnant),
           fetusesCount: hasFetuses ? pregnant.fetuses.length : 0,
           ...getPromptFacingBlockage(pregnant),
         },

@@ -244,7 +244,7 @@ function buildSpermCalculationBlock(characterState) {
   const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
   const stage = String(base.stage || '');
   const fertilizationDays = Number(base.fertilizationDays || 0);
-  const hasPregnancyState = fetuses.length > 0 || fertilizationDays > 0 || ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产前阵痛', '第一产程', '第二产程', '第三产程', '假孕期'].includes(stage);
+  const hasPregnancyState = fetuses.length > 0 || fertilizationDays > 0 || ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产兆前驱', '第一产程', '第二产程', '第三产程', '假孕期'].includes(stage);
   if (hasPregnancyState) return '';
 
   const motherRace = String(base.race || '').trim();

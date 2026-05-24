@@ -29,3 +29,11 @@ export const LABOR_STAGE_INCREMENT = Object.freeze({
   第二产程: 2,
   第三产程: 0.5,
 });
+
+export const FIRST_STAGE_NATURAL_BIRTH_EXPERIENCE = Object.freeze({
+  reductionPerBirth: 0.15,
+  maxCount: 3,
+  minMultiplier: 0.55,
+});
+
+export const LABOR_POSTPARTUM_OBSERVATION_HOURS = 2;

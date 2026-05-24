@@ -369,12 +369,14 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '- 精灵怀孕500天: {"base":{"race":"精灵"},"pregnant":{"pregnantDays":500,"fetusesCount":1,"fetuses":[{"fathers":"伴侣","provider":null,"race":"精灵","gender":"女","embryoType":"胎生"}]}}',
     '- 妖怪猫又怀双胎20周: {"pregnant":{"pregnantDays":140,"fetusesCount":2,"fetuses":[{"fathers":"监狱囚犯","provider":null,"race":"[妖怪]兽耳族-猫又x蜥蜴人","gender":"女","embryoType":"胎生"},{"fathers":"监狱囚犯","provider":null,"race":"[妖怪]兽耳族-猫又x蜥蜴人","gender":"女","embryoType":"胎生"}]}}',
     '- 代孕情节: {"pregnant":{"pregnantDays":84,"fetusesCount":1,"fetuses":[{"fathers":"委托人","provider":"代孕者A","race":"人类","gender":"女","embryoType":"胎生"}]}}',
-    '【5.1 妊娠變速类补充设定（注册自订补充设定可直接体现到 bio）】',
+    '【5.1 妊娠變速类补充设定（仅在存在特殊变速效果时填写 bio）】',
     '参数说明：',
-    '- bio.gestationModifierMultiplier: 妊娠速度倍率。1 为正常，大于 1 为加速，小于 1 为减速；初始怀孕仍只填 pregnant.pregnantDays，系统会用倍率换算 effectivePregnantDays。',
+    '- bio.gestationModifierMultiplier: 特殊妊娠速度修正倍率。大于 1 为加速，小于 1 为减速，0 为冻结；初始怀孕仍只填 pregnant.pregnantDays，系统会用倍率换算 effectivePregnantDays。',
     '- bio.gestationModifierName: 该倍率效果的名称，例如祝福、诅咒、体质、术式。',
     '- bio.gestationModifierDescription: 对该倍率来源与表现的简短说明。',
-    '- 注意：未怀孕角色也可以填写这组 bio 字段；是否怀孕只影响 pregnant，不影响该 buff 是否存在。',
+    '- 这组 bio 字段是可选的特殊效果，不是一般妊娠的必填资料。普通人类孕妇、常规妊娠、种族原生孕期速度都不要填写。',
+    '- 禁止用 bio 填写 gestationModifierMultiplier=1 的默认占位内容，例如「常规妊娠」「标准人类妊娠生理周期」；没有特殊变速效果就整个省略 bio。',
+    '- 仅当资料明确存在持续生效且倍率不为 1 的祝福、诅咒、体质、术式、冻结或延长效果时填写；未怀孕角色也可保留此类明确效果。',
     '示例：',
     '- 被祝福的冒险者妊娠加快: {"bio":{"gestationModifierMultiplier":1.5,"gestationModifierName":"丰饶祝福","gestationModifierDescription":"受女神祝福后，妊娠期间胎儿发育明显加快，孕期反应也会更早显现。"}}',
     '- 红尘之力导致孕期极端延长，即使当前未怀孕也应保留: {"bio":{"gestationModifierMultiplier":0.001,"gestationModifierName":"红尘织命","gestationModifierDescription":"受红尘之力影响，若进入妊娠，孕期推进速度仅为常规人类的千分之一，整体妊娠期会被极度拉长。"}}',
@@ -402,7 +404,7 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '【8. 用户自订补充设定】',
     customNotes ? customNotes : '无',
     '若提供了自订补充设定，必须优先视为该角色已明确声明的特征，并在相关字段中如实体现；不要忽略，也不要擅自扩写超出原意的内容。',
-    '若用户自订补充设定描述的是一种未来也会持续生效的妊娠体质、祝福、诅咒、冻结或延长效果，即使角色当前未怀孕，也必须写入 bio.gestationModifierMultiplier、bio.gestationModifierName、bio.gestationModifierDescription。',
+    '若用户自订补充设定明确描述的是一种未来也会持续生效、且倍率不为 1 的妊娠体质、祝福、诅咒、冻结或延长效果，即使角色当前未怀孕，也必须写入 bio.gestationModifierMultiplier、bio.gestationModifierName、bio.gestationModifierDescription；普通妊娠不得补写 bio。',
     '注意：未怀孕角色不要硬填 pregnantDescription；描述内容应遵守旧系统文字栏位语义，不要换行。',
     '只输出 JSON，不要输出额外解释。',
     'JSON 结构必须是：',
@@ -474,11 +476,6 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '      "sleep": 0,',
     '      "milk": 0,',
     '      "odor": 0',
-    '    },',
-    '    "bio": {',
-    '      "gestationModifierMultiplier": 1,',
-    '      "gestationModifierName": "string",',
-    '      "gestationModifierDescription": "string"',
     '    },',
     '    "children": [],',
     '    "diary": [',
@@ -606,18 +603,15 @@ function sanitizePregnant(value) {
 
 function sanitizeRegistryBio(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const nextBio = {};
-  if (value.gestationModifierMultiplier !== undefined) {
-    const multiplier = Number(value.gestationModifierMultiplier);
-    if (Number.isFinite(multiplier)) nextBio.gestationModifierMultiplier = clampNumber(multiplier, 0, 20, 1);
-  }
-  if (value.gestationModifierName !== undefined) {
-    nextBio.gestationModifierName = value.gestationModifierName === null ? '' : String(value.gestationModifierName || '').trim();
-  }
-  if (value.gestationModifierDescription !== undefined) {
-    nextBio.gestationModifierDescription = value.gestationModifierDescription === null ? '' : String(value.gestationModifierDescription || '').trim();
-  }
-  return Object.keys(nextBio).length > 0 ? nextBio : null;
+  const multiplier = Number(value.gestationModifierMultiplier);
+  if (!Number.isFinite(multiplier)) return null;
+  const normalizedMultiplier = clampNumber(multiplier, 0, 20, 1);
+  if (Math.abs(normalizedMultiplier - 1) <= 0.000001) return null;
+  return {
+    gestationModifierMultiplier: normalizedMultiplier,
+    gestationModifierName: value.gestationModifierName === null ? '' : String(value.gestationModifierName || '').trim(),
+    gestationModifierDescription: value.gestationModifierDescription === null ? '' : String(value.gestationModifierDescription || '').trim(),
+  };
 }
 
 function sanitizeDiaryEntries(value) {

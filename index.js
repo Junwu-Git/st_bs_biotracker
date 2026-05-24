@@ -18,9 +18,11 @@ import {
   VIVIPAROUS_RACES,
 } from './scripts/race_config.js';
 import {
+  FIRST_STAGE_NATURAL_BIRTH_EXPERIENCE,
   LABOR_STAGES,
   LABOR_STAGE_BASE_HOURS,
   LABOR_STAGE_INCREMENT,
+  LABOR_POSTPARTUM_OBSERVATION_HOURS,
   MENSTRUAL_STAGE_DAYS,
   PREGNANCY_STAGE_DAYS,
   PREGNANCY_STAGES,
@@ -121,6 +123,10 @@ let debugGestationModifierDraft = {
   name: '',
   multiplier: '',
   description: '',
+};
+let debugFetalActivityDraft = {
+  owner: '',
+  text: '',
 };
 
 const RACE_PALETTE_GROUPS = [
@@ -1115,7 +1121,7 @@ function renderRacePaletteBody() {
 }
 
 function isPregnantStage(stage) {
-  return ['已着床', ...PREGNANCY_STAGES, '产前阵痛', ...LABOR_STAGES].includes(String(stage || ''));
+  return ['已着床', ...PREGNANCY_STAGES, '产兆前驱', ...LABOR_STAGES].includes(String(stage || ''));
 }
 
 function getStageProgress(profile) {
@@ -1124,12 +1130,46 @@ function getStageProgress(profile) {
   const stage = String(base.stage || '').trim();
   if (!stage) return null;
   if (LABOR_STAGES.includes(stage)) {
+    if (stage === '第一产程') {
+      const phase = String(pregnant.laborPhase || '潜伏期');
+      const max = getLaborStageThreshold(profile, stage, { fullStage: true }) || 12;
+      const phaseOffset = phase === '过渡期'
+        ? max * 0.85
+        : phase === '活跃期'
+          ? max * 0.5
+          : 0;
+      return {
+        label: '产程进度',
+        value: phaseOffset + (Number(pregnant.effectiveLaborHours) || 0),
+        max,
+        unit: 'h',
+        integerDisplay: true,
+      };
+    }
+    if (stage === '第三产程') {
+      const phase = String(pregnant.laborPhase || '供养器官娩出');
+      const organHours = getLaborStageThreshold(profile, stage, { phase: '供养器官娩出' }) || 0.5;
+      const observationHours = getLaborStageThreshold(profile, stage, { phase: '产后观察' }) || LABOR_POSTPARTUM_OBSERVATION_HOURS;
+      return {
+        label: '产程进度',
+        value: (phase === '产后观察' ? organHours : 0) + (Number(pregnant.effectiveLaborHours) || 0),
+        max: organHours + observationHours,
+        unit: 'h',
+        integerDisplay: true,
+      };
+    }
     return {
       label: '产程进度',
       value: Number(pregnant.effectiveLaborHours) || 0,
       max: getLaborStageThreshold(profile, stage) || (stage === '第一产程' ? 12 : stage === '第二产程' ? 2 : 1),
       unit: 'h',
+      integerDisplay: true,
     };
+  }
+  if (stage === '产兆前驱') {
+    const max = 48 * Math.max(0.1, Math.min(100, Number(profile?.bio?.birthDifficulty) || 1));
+    const remaining = Math.max(0, Number(pregnant.prodromalRemainingHours) || 0);
+    return { label: '前驱进展', value: Math.max(0, max - remaining), max, unit: 'h', integerDisplay: true };
   }
   if (Object.prototype.hasOwnProperty.call(PREGNANCY_STAGE_DAYS, stage)) {
     return { label: '阶段进度', value: Number(base.days) || 0, max: PREGNANCY_STAGE_DAYS[stage], unit: 'd' };
@@ -1201,29 +1241,51 @@ function getLaborPositionDifficulty(angle, fetus) {
   return 1.33;
 }
 
-function getLaborStageThreshold(profile, stage) {
+function getLaborStageThreshold(profile, stage, options = {}) {
   if (!LABOR_STAGES.includes(stage)) return null;
   const pregnant = profile?.pregnant || {};
   const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+  const phase = String(options.phase || pregnant.laborPhase || '');
   const birthDifficulty = Math.max(0.1, Math.min(100, Number(profile?.bio?.birthDifficulty) || 1));
   const safeCount = Math.max(1, fetuses.length);
   const baseHours = Number(LABOR_STAGE_BASE_HOURS[stage]) || 0;
   const increment = Number(LABOR_STAGE_INCREMENT[stage]) || 0;
   let threshold = (baseHours + ((safeCount - 1) * increment)) * birthDifficulty;
 
+  if (stage === '第一产程') {
+    const naturalBirthCount = Math.min(
+      FIRST_STAGE_NATURAL_BIRTH_EXPERIENCE.maxCount,
+      Math.floor(Math.max(0, Number(profile?.experience?.naturalBirthExperience) || 0)),
+    );
+    threshold *= Math.max(
+      FIRST_STAGE_NATURAL_BIRTH_EXPERIENCE.minMultiplier,
+      1 - (naturalBirthCount * FIRST_STAGE_NATURAL_BIRTH_EXPERIENCE.reductionPerBirth),
+    );
+    if (options.fullStage) return Math.max(0.1, threshold);
+    if (phase === '潜伏期') threshold *= 0.5;
+    else if (phase === '活跃期') threshold *= 0.35;
+    else if (phase === '过渡期') threshold *= 0.15;
+  }
   if (stage === '第二产程' && fetuses.length > 0) {
+    if (phase === '间歇期') return Math.max(0.5, birthDifficulty * 0.5);
     const firstFetus = fetuses[0];
     const fetalAngle = Number.isFinite(Number(firstFetus?.tendencyAngle)) ? wrapLaborAngle(firstFetus.tendencyAngle) : 0;
     const positionDifficulty = getLaborPositionDifficulty(fetalAngle, firstFetus);
     const fetalWeight = Math.max(0.33, Math.min(3.0, Number(firstFetus?.weight) || 1.0));
     threshold = ((Number(LABOR_STAGE_BASE_HOURS['第二产程']) || 0) * birthDifficulty) * positionDifficulty * fetalWeight;
+    threshold *= phase === '胎体娩出' ? 0.4 : 0.6;
+  }
+  if (stage === '第三产程') {
+    threshold = phase === '产后观察'
+      ? Math.max(LABOR_POSTPARTUM_OBSERVATION_HOURS, birthDifficulty * LABOR_POSTPARTUM_OBSERVATION_HOURS)
+      : Math.max(0.5, (Number(LABOR_STAGE_BASE_HOURS['第三产程']) || 0) * birthDifficulty);
   }
 
   return Math.max(0.1, threshold);
 }
 
 function getLibidoCap(stage, profile = null) {
-  const isTruePregnancy = ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产前阵痛', '第一产程', '第二产程', '第三产程'].includes(stage);
+  const isTruePregnancy = ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产兆前驱', '第一产程', '第二产程', '第三产程'].includes(stage);
   if (isTruePregnancy && profile) {
     const effectivePregnantDays = Number(profile.pregnant?.effectivePregnantDays) || 0;
     const months = Math.floor(effectivePregnantDays / 28);
@@ -1234,7 +1296,7 @@ function getLibidoCap(stage, profile = null) {
 }
 
 function getUterinePressureCap(stage, profile = null) {
-  const isTruePregnancy = ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产前阵痛', '第一产程', '第二产程', '第三产程'].includes(stage);
+  const isTruePregnancy = ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产兆前驱', '第一产程', '第二产程', '第三产程'].includes(stage);
   if (isTruePregnancy && profile) {
     const effectivePregnantDays = Number(profile.pregnant?.effectivePregnantDays) || 0;
     const months = Math.floor(effectivePregnantDays / 28);
@@ -1558,11 +1620,18 @@ function buildTrackCharacterViewModel(character) {
       pregnantDays: Number(pregnant.pregnantDays) || 0,
       effectivePregnantDays: Number(pregnant.effectivePregnantDays) || 0,
       laborHours: Number(pregnant.laborHours) || 0,
+      laborPhase: pregnant.laborPhase ?? null,
+      laborFetusIndex: Number(pregnant.laborFetusIndex) || 0,
+      laborPain: Number(pregnant.laborPain) || 0,
+      prodromalOriginStage: pregnant.prodromalOriginStage ?? null,
+      prodromalRemainingHours: Number(pregnant.prodromalRemainingHours) || 0,
+      prodromalDelayProgressHours: Number(pregnant.prodromalDelayProgressHours) || 0,
       amnionDurability: Number(pregnant.amnionDurability) || 0,
       fetuses: Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [],
       pregnantBlocks: parseDescriptionBlocks(descriptions.pregnantDescription),
       showPregnantFields: isPregnantStage(stage),
       showLaborFields: LABOR_STAGES.includes(stage),
+      showLaborPainBadge: stage === '产兆前驱' || LABOR_STAGES.includes(stage),
       gestationModifier: {
         name: String(bio.gestationModifierName || '').trim(),
         multiplier: gestationModifierMultiplier,
@@ -1592,6 +1661,7 @@ function buildTrackCharacterViewModel(character) {
       immune: {
         metabolism: Boolean(immune.metabolism),
         miscarriage: Boolean(immune.miscarriage),
+        realisticLabor: Boolean(immune.realisticLabor),
       },
       gestationModifier: {
         name: String(bio.gestationModifierName || '').trim(),
@@ -1643,7 +1713,8 @@ function renderProgressList(items) {
       const cap = Math.max(1, Number(item.cap) || 1);
       const fill = unbounded ? '100%' : `${Math.min(100, (value / cap) * 100)}%`;
       const scale = unbounded ? '100%' : `${Math.max(25, (cap / MAX_PROGRESS_BAR_CAP) * 100)}%`;
-      const displayValue = unbounded ? String(Math.floor(value)) : `${Math.floor(value)} / ${cap}`;
+      const displayCap = item.integerDisplay ? Math.ceil(cap) : cap;
+      const displayValue = unbounded ? String(Math.floor(value)) : `${Math.floor(value)} / ${displayCap}`;
       return `<div class="bs-bt-track-progress">
         <div class="bs-bt-track-progress-head"><span>${escapeHtml(item.label)}</span><span>${displayValue}</span></div>
         <div class="bs-bt-track-progress-bar" style="width:${scale};"><div class="bs-bt-track-progress-fill" style="width:${fill};"></div></div>
@@ -1701,11 +1772,22 @@ function renderCardCarouselSection(title, items, renderCard, emptyText, kind, op
 
 function renderTrackOverview(viewModel) {
   const progress = viewModel.overview.stageProgress;
+  const currentStage = viewModel.overview.stage;
   const stageBadge = viewModel.pregnancy?.showLaborFields
-    ? `产程 ${Math.floor(Number(viewModel.pregnancy?.laborHours) || 0)}h`
+    ? `${viewModel.pregnancy?.laborPhase || '产程'}${Number(viewModel.pregnancy?.laborFetusIndex) > 0 ? ` ${viewModel.pregnancy.laborFetusIndex}胎` : ''}`
     : '';
+  const laborPain = Math.max(0, Math.min(10, Number(viewModel.pregnancy?.laborPain) || 0));
+  const stageSectionClass = viewModel.pregnancy?.showLaborPainBadge
+    ? ` bs-bt-track-section--labor-pain${laborPain >= 9 ? ' is-critical' : ''}`
+    : '';
+  const stageSectionStyle = viewModel.pregnancy?.showLaborPainBadge
+    ? ` style="--bsbt-labor-pain:${laborPain / 10};"`
+    : '';
+  const progressLabel = currentStage === '第二产程'
+    ? `第二产程·第${Math.max(1, Number(viewModel.pregnancy?.laborFetusIndex) || 1)}胎${viewModel.pregnancy?.laborPhase || '胎体下降'}`
+    : currentStage;
   const progressHtml = progress
-    ? renderProgressList([{ label: viewModel.overview.stage, value: progress.value, cap: progress.max, unbounded: progress.unbounded }])
+    ? renderProgressList([{ label: progressLabel, value: progress.value, cap: progress.max, unbounded: progress.unbounded, integerDisplay: progress.integerDisplay }])
     : '';
   return `
     <div class="bs-bt-track-section">
@@ -1716,7 +1798,7 @@ function renderTrackOverview(viewModel) {
         <div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">年龄</span><span class="bs-bt-track-meta-value">${escapeHtml(viewModel.overview.age ?? '未知')}</span></div>
       </div>
     </div>
-    <div class="bs-bt-track-section">
+    <div class="bs-bt-track-section${stageSectionClass}"${stageSectionStyle}>
       <div class="bs-bt-track-section-title">${renderTrackTitle('阶段', stageBadge)}</div>
       ${progressHtml}
     </div>
@@ -1895,7 +1977,15 @@ function renderTrackDebug(viewModel) {
   ].join('');
 
   const currentStage = viewModel.base?.stage || '';
-  const hasProtectedPregnancyState = hasConceptionState || ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产前阵痛', '第一产程', '第二产程', '第三产程'].includes(currentStage);
+  const hasProtectedPregnancyState = hasConceptionState || ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产兆前驱', '第一产程', '第二产程', '第三产程'].includes(currentStage);
+  const canEnterProdromal = ['孕晚期', '临产期', '逾期'].includes(currentStage);
+  const isProdromal = currentStage === '产兆前驱';
+  const canSetProdromal = canEnterProdromal || isProdromal;
+  const canTriggerFetalActivity = Number(counts.fetuses) > 0
+    && ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产兆前驱', '第一产程', '第二产程', '第三产程'].includes(currentStage);
+  const prodromalProgress = isProdromal && Number(viewModel.overview?.stageProgress?.max) > 0
+    ? Math.round(Math.max(0, Math.min(100, (Number(viewModel.overview.stageProgress.value) / Number(viewModel.overview.stageProgress.max)) * 100)))
+    : 0;
 
   const phaseOptions = ['卵泡期', '排卵期', '黄体期', '月经期', '假孕期', '产后恢复'].map(phase =>
     `<option value="${phase}"${currentStage === phase ? ' selected' : ''}>${phase}</option>`
@@ -1911,6 +2001,7 @@ function renderTrackDebug(viewModel) {
   const modifierNameValue = escapeHtml(modifierDraftActive ? debugGestationModifierDraft.name : (gestationModifier.name || ''));
   const modifierMultiplierValue = escapeHtml(modifierDraftActive ? debugGestationModifierDraft.multiplier : String(gestationModifier.multiplier ?? 1));
   const modifierDescriptionValue = escapeHtml(modifierDraftActive ? debugGestationModifierDraft.description : (gestationModifier.description || ''));
+  const fetalActivityTextValue = escapeHtml(debugFetalActivityDraft.owner === selectedTrackName ? debugFetalActivityDraft.text : '');
   const palette = racePaletteState.targetInputId === 'bs-bt-debug-race' && racePaletteState.isOpen
     ? `<div class="bs-bt-race-popover">${renderRacePaletteBody()}</div>`
     : '';
@@ -1925,6 +2016,10 @@ function renderTrackDebug(viewModel) {
         <button type="button" class="bs-bt-track-debug-button${immune.miscarriage ? ' is-active' : ''}" data-debug-immune="miscarriage">
           <span class="bs-bt-track-debug-title">流产免疫</span>
           <span class="bs-bt-track-debug-state">${immune.miscarriage ? 'ON' : 'OFF'}</span>
+        </button>
+        <button type="button" class="bs-bt-track-debug-button${immune.realisticLabor ? ' is-active' : ''}" data-debug-immune="realisticLabor">
+          <span class="bs-bt-track-debug-title">真实产程</span>
+          <span class="bs-bt-track-debug-state">${immune.realisticLabor ? 'ON' : 'OFF'}</span>
         </button>
         <button type="button" class="bs-bt-track-debug-button" data-debug-clear="sperms">
           <span class="bs-bt-track-debug-title">淨空精液</span>
@@ -1999,6 +2094,28 @@ function renderTrackDebug(viewModel) {
       <div class="bs-bt-track-debug-hint">${hasConceptionState ? '当前角色已有受精或妊娠状态，已禁用此操作。' : '父亲名字、父亲种族、性别都可用逗号逐胎填写；填一位父亲 + 胎数 > 1 = 同父多胎；填多位父亲 = 异父妊娠。'}</div>
     </div>
     <div class="bs-bt-track-section" style="margin-top: 10px;">
+      <div class="bs-bt-track-section-title">产兆前驱调试</div>
+      <fieldset class="bs-bt-track-debug-form"${canSetProdromal ? '' : ' disabled'}>
+        <label class="bs-bt-track-debug-field">
+          <span class="bs-bt-track-debug-label">前驱进度 <output id="bs-bt-debug-prodromal-output">${prodromalProgress}%</output></span>
+          <input id="bs-bt-debug-prodromal-progress" type="range" min="0" max="100" step="1" value="${prodromalProgress}" />
+        </label>
+        <button type="button" class="menu_button" data-debug-action="set-prodromal">${isProdromal ? '应用进度' : '切换并应用'}</button>
+      </fieldset>
+      <div class="bs-bt-track-debug-hint">${canSetProdromal ? '0% 为刚进入产兆前驱，100% 为剩余时间耗尽；设为 100% 后，下一次时间推进会进入第一产程。' : '只有孕晚期、临产期或逾期角色可以切换至产兆前驱。'}</div>
+    </div>
+    <div class="bs-bt-track-section" style="margin-top: 10px;">
+      <div class="bs-bt-track-section-title">胎儿自主活动调适</div>
+      <fieldset class="bs-bt-track-debug-form"${canTriggerFetalActivity ? '' : ' disabled'}>
+        <label class="bs-bt-track-debug-field">
+          <span class="bs-bt-track-debug-label">事件内容</span>
+          <textarea id="bs-bt-debug-fetal-activity" class="text_pole bs-bt-textarea" rows="3" placeholder="例如：腹中的双胎忽然一前一后踢动，腹部轮廓短暂隆起">${fetalActivityTextValue}</textarea>
+        </label>
+        <button type="button" class="menu_button" data-debug-action="fetal-activity">触发活动</button>
+      </fieldset>
+      <div class="bs-bt-track-debug-hint">${canTriggerFetalActivity ? '内容会追加写入 secondly，作为下一段故事可自然承接的胎儿活动事件。' : '只有已有胎儿且仍在妊娠或产程中的角色可以触发。'}</div>
+    </div>
+    <div class="bs-bt-track-section" style="margin-top: 10px;">
       <div class="bs-bt-track-section-title">妊娠变速效果</div>
       <fieldset class="bs-bt-track-debug-form">
         <label class="bs-bt-track-debug-field">
@@ -2033,7 +2150,7 @@ function renderTrackCharacterContent(viewModel) {
 
 function toggleSelectedTrackImmune(ctx, immuneKey) {
   if (!selectedTrackName) return;
-  if (!['metabolism', 'miscarriage'].includes(immuneKey)) return;
+  if (!['metabolism', 'miscarriage', 'realisticLabor'].includes(immuneKey)) return;
   const settings = getSettings(ctx);
   const chatState = getChatState(ctx, settings);
   const character = chatState.characters?.[selectedTrackName];
@@ -2049,7 +2166,7 @@ function toggleSelectedTrackImmune(ctx, immuneKey) {
   renderStatusPanel(ctx);
   renderFullStatePage(ctx);
   globalThis.toastr?.success?.(
-    `[BS BioTracker] ${selectedTrackName} 的 ${immuneKey === 'metabolism' ? '代谢免疫' : '流产免疫'}已${nextValue ? '开启' : '关闭'}`,
+    `[BS BioTracker] ${selectedTrackName} 的 ${immuneKey === 'metabolism' ? '代谢免疫' : immuneKey === 'miscarriage' ? '流产免疫' : '真实产程'}已${nextValue ? '开启' : '关闭'}`,
   );
 }
 
@@ -2130,6 +2247,53 @@ function applySelectedTrackGestationModifier(ctx, clear = false) {
       ? `[BS BioTracker] 已清除 ${selectedTrackName} 的妊娠变速效果`
       : `[BS BioTracker] 已为 ${selectedTrackName} 设置妊娠变速效果`,
   );
+}
+
+function setSelectedTrackProdromal(ctx, progressPercent) {
+  if (!selectedTrackName) return;
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const result = applyToolCall(chatState, {
+    name: 'bsDebugSetProdromal',
+    arguments: {
+      female: selectedTrackName,
+      progressPercent: Number(progressPercent) || 0,
+    },
+  });
+  if (!result?.applied) {
+    globalThis.toastr?.warning?.(result?.message || '[BS BioTracker] 产兆前驱调试设置失败');
+    return;
+  }
+  recordChatStateSnapshot(ctx, chatState, { reason: 'debug_set_prodromal' });
+  saveSettings(ctx);
+  renderStatusPanel(ctx);
+  renderFullStatePage(ctx);
+  globalThis.toastr?.success?.(`[BS BioTracker] 已将 ${selectedTrackName} 的产兆前驱进度设为 ${Math.round(Number(progressPercent) || 0)}%`);
+}
+
+function triggerSelectedTrackFetalActivity(ctx, activityText) {
+  if (!selectedTrackName) return;
+  const text = String(activityText || '').trim();
+  debugFetalActivityDraft = { owner: selectedTrackName, text };
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const result = applyToolCall(chatState, {
+    name: 'bsDebugFetalActivity',
+    arguments: {
+      female: selectedTrackName,
+      activityText: text,
+    },
+  });
+  if (!result?.applied) {
+    globalThis.toastr?.warning?.(result?.message || '[BS BioTracker] 胎儿自主活动触发失败');
+    return;
+  }
+  debugFetalActivityDraft = { owner: selectedTrackName, text: '' };
+  recordChatStateSnapshot(ctx, chatState, { reason: 'debug_fetal_activity' });
+  saveSettings(ctx);
+  renderStatusPanel(ctx);
+  renderFullStatePage(ctx);
+  globalThis.toastr?.success?.(`[BS BioTracker] 已为 ${selectedTrackName} 触发胎儿自主活动`);
 }
 
 function clearSelectedTrackContainer(ctx, container) {
@@ -2219,6 +2383,18 @@ function bindDebugPanelControls(ctx, root, refresh = () => renderFullStatePage(c
       applySelectedTrackGestationModifier(ctx, true);
     }),
   );
+  root.querySelectorAll('[data-debug-action="set-prodromal"]').forEach((node) =>
+    node.addEventListener('click', () => {
+      const progressPercent = root.querySelector('#bs-bt-debug-prodromal-progress')?.value || '0';
+      setSelectedTrackProdromal(ctx, progressPercent);
+    }),
+  );
+  root.querySelectorAll('[data-debug-action="fetal-activity"]').forEach((node) =>
+    node.addEventListener('click', () => {
+      const activityText = root.querySelector('#bs-bt-debug-fetal-activity')?.value || '';
+      triggerSelectedTrackFetalActivity(ctx, activityText);
+    }),
+  );
   root.querySelectorAll('[data-debug-action="set-phase"]').forEach((node) =>
     node.addEventListener('click', () => {
       const stage = root.querySelector('#bs-bt-debug-phase-select')?.value;
@@ -2265,6 +2441,14 @@ function bindDebugPanelControls(ctx, root, refresh = () => renderFullStatePage(c
   });
   root.querySelector('#bs-bt-debug-days')?.addEventListener('input', (event) => {
     debugInjectDraft.equivalentDays = String(event.target?.value || '0');
+  });
+  root.querySelector('#bs-bt-debug-prodromal-progress')?.addEventListener('input', (event) => {
+    const output = root.querySelector('#bs-bt-debug-prodromal-output');
+    if (output) output.textContent = `${String(event.target?.value || '0')}%`;
+  });
+  root.querySelector('#bs-bt-debug-fetal-activity')?.addEventListener('input', (event) => {
+    debugFetalActivityDraft.owner = selectedTrackName;
+    debugFetalActivityDraft.text = String(event.target?.value || '');
   });
   root.querySelector('#bs-bt-debug-gestation-name')?.addEventListener('input', (event) => {
     debugGestationModifierDraft.owner = selectedTrackName;
@@ -2529,6 +2713,18 @@ function renderStatusPanel(ctx) {
       applySelectedTrackGestationModifier(ctx, true);
     }),
   );
+  content.querySelectorAll('[data-debug-action="set-prodromal"]').forEach((node) =>
+    node.addEventListener('click', () => {
+      const progressPercent = content.querySelector('#bs-bt-debug-prodromal-progress')?.value || '0';
+      setSelectedTrackProdromal(ctx, progressPercent);
+    }),
+  );
+  content.querySelectorAll('[data-debug-action="fetal-activity"]').forEach((node) =>
+    node.addEventListener('click', () => {
+      const activityText = content.querySelector('#bs-bt-debug-fetal-activity')?.value || '';
+      triggerSelectedTrackFetalActivity(ctx, activityText);
+    }),
+  );
   content.querySelectorAll('[data-debug-action="set-phase"]').forEach((node) =>
     node.addEventListener('click', () => {
       const stage = content.querySelector('#bs-bt-debug-phase-select')?.value;
@@ -2568,6 +2764,14 @@ function renderStatusPanel(ctx) {
   });
   content.querySelector('#bs-bt-debug-days')?.addEventListener('input', (event) => {
     debugInjectDraft.equivalentDays = String(event.target?.value || '0');
+  });
+  content.querySelector('#bs-bt-debug-prodromal-progress')?.addEventListener('input', (event) => {
+    const output = content.querySelector('#bs-bt-debug-prodromal-output');
+    if (output) output.textContent = `${String(event.target?.value || '0')}%`;
+  });
+  content.querySelector('#bs-bt-debug-fetal-activity')?.addEventListener('input', (event) => {
+    debugFetalActivityDraft.owner = selectedTrackName;
+    debugFetalActivityDraft.text = String(event.target?.value || '');
   });
   content.querySelector('#bs-bt-debug-gestation-name')?.addEventListener('input', (event) => {
     debugGestationModifierDraft.owner = selectedTrackName;
@@ -2749,6 +2953,10 @@ function validateManualCharacterState(next, currentName) {
     ['profile', 'pregnant', 'effectivePregnantDays'],
     ['profile', 'pregnant', 'laborHours'],
     ['profile', 'pregnant', 'effectiveLaborHours'],
+    ['profile', 'pregnant', 'laborFetusIndex'],
+    ['profile', 'pregnant', 'laborPain'],
+    ['profile', 'pregnant', 'prodromalRemainingHours'],
+    ['profile', 'pregnant', 'prodromalDelayProgressHours'],
     ['profile', 'pregnant', 'fetusesCount'],
     ['profile', 'pregnant', 'fetalEnergyDrain'],
     ['profile', 'pregnant', 'amnionDurability'],
