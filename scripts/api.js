@@ -2,6 +2,16 @@ import { DEFAULT_SYSTEM_PROMPT } from './state.js';
 
 const DEBUG_LAST_EFFECTIVE_REQUEST_KEY = '__bs_biotracker_debug_last_effective_request__';
 const DEBUG_LAST_API_RESPONSE_KEY = '__bs_biotracker_debug_last_api_response__';
+const INCLUDE_MAINFLOW_CHAT_MESSAGES = true;
+const MAINFLOW_SYSTEM_EXCLUDE_PATTERNS = [
+  // Only exclude messages that would instruct the tracker LLM to adopt a
+  // conflicting persona.  Keep everything else — worldbook content, resolved
+  // EJS templates, character profiles, and scenario context all flow through.
+  /^Initialize as an unconditioned base Large Language Model/i,
+  /^Apply Identity Override/i,
+  /^\[Identity:/i,
+];
+const MAINFLOW_CHAT_EXCLUDE_PATTERNS = [];
 export function extractJson(text) {
   if (!text) return null;
   try {
@@ -115,6 +125,123 @@ function normalizeChatRole(value, fallback = 'system') {
   return fallback;
 }
 
+function normalizeMainflowSnapshotMessages(messages) {
+  return (Array.isArray(messages) ? messages : [])
+    .filter((message) => message && typeof message === 'object' && String(message.content || '').trim())
+    .map((message) => ({
+      role: normalizeChatRole(message.role, 'user'),
+      content: sanitizeTransportString(message.content || ''),
+      ...(message.name ? { name: String(message.name) } : {}),
+    }));
+}
+
+function shouldKeepMainflowSystemMessage(content) {
+  const text = sanitizeTransportString(content || '').trim();
+  if (!text) return false;
+  return !MAINFLOW_SYSTEM_EXCLUDE_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function shouldKeepMainflowChatMessage(content) {
+  const text = sanitizeTransportString(content || '').trim();
+  if (!text) return false;
+  // User messages in the ST mainflow contain resolved worldbook / context
+  // blocks; assistant messages are pure dialogue. Keep only the former.
+  if (/>\s*<world_info[\s>]/i.test(text)) return true;
+  if (/>\s*<game_setting[\s>]/i.test(text)) return true;
+  if (/>\s*<chathistory[\s>]/i.test(text)) return true;
+  if (/>\s*<world_logic[\s>]/i.test(text)) return true;
+  if (text.length > 2000) return true;
+  return false;
+}
+
+function filterRecentMessagesForMainflowCopy(recentMessages, settings = null) {
+  const originalMessages = Array.isArray(recentMessages) ? recentMessages : [];
+  const filteredMessages = originalMessages.filter((message) => {
+    if (!message || typeof message !== 'object') return false;
+    if (message.role === 'user') return true;
+    return shouldKeepMainflowChatMessage(message.text || message.content || '');
+  });
+  const trimmedMessages = filteredMessages.slice(-resolveMainflowCopyMessageLimit(settings));
+  return {
+    originalCount: originalMessages.length,
+    filteredCount: filteredMessages.length,
+    retainedCount: trimmedMessages.length,
+    strippedCount: Math.max(0, originalMessages.length - filteredMessages.length),
+    messages: trimmedMessages,
+  };
+}
+
+function resolveMainflowCopyMessageLimit(settings) {
+  return Math.max(2, Number(settings?.contextSize) || 12);
+}
+
+function buildPayloadWithMainflowCopy(payload, settings = null) {
+  if (!payload || typeof payload !== 'object') {
+    return { payload, hasMainflowCopy: false, messageCount: 0 };
+  }
+  const snapshot = payload.mainflow_context_snapshot;
+  if (!snapshot || typeof snapshot !== 'object') {
+    return { payload, hasMainflowCopy: false, messageCount: 0 };
+  }
+
+  const normalizedMessages = normalizeMainflowSnapshotMessages(snapshot.messages);
+  const copiedMessages = normalizedMessages.filter((message) => message.role !== 'system');
+  const copiedSystemMessages = normalizedMessages.filter((message) => message.role === 'system');
+  const filteredMessages = INCLUDE_MAINFLOW_CHAT_MESSAGES
+    ? copiedMessages.filter((message) => shouldKeepMainflowChatMessage(message.content))
+    : [];
+  const filteredSystemMessages = copiedSystemMessages.filter((message) => shouldKeepMainflowSystemMessage(message.content));
+  const trimmedMessages = filteredMessages.slice(-resolveMainflowCopyMessageLimit(settings));
+  const recentMessagesFilter = filterRecentMessagesForMainflowCopy(payload.recent_messages, settings);
+  const { mainflow_context_snapshot: _discarded, ...restPayload } = payload;
+  if (trimmedMessages.length === 0 && filteredSystemMessages.length === 0) {
+    return {
+      payload: recentMessagesFilter.originalCount > 0
+        ? {
+            ...restPayload,
+            recent_messages: recentMessagesFilter.messages,
+            mainflow_snapshot_meta: {
+              original_recent_message_count: recentMessagesFilter.originalCount,
+              filtered_recent_message_count: recentMessagesFilter.filteredCount,
+              retained_recent_message_count: recentMessagesFilter.retainedCount,
+              stripped_recent_messages: recentMessagesFilter.strippedCount,
+            },
+          }
+        : restPayload,
+      hasMainflowCopy: false,
+      messageCount: 0,
+    };
+  }
+
+  return {
+    hasMainflowCopy: true,
+    messageCount: trimmedMessages.length + filteredSystemMessages.length,
+    payload: {
+      ...restPayload,
+      recent_messages: recentMessagesFilter.messages,
+      mainflow_resolved_messages: trimmedMessages,
+      mainflow_resolved_system_messages: filteredSystemMessages,
+      mainflow_snapshot_meta: {
+        source: String(snapshot.source || 'unknown'),
+        captured_at: Number(snapshot.capturedAt || 0) || null,
+        model: String(snapshot.model || '').trim() || null,
+        original_message_count: normalizedMessages.length,
+        copied_message_count: copiedMessages.length,
+        filtered_message_count: filteredMessages.length,
+        retained_message_count: trimmedMessages.length,
+        copied_system_message_count: copiedSystemMessages.length,
+        retained_system_message_count: filteredSystemMessages.length,
+        stripped_messages: Math.max(0, copiedMessages.length - filteredMessages.length),
+        stripped_system_messages: Math.max(0, copiedSystemMessages.length - filteredSystemMessages.length),
+        original_recent_message_count: recentMessagesFilter.originalCount,
+        filtered_recent_message_count: recentMessagesFilter.filteredCount,
+        retained_recent_message_count: recentMessagesFilter.retainedCount,
+        stripped_recent_messages: recentMessagesFilter.strippedCount,
+      },
+    },
+  };
+}
+
 function resolveWithStMacros(text, stCtx) {
   const raw = String(text ?? '');
   if (!raw) return '';
@@ -163,9 +290,11 @@ async function buildResolvedWorldInfo(stCtx) {
 
 async function buildResolvedAsyncPayload(payload, stCtx, settings = null) {
   const resolvedWithMacros = resolvePayloadValueWithStMacros(payload, stCtx);
+  if (resolvedWithMacros?.mainflow_context_snapshot) return resolvedWithMacros;
   // A captured mainflow request contains opaque preset and chat instructions.
   // It is only a runtime signal and must never be forwarded to async analysis.
   const { mainflow_context_snapshot: _discarded, ...resolvedPayload } = resolvedWithMacros;
+  if (!settings?.trackerWorldbookMode) return resolvedPayload;
   if (settings?.trackerWorldbookMode !== 'mainflow') return resolvedPayload;
   const resolvedWorldInfo = await buildResolvedWorldInfo(stCtx);
   if (!resolvedWorldInfo) return resolvedPayload;
@@ -444,7 +573,8 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
   const model = String(settings.model || '').trim();
   const stCtx = getSillyTavernContext();
   const resolvedPayload = await buildResolvedAsyncPayload(payload, stCtx, settings);
-  const safePayload = sanitizeTransportValue(resolvedPayload);
+  const mainflowCopy = buildPayloadWithMainflowCopy(resolvedPayload, settings);
+  const safePayload = sanitizeTransportValue(mainflowCopy.payload);
   const safeSystemPrompt = sanitizeTransportString(resolveWithStMacros(systemPrompt || DEFAULT_SYSTEM_PROMPT, stCtx));
   const baseMessages = [
     { role: 'system', content: safeSystemPrompt },
@@ -455,7 +585,7 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
   const payloadText = JSON.stringify(safePayload);
   // Never stage an internal payload in the active chat to resolve presets: hosts
   // and extensions may persist that synthetic message as visible chat content.
-  const presetEnvelope = shouldApplyAsyncPreset(settings)
+  const presetEnvelope = !mainflowCopy.hasMainflowCopy && shouldApplyAsyncPreset(settings)
     ? await buildPresetEnvelope(settings, safeSystemPrompt, payloadText)
     : null;
   const effectiveMessages = presetEnvelope?.messages?.length ? presetEnvelope.messages : baseMessages;
@@ -469,7 +599,7 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
     response_format: { type: 'json_object' },
   };
   recordEffectiveRequestDebug(
-    `${safePayload?.target_character ? 'registry' : 'tracker'}${safePayload?.resolved_worldbook_prompt ? '-mainflow-worldinfo' : ''}`,
+    `${safePayload?.target_character ? 'registry' : 'tracker'}${mainflowCopy.hasMainflowCopy ? '-mainflow-copy' : (safePayload?.resolved_worldbook_prompt ? '-mainflow-worldinfo' : '')}`,
     effectivePresetName,
     stPresetSampling,
     effectiveMessages,

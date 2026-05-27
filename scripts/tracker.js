@@ -29,6 +29,7 @@ export const POLL_RUNTIME_KEY = '__bs_biotracker_poll__';
 export const RUN_RUNTIME_KEY = '__bs_biotracker_running__';
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const AFTER_AI_SETTLE_MS = 1400;
+const MAINFLOW_CONTEXT_SNAPSHOT_KEY = '__bs_biotracker_mainflow_context_snapshot__';
 const DEBUG_LAST_TRACKER_REQUEST_KEY = '__bs_biotracker_debug_last_tracker_request__';
 const DEBUG_LAST_TRACKER_RESULT_KEY = '__bs_biotracker_debug_last_tracker_result__';
 
@@ -408,18 +409,48 @@ async function getFilteredGlobalWorldbooks(ctx, settings, recentMessages = []) {
   }
 }
 
+function getMainflowContextSnapshot() {
+  const snapshot = globalThis[MAINFLOW_CONTEXT_SNAPSHOT_KEY];
+  if (!snapshot || typeof snapshot !== 'object') return null;
+  const messages = Array.isArray(snapshot.messages)
+    ? snapshot.messages
+      .filter((message) => message && typeof message === 'object' && String(message.content || '').trim())
+      .map((message) => ({
+        role: String(message.role || 'user'),
+        content: String(message.content || ''),
+        name: message.name ? String(message.name) : undefined,
+      }))
+    : [];
+  if (messages.length === 0) return null;
+  return {
+    source: String(snapshot.source || 'st_request'),
+    capturedAt: Number(snapshot.capturedAt || 0) || null,
+    model: snapshot.model ? String(snapshot.model) : '',
+    messages,
+  };
+}
+
 export function buildTrackerPayload(ctx, settings, reason = 'manual', endIndexExclusive = null) {
   const currentCharacter = getCharacterCard(ctx);
   const chatState = getChatState(ctx, settings);
   const existingState = chatState.characters || {};
   const recentMessages = buildRecentMessages(ctx, settings, endIndexExclusive);
+  const useMainflowMode = normalizeWorldbookMode(settings?.trackerWorldbookMode) === 'mainflow';
+  let mainflowContextSnapshot = useMainflowMode ? getMainflowContextSnapshot() : null;
+  if (mainflowContextSnapshot && settings?.useStPresetForAsync) {
+    mainflowContextSnapshot = {
+      ...mainflowContextSnapshot,
+      messages: mainflowContextSnapshot.messages.filter((m) => m.role !== 'system'),
+    };
+    if (mainflowContextSnapshot.messages.length === 0) mainflowContextSnapshot = null;
+  }
   const filteredWorldBook = filterTrackerWorldbookEntries(
     currentCharacter.worldBook || null,
     parseTrackerWorldbookExcludeNames(settings),
     settings,
     recentMessages,
   );
-  const payloadWorldBook = filteredWorldBook;
+  const payloadWorldBook = mainflowContextSnapshot ? null : filteredWorldBook;
   const diaryEnabled = getDiaryRecentLimit(settings, Object.keys(existingState || {}).length) > 0;
   return {
     reason,
@@ -431,6 +462,7 @@ export function buildTrackerPayload(ctx, settings, reason = 'manual', endIndexEx
     character_description: currentCharacter.description || '',
     character_worldbook_name: getCharacterWorldBookName(ctx) || null,
     character_worldbook: payloadWorldBook,
+    mainflow_context_snapshot: mainflowContextSnapshot,
     tracked_females: getRegisteredTargetNames(ctx, settings, chatState),
     existing_state: buildTrackerStateView(existingState, settings),
     available_tools: getTrackerToolDefinitions(settings),
@@ -562,7 +594,9 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
   }
 
   const payload = buildTrackerPayload(ctx, settings, reason, messageIndex + 1);
-  if (!payload.character_worldbook && !payload.character_worldbook_name) {
+  if (payload.mainflow_context_snapshot) {
+    payload.character_worldbook_name = null;
+  } else if (!payload.character_worldbook && !payload.character_worldbook_name) {
     payload.character_worldbook_name = await getCharacterWorldBookNameViaSTscript();
   }
   if (!payload.character_worldbook && payload.character_worldbook_name && typeof ctx?.loadWorldInfo === 'function') {
@@ -578,7 +612,9 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
       console.warn('[BS BioTracker] loadWorldInfo for tracker failed', error);
     }
   }
-  payload.global_worldbooks = await getFilteredGlobalWorldbooks(ctx, settings, payload.recent_messages);
+  payload.global_worldbooks = payload.mainflow_context_snapshot
+    ? []
+    : await getFilteredGlobalWorldbooks(ctx, settings, payload.recent_messages);
   chatState.lastRunAt = Date.now();
   chatState.lastAttemptedSignature = buildSignature(ctx, messageIndex + 1);
   saveSettings(ctx);

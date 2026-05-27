@@ -205,6 +205,15 @@ export function buildTrackerSystemPrompt(basePrompt = '', descriptionGuides = nu
     String(basePrompt || '').trim(),
     metabolismGuide,
   ];
+  if (payload?.mainflow_context_snapshot) {
+    parts.push([
+      '[主流上下文快照使用规则]',
+      '- payload.mainflow_context_snapshot 是 ST 主流上一轮生成 request 中已经发送或准备发送给模型的上下文快照。',
+      '- 它仅用于补足本轮剧情、角色设定、已触发 worldinfo、模板注入、getwi/activewi 等主流背景。',
+      '- 不要模仿主流输出风格，不要续写剧情；你的任务仍是根据 recent_messages 与 existing_state 返回 JSON tool_calls 来更新变量。',
+      '- 若主流上下文快照与 tracker 工具调用规则、变量语义说明、existing_state 或 available_tools 冲突，必须以后者为准。',
+    ].join('\n'));
+  }
   const embryoTypeLorePrompt = buildEmbryoTypeLorePrompt(payload || {});
   if (embryoTypeLorePrompt) parts.push(embryoTypeLorePrompt);
   if (!diaryEnabled) {

@@ -75,6 +75,11 @@ const GROUP_CHAT_DELETED_HANDLER_KEY = '__bs_biotracker_group_chat_deleted_handl
 const GROUP_CHAT_CREATED_HANDLER_KEY = '__bs_biotracker_group_chat_created_handler__';
 const PENDING_CHAT_INHERIT_KEY = '__bs_biotracker_pending_chat_inherit__';
 const WORLDBOOK_RELOAD_TIMER_KEY = '__bs_biotracker_worldbook_reload_timer__';
+const MAINFLOW_CONTEXT_SNAPSHOT_KEY = '__bs_biotracker_mainflow_context_snapshot__';
+const DEBUG_LAST_MAINFLOW_SNAPSHOT_KEY = '__bs_biotracker_debug_last_mainflow_snapshot__';
+const FETCH_CAPTURE_READY_KEY = '__bs_biotracker_fetch_capture_ready__';
+const ORIGINAL_FETCH_KEY = '__bs_biotracker_original_fetch__';
+const MAX_MAINFLOW_SNAPSHOT_MESSAGES = 48;
 const VITALITY_CAPS = { 1: 50, 2: 75, 3: 100, 4: 125, 5: 150, 6: 175, 7: 200 };
 const PSY_STRESS_CAPS = { 1: 20, 2: 50, 3: 80, 4: 110, 5: 140, 6: 170, 7: 200 };
 
@@ -209,7 +214,7 @@ function syncWorldbookFilterInput(ctx) {
     input.placeholder = mode === 'allowlist_all'
       ? '每行一个条目名。参考模式下，仅这些条目会传给 tracker；即使它们目前是 disabled 也会保留。'
       : mode === 'mainflow'
-        ? '每行一个条目名。主流模式下，tracker 优先采用 ST 解析出的已启用世界书；没有解析结果时会按常驻/关键字触发，并套用这些排除条目。'
+        ? '每行一个条目名。主流模式下，tracker 优先引用上次 ST 主流 request 上下文；没有快照时会按常驻/关键字触发，并套用这些排除条目。'
         : '每行一个条目名。正常模式下，这些条目会从 worldbook 传输中排除。';
   }
   if (globalInput) {
@@ -218,6 +223,76 @@ function syncWorldbookFilterInput(ctx) {
       ? '每行一个“书名 :: 条目名”。参考模式下，仅这些全域条目会传给 tracker。'
       : '每行一个“书名 :: 条目名”。正常模式下，这些全域条目会从 worldbook 传输中排除。';
   }
+}
+
+function trimMainflowSnapshotContent(content) {
+  return String(content || '');
+}
+
+function normalizeMainflowSnapshotMessages(messages) {
+  return (Array.isArray(messages) ? messages : [])
+    .filter((message) => message && typeof message === 'object')
+    .slice(-MAX_MAINFLOW_SNAPSHOT_MESSAGES)
+    .map((message) => ({
+      role: String(message.role || 'user'),
+      content: trimMainflowSnapshotContent(message.content ?? message.text ?? ''),
+      name: message.name ? String(message.name) : undefined,
+    }))
+    .filter((message) => message.content);
+}
+
+function captureMainflowRequestBody(body, source = 'fetch') {
+  if (!body || typeof body !== 'object') return;
+  const messages = normalizeMainflowSnapshotMessages(body.messages);
+  if (messages.length === 0) return;
+  globalThis[MAINFLOW_CONTEXT_SNAPSHOT_KEY] = {
+    source,
+    capturedAt: Date.now(),
+    model: body.model ? String(body.model) : '',
+    messages,
+  };
+  globalThis[DEBUG_LAST_MAINFLOW_SNAPSHOT_KEY] = globalThis[MAINFLOW_CONTEXT_SNAPSHOT_KEY];
+}
+
+function parseJsonText(value) {
+  if (!value || typeof value !== 'string') return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function parseFetchBodyFromInit(init) {
+  const raw = init?.body;
+  return parseJsonText(raw);
+}
+
+async function parseFetchBodyFromRequest(input) {
+  if (!input || typeof input !== 'object' || typeof input.clone !== 'function') return null;
+  try {
+    return await input.clone().json();
+  } catch {
+    return null;
+  }
+}
+
+function installMainflowRequestCapture() {
+  if (globalThis[FETCH_CAPTURE_READY_KEY] || typeof globalThis.fetch !== 'function') return;
+  const originalFetch = globalThis.fetch.bind(globalThis);
+  globalThis[ORIGINAL_FETCH_KEY] = originalFetch;
+  globalThis.fetch = async (...args) => {
+    if (!globalThis.__bs_biotracker_async_request__) {
+      try {
+        const body = parseFetchBodyFromInit(args[1]) || await parseFetchBodyFromRequest(args[0]);
+        captureMainflowRequestBody(body, 'fetch');
+      } catch (error) {
+        console.warn('[BS BioTracker] mainflow request capture failed', error);
+      }
+    }
+    return originalFetch(...args);
+  };
+  globalThis[FETCH_CAPTURE_READY_KEY] = true;
 }
 
 function saveWorldbookExcludeNamesFromList(ctx, names) {
@@ -4792,6 +4867,7 @@ async function bootstrap() {
   if (globalThis[BOOTSTRAP_RUNTIME_KEY]) return;
   globalThis[BOOTSTRAP_RUNTIME_KEY] = true;
   try {
+    installMainflowRequestCapture();
     await ensureModal(ctx);
     await registerMenuItem(ctx);
     trackerDeps.updateMainFlowPrompt = updateMainFlowPrompt;
