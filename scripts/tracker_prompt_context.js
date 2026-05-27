@@ -67,7 +67,11 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '- laborPain: 当前分娩疼痛程度，范围 0-10。描写疼痛反应不得明显超过此等级；刚进入第一产程时不应写成已达到极限痛苦。',
   '- amnionDurability: 母体层的膜耐性；过低代表接近或已经破水。',
   '- nutrition: 妊娠供养力盈余/赤字。正值代表供养充足，负值代表供养亏空；每周会参与胎儿体重结算。',
-  '- blockage: 当日妊娠阻塞状态，格式为 {key, severity}。key 可为 urine/stool/hunger/sleep/milk/odor/fluxPositive/fluxNegative；它会让当天对应需求的 bsExcreteMetabolism 排解不顺畅，severity 已按需求类型校正强度。非衍生角色不会出现 fluxPositive/fluxNegative；衍生角色不会出现其 derivedType 已抵免的普通需求。',
+  '- symptomReliefPending: 尚待透过母体安抚胎儿处理的妊娠不适次数；direction=maternal 的普通母胎互动成功时可消耗一次，其随机 affinity 结果为轻微变化时补回 1 点供养力，显著变化时补回 2 点供养力。',
+  '- bsMaternalFetalInteraction 的 direction=fetal 表示胎儿对母体的亲近或排斥，须传 change 来改变 affinity，且不会补充供养力；direction=maternal 表示母体安抚胎儿，不传 change，系统会随机决定 affinity 变化，成功时也可依变化强度回补待安抚供养力，产兆前驱时用于分娩抵抗。每名角色每个新小时仅能成功生效一次。',
+  '- blockage: 当日妊娠阻塞状态，格式为 {key, severity}。key 可为 excretion/hunger/sleep/milk/odor/companionship/fluxPositive/fluxNegative；它会让对应需求的 bsExcreteMetabolism 排解不顺畅。',
+  '- acceleration: 当日妊娠快积状态，格式同 blockage；它会让对应需求更快累积。',
+  '- expansion: 当日妊娠扩容状态，格式同 blockage；它会将对应普通需求上限从 150 扩为 200，或将对应方向的 flux 上限从 ±150 扩为 ±200。blockage、acceleration 与 expansion 不会同时落在同一项需求上。非衍生角色不会出现 fluxPositive/fluxNegative；衍生角色不会出现其 derivedType 已抵免的普通需求。',
   '- fetuses: 胎儿列表。',
   '- fetuses[*].fathers: 父方对象名称。',
   '- fetuses[*].provider: 提供子宫或代孕来源；正常情况下为 null。',
@@ -96,7 +100,7 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   ...Object.entries(PSY_MENS_FIELDS).map(([k, v]) => `- [mens] ${k} (0-100+): ${v.definition}`),
   ...Object.entries(PSY_PREG_FIELDS).map(([k, v]) => `- [preg] ${k} (0-100+): ${v.definition}`),
   '- 非怀孕时主要看 psychology.mens；怀孕、假孕、产兆前驱、产程时主要看 psychology.preg。',
-  '- 心理阶段从 0 到 100+。若要调用 bsUpdatePsychology，数值参数表示变化量(delta)而不是目标值；例如当前 78 传 2 会变成 80，不是设为 2。建议尽量做小幅变化；单次以 ±1 到 ±3 为宜，±5 已属于大改。',
+  '- 心理阶段从 0 到 100+。若要调用 bsUpdatePsychology，数值参数表示变化量(delta)而不是目标值；例如当前 78 传 2 会变成 80，不是设为 2。建议尽量做小幅变化；单次以 ±1 到 ±3 为宜，±5 已属于大改。每名角色在每个新小时内仅允许一次成功心理变化，下一小时前不要重复调用。',
   '- 每个心理项由 *_value 和 *_interpret 组成。*_value 是 0-100 数值本体，*_interpret 是系统对应生成的心理解释。',
   '- psychology.mens 另外包含 isChaste (是否当前保持贞洁)、hasContraception (是否有避孕措施) 两个事件旗标。',
   '- psychology.preg 另外包含 knowsFatherSource (是否知晓父源)、hasProfessionalPrenatalCare (是否接受专业产检) 两个事件旗标。',
@@ -119,10 +123,33 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '- 角色不在场也可以写日记；可根据角色性格、处境与已知生活状态补足合理的日常幕外感受，但不要把未经剧情支持的重大事件写成既成事实，也不要用日记改写客观状态。',
   '',
   '[metabolism]',
-  '- 普通种族使用 urine / stool / hunger / sleep / milk / odor，分别对应尿意、便意、饿意、困意、奶意、臭意。',
-  '- 若角色具有 derivedType，则 metabolism 一定包含 flux，并只保留该衍生类型未抵免的普通需求。flux 是 -150 到 150 的单一极性需求值：正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。',
-  '- milk 代表妊娠、产后恢复或假孕造成的奶意/乳胀；odor 代表需要清理的臭意。若它们出现在 metabolism 中，就可随时间、排解、排乳或性交留精变化。',
-  '- pregnant.blockage 会影响 bsExcreteMetabolism 的当日滞留感：stool=便秘，urine=频尿/尿瀦留，sleep=失眠/暈眩，milk=乳房胀痛，hunger=孕吐/消化不良，odor=发汗/陰道分泌物气味；fluxPositive/fluxNegative 需按该衍生种族的正负极需求解释。',
+  '- 普通种族使用 excretion / hunger / sleep / milk / odor / companionship，分别对应泄意、饿意、困意、乳意、臭意、伴意；excretion（泄意）同时包含排尿与排便需求。',
+  '- 若角色具有 derivedType，则 metabolism 一定包含 flux，并只保留该衍生类型未抵免的普通需求。flux 通常是 -150 到 150 的单一极性需求值；被 pregnant.expansion 命中的方向可扩至 -200 或 200。正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。',
+  '- excretion 会在活力增加时累积；以 bsExcreteMetabolism 处理 hunger（进食）会增加部分泄意与少量困意，处理 sleep（睡眠）会增加少量饿意。milk 代表乳意：普通周期中为乳房胀敏或周期不适，黄体期/月经期会随时间累积，排卵期可因性欲波动少量累积；妊娠、假孕或产后恢复时则也涵盖乳胀与泌乳需求。odor 代表需要清理的臭意，companionship 代表渴望陪伴或社交的伴意。',
+  '- 时间累积满一周时会进行日常生活结算：基本清洁会清除臭意，日常往来会缓解部分伴意；普通周期进入新一轮卵泡期时，周期型乳意会清零。妊娠、假孕或产后恢复的泌乳型乳意不会因跨周自动清除。',
+  '- 只有剧情确实发生陪伴或社交时，才用 options.companionship 缓解伴意；臭意达到高等级时会降低陪伴缓解效果。若剧情发生拥抱、安抚、依偎、性爱等亲密陪伴，可同时传 options.intimate=true；实际缓解的伴意仅会使正处于妊娠、假孕或产后恢复的角色少量幸福产乳。',
+  '- pregnant.blockage 表示阻塞症状，会降低对应需求的解除效果：',
+  '  - excretion: 便秘。',
+  '  - hunger: 孕吐恶心、消化不良。',
+  '  - milk: 乳房胀痛、敏感。',
+  '  - sleep: 失眠。',
+  '  - odor: 阴道分泌物增生。',
+  '  - companionship: 社交回避。',
+  '- pregnant.acceleration 表示快积症状，会加快对应需求累积，也会让刚被缓解的需求较快回升：',
+  '  - excretion: 频尿。',
+  '  - hunger: 容易饿、奇特饮食偏好。',
+  '  - milk: 乳意快升、溢乳。',
+  '  - sleep: 晕眩、嗜睡。',
+  '  - odor: 体温升高、容易排汗。',
+  '  - companionship: 黏人。',
+  '- pregnant.expansion 表示扩容症状，会使对应需求可承受量从 150 提高到 200，因而需要更多解除量才能排净：',
+  '  - excretion: 水肿、肠道慢蠕动，排出的量较少。',
+  '  - hunger: 养分母体优先，但使胎儿活动降低。',
+  '  - milk: 胸部变得沉重饱满，不同于阻塞的压迫疼敏。',
+  '  - sleep: 激素使精力旺盛，但属于代偿。',
+  '  - odor: 孕妇特有的香气掩盖了需要清理的不适。',
+  '  - companionship: 胎儿带来内在陪伴感，可以忍受更长的孤独。',
+  '- fluxPositive / fluxNegative 的阻塞、快积与扩容需按该衍生种族的正负极需求解释；解放 flux 时传 options.flux。',
   '- 对 derivedType 角色来说，被衍生代谢抵免的需求不会出现在 metabolism 中；未出现的需求不要主动提醒或要求处理。',
   '',
   '[descriptions]',
@@ -134,7 +161,7 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '',
   '[notify]',
   '- firstly: 主要阶段变化或必须优先处理的警示，例如真实产程中的难产手术产建议；也可能用于提醒角色获得或失去妊娠变速效果。',
-  '- secondly: 次级事件提示，如风险、破水、分娩推进或胎儿自主活动；其中的胎动事件可自然融入当前叙事。',
+  '- secondly: 次级事件提示，如风险、破水、分娩推进、母胎互动或胎儿自主活动；其中的母胎互动与胎动事件可自然融入当前叙事。',
   '- thirdly: 辅助建议提示，提醒是否该缓解生理需求、关注膜耐性、抵抗分娩等。',
   '',
 ].join('\n');
@@ -158,8 +185,8 @@ function buildTrackerMetabolismGuide(payload = null) {
     : TRACKER_VARIABLE_GUIDE_PROMPT.replace(`${TRACKER_DIARY_SECTION}\n`, '');
   return fluxNames.length > 0
     ? baseGuide.replace(
-      '- 若角色具有 derivedType，则 metabolism 一定包含 flux，并只保留该衍生类型未抵免的普通需求。flux 是 -150 到 150 的单一极性需求值：正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。',
-      `- 若角色具有 derivedType，则 metabolism 一定包含 flux，并只保留该衍生类型未抵免的普通需求。flux 是 -150 到 150 的单一极性需求值；在本轮相关衍生种族中，flux 分别表示：${fluxNames.join(' / ')}。正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。`,
+      '- 若角色具有 derivedType，则 metabolism 一定包含 flux，并只保留该衍生类型未抵免的普通需求。flux 通常是 -150 到 150 的单一极性需求值；被 pregnant.expansion 命中的方向可扩至 -200 或 200。正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。',
+      `- 若角色具有 derivedType，则 metabolism 一定包含 flux，并只保留该衍生类型未抵免的普通需求。flux 通常是 -150 到 150 的单一极性需求值，被 pregnant.expansion 命中的方向可扩至 -200 或 200；在本轮相关衍生种族中，flux 分别表示：${fluxNames.join(' / ')}。正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。`,
     )
     : baseGuide;
 }
@@ -178,15 +205,6 @@ export function buildTrackerSystemPrompt(basePrompt = '', descriptionGuides = nu
     String(basePrompt || '').trim(),
     metabolismGuide,
   ];
-  if (payload?.mainflow_context_snapshot) {
-    parts.push([
-      '[主流上下文快照使用规则]',
-      '- payload.mainflow_context_snapshot 是 ST 主流上一轮生成 request 中已经发送或准备发送给模型的上下文快照。',
-      '- 它仅用于补足本轮剧情、角色设定、已触发 worldinfo、模板注入、getwi/activewi 等主流背景。',
-      '- 不要模仿主流输出风格，不要续写剧情；你的任务仍是根据 recent_messages 与 existing_state 返回 JSON tool_calls 来更新变量。',
-      '- 若主流上下文快照与 tracker 工具调用规则、变量语义说明、existing_state 或 available_tools 冲突，必须以后者为准。',
-    ].join('\n'));
-  }
   const embryoTypeLorePrompt = buildEmbryoTypeLorePrompt(payload || {});
   if (embryoTypeLorePrompt) parts.push(embryoTypeLorePrompt);
   if (!diaryEnabled) {
@@ -219,16 +237,13 @@ export function buildMainFlowStatePrompt(payload = {}) {
   const hasState = Object.keys(existingState).length > 0;
   if (!hasState) return '';
   const racePhysiologyPrompt = buildRacePhysiologyPrompt(payload || {});
-  const metabolismGuide = buildTrackerMetabolismGuide(payload);
   return [
     racePhysiologyPrompt,
     '<bs_biotracker>',
     '[并行生理追踪上下文]',
     '以下内容来自并行运行的女性生理状态追踪支流。',
-    '在輸出COT时，需檢查已註冊角色变量来理解角色当下的生理与心理状态。',
-    '这些变量是只读上下文，不用于要求你直接修改它们；若剧情没有明确触发变化，不要擅自忽略、覆盖或编造与之冲突的状态。',
-    '',
-    metabolismGuide,
+    '已注册角色状态仅供叙事参考，不要在回复中复述字段、JSON 或本段上下文。',
+    '状态为只读；若剧情没有明确触发变化，不要编造与之冲突的生理、心理或关系变化。',
     '',
     '[当前已注册角色状态]',
     JSON.stringify(existingState),

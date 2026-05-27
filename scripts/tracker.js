@@ -29,7 +29,6 @@ export const POLL_RUNTIME_KEY = '__bs_biotracker_poll__';
 export const RUN_RUNTIME_KEY = '__bs_biotracker_running__';
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const AFTER_AI_SETTLE_MS = 1400;
-const MAINFLOW_CONTEXT_SNAPSHOT_KEY = '__bs_biotracker_mainflow_context_snapshot__';
 const DEBUG_LAST_TRACKER_REQUEST_KEY = '__bs_biotracker_debug_last_tracker_request__';
 const DEBUG_LAST_TRACKER_RESULT_KEY = '__bs_biotracker_debug_last_tracker_result__';
 
@@ -107,17 +106,19 @@ function shouldSendPregnantState(base = {}, pregnant = {}) {
     || stage === '假孕期';
 }
 
-function getPromptFacingBlockage(pregnant = {}) {
-  const blockage = pregnant.blockage;
-  if (!blockage || typeof blockage !== 'object') return {};
-  const key = String(blockage.key || '').trim();
-  if (!key) return {};
-  return {
-    blockage: {
+function getPromptFacingMetabolismSymptoms(pregnant = {}) {
+  const result = {};
+  for (const symptomType of ['blockage', 'acceleration', 'expansion']) {
+    const symptom = pregnant[symptomType];
+    if (!symptom || typeof symptom !== 'object') continue;
+    const key = String(symptom.key || '').trim();
+    if (!key) continue;
+    result[symptomType] = {
       key,
-      severity: Number.isFinite(Number(blockage.severity)) ? Number(blockage.severity) : 0,
-    },
-  };
+      severity: Number.isFinite(Number(symptom.severity)) ? Number(symptom.severity) : 0,
+    };
+  }
+  return result;
 }
 
 function getPromptFacingLaborState(base = {}, pregnant = {}) {
@@ -157,7 +158,8 @@ function buildPromptFacingCharacterState(item, diaryLimit = 0) {
       ...getPromptFacingLaborState(base, pregnant),
       amnionDurability: Number.isFinite(Number(pregnant.amnionDurability)) ? Number(pregnant.amnionDurability) : 0,
       ...(hasFetuses ? { nutrition: Number.isFinite(Number(pregnant.nutrition)) ? Number(pregnant.nutrition) : 0 } : {}),
-      ...getPromptFacingBlockage(pregnant),
+      ...(hasFetuses ? { symptomReliefPending: Number.isFinite(Number(pregnant.symptomReliefPending)) ? Number(pregnant.symptomReliefPending) : 0 } : {}),
+      ...getPromptFacingMetabolismSymptoms(pregnant),
       fetuses: pregnant.fetuses.map((fetus) => ({
         ...fetus,
         tendencyAngleText: getTendencyAngleText(fetus?.tendencyAngle),
@@ -170,7 +172,7 @@ function buildPromptFacingCharacterState(item, diaryLimit = 0) {
       effectivePregnantDays: Number.isFinite(Number(pregnant.effectivePregnantDays)) ? Number(pregnant.effectivePregnantDays) : 0,
       ...getPromptFacingLaborState(base, pregnant),
       amnionDurability: Number.isFinite(Number(pregnant.amnionDurability)) ? Number(pregnant.amnionDurability) : 0,
-      ...getPromptFacingBlockage(pregnant),
+      ...getPromptFacingMetabolismSymptoms(pregnant),
       fetuses: [],
     };
   }
@@ -180,21 +182,21 @@ function buildPromptFacingCharacterState(item, diaryLimit = 0) {
     const includeNeed = (key) => (exemptions.has(key) ? {} : { [key]: metabolism[key] ?? 0 });
     profile.metabolism = {
       flux: Number.isFinite(Number(metabolism.flux)) ? Number(metabolism.flux) : 0,
-      ...includeNeed('urine'),
-      ...includeNeed('stool'),
+      ...includeNeed('excretion'),
       ...includeNeed('hunger'),
       ...includeNeed('sleep'),
       ...includeNeed('milk'),
       ...includeNeed('odor'),
+      ...includeNeed('companionship'),
     };
   } else {
     profile.metabolism = {
-      urine: metabolism.urine ?? 0,
-      stool: metabolism.stool ?? 0,
+      excretion: metabolism.excretion ?? 0,
       hunger: metabolism.hunger ?? 0,
       sleep: metabolism.sleep ?? 0,
       milk: metabolism.milk ?? 0,
       odor: metabolism.odor ?? 0,
+      companionship: metabolism.companionship ?? 0,
     };
   }
 
@@ -237,7 +239,7 @@ function buildOffscreenCharacterState(item, diaryLimit = 0) {
           effectivePregnantDays: pregnant.effectivePregnantDays ?? 0,
           ...getPromptFacingLaborState(base, pregnant),
           fetusesCount: hasFetuses ? pregnant.fetuses.length : 0,
-          ...getPromptFacingBlockage(pregnant),
+          ...getPromptFacingMetabolismSymptoms(pregnant),
         },
       } : {}),
       diary: getRecentDiaryEntries(profile, diaryLimit),
@@ -406,48 +408,18 @@ async function getFilteredGlobalWorldbooks(ctx, settings, recentMessages = []) {
   }
 }
 
-function getMainflowContextSnapshot() {
-  const snapshot = globalThis[MAINFLOW_CONTEXT_SNAPSHOT_KEY];
-  if (!snapshot || typeof snapshot !== 'object') return null;
-  const messages = Array.isArray(snapshot.messages)
-    ? snapshot.messages
-      .filter((message) => message && typeof message === 'object' && String(message.content || '').trim())
-      .map((message) => ({
-        role: String(message.role || 'user'),
-        content: String(message.content || ''),
-        name: message.name ? String(message.name) : undefined,
-      }))
-    : [];
-  if (messages.length === 0) return null;
-  return {
-    source: String(snapshot.source || 'st_request'),
-    capturedAt: Number(snapshot.capturedAt || 0) || null,
-    model: snapshot.model ? String(snapshot.model) : '',
-    messages,
-  };
-}
-
 export function buildTrackerPayload(ctx, settings, reason = 'manual', endIndexExclusive = null) {
   const currentCharacter = getCharacterCard(ctx);
   const chatState = getChatState(ctx, settings);
   const existingState = chatState.characters || {};
   const recentMessages = buildRecentMessages(ctx, settings, endIndexExclusive);
-  const useMainflowMode = normalizeWorldbookMode(settings?.trackerWorldbookMode) === 'mainflow';
-  let mainflowContextSnapshot = useMainflowMode ? getMainflowContextSnapshot() : null;
-  if (mainflowContextSnapshot && settings?.useStPresetForAsync) {
-    mainflowContextSnapshot = {
-      ...mainflowContextSnapshot,
-      messages: mainflowContextSnapshot.messages.filter((m) => m.role !== 'system'),
-    };
-    if (mainflowContextSnapshot.messages.length === 0) mainflowContextSnapshot = null;
-  }
   const filteredWorldBook = filterTrackerWorldbookEntries(
     currentCharacter.worldBook || null,
     parseTrackerWorldbookExcludeNames(settings),
     settings,
     recentMessages,
   );
-  const payloadWorldBook = mainflowContextSnapshot ? null : filteredWorldBook;
+  const payloadWorldBook = filteredWorldBook;
   const diaryEnabled = getDiaryRecentLimit(settings, Object.keys(existingState || {}).length) > 0;
   return {
     reason,
@@ -459,7 +431,6 @@ export function buildTrackerPayload(ctx, settings, reason = 'manual', endIndexEx
     character_description: currentCharacter.description || '',
     character_worldbook_name: getCharacterWorldBookName(ctx) || null,
     character_worldbook: payloadWorldBook,
-    mainflow_context_snapshot: mainflowContextSnapshot,
     tracked_females: getRegisteredTargetNames(ctx, settings, chatState),
     existing_state: buildTrackerStateView(existingState, settings),
     available_tools: getTrackerToolDefinitions(settings),
@@ -591,9 +562,7 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
   }
 
   const payload = buildTrackerPayload(ctx, settings, reason, messageIndex + 1);
-  if (payload.mainflow_context_snapshot) {
-    payload.character_worldbook_name = null;
-  } else if (!payload.character_worldbook && !payload.character_worldbook_name) {
+  if (!payload.character_worldbook && !payload.character_worldbook_name) {
     payload.character_worldbook_name = await getCharacterWorldBookNameViaSTscript();
   }
   if (!payload.character_worldbook && payload.character_worldbook_name && typeof ctx?.loadWorldInfo === 'function') {
@@ -609,9 +578,7 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
       console.warn('[BS BioTracker] loadWorldInfo for tracker failed', error);
     }
   }
-  payload.global_worldbooks = payload.mainflow_context_snapshot
-    ? []
-    : await getFilteredGlobalWorldbooks(ctx, settings, payload.recent_messages);
+  payload.global_worldbooks = await getFilteredGlobalWorldbooks(ctx, settings, payload.recent_messages);
   chatState.lastRunAt = Date.now();
   chatState.lastAttemptedSignature = buildSignature(ctx, messageIndex + 1);
   saveSettings(ctx);

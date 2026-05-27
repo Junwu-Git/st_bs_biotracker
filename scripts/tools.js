@@ -171,7 +171,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
   },
   {
     name: 'bsUpdatePsychology',
-    description: '按当前阶段更新单一角色的心理倾向数值。月经阶段使用 mens，妊娠/假孕/产兆前驱/产程使用 preg。系统会自动重算 *_interpret。注意：数值字段传入的是“变化量(delta)”而不是目标值，例如当前 stance_value=78，传入 {"preg":{"stance":2}} 会变成 80，而不是设为 2。建议一次只调整一个心理项，且尽量小幅变动；单次以 ±1 到 ±3 为宜，±5 已属于偏大变化。布林字段则是直接设为 true/false。',
+    description: '按当前阶段更新单一角色的心理倾向数值。月经阶段使用 mens，妊娠/假孕/产兆前驱/产程使用 preg。系统会自动重算 *_interpret。每名角色在每个新小时内最多成功更新一次；在 bsPassedTime 推进满下一小时之前，重复调用会被跳过。注意：数值字段传入的是“变化量(delta)”而不是目标值，例如当前 stance_value=78，传入 {"preg":{"stance":2}} 会变成 80，而不是设为 2。建议一次只调整一个心理项，且尽量小幅变动；单次以 ±1 到 ±3 为宜，±5 已属于偏大变化。布林字段则是直接设为 true/false。',
     input_schema: {
       type: 'object',
       properties: {
@@ -252,7 +252,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
   },
   {
     name: 'bsExcreteMetabolism',
-    description: '缓解角色的生理需求。普通种族用于处理尿意、便意、饿意、困意、奶意；带 derivedType 的角色用于释放单一极性需求 flux，并处理该衍生类型未抵免的普通需求。flux 会按释放量抵消当前极性，只有在释放量足够时才会跨过 0 翻转。milk 可用于排乳，odor 可用于清理。若 pregnant.blockage 指向对应需求，当天排解会不顺畅。',
+    description: '缓解角色的生理需求。普通种族用于处理泄意、饿意、困意、乳意、臭意与伴意；其中 excretion（泄意）同时包含排尿与排便需求。乳意在普通周期表示乳房胀敏，在妊娠、假孕或产后恢复则可表示乳胀与泌乳需求。进食缓解 hunger 会增加 excretion 与少量 sleep，睡眠缓解 sleep 会增加少量 hunger，高 odor 会降低 companionship 的社交缓解效果。只有亲密陪伴确实发生并处理 companionship 时，才传 intimate=true 触发符合泌乳条件者的幸福产乳。带 derivedType 的角色以 flux 进行极性解放，并处理未抵免需求；要解放 flux 时请传 flux，或不传 options 使用默认释放量。pregnant.blockage 会降低排解效果，pregnant.acceleration 会加快累积并让刚缓解的对应需求较快回升，pregnant.expansion 会使对应需求容量由 150 扩为 200。',
     input_schema: {
       type: 'object',
       properties: {
@@ -260,12 +260,14 @@ export const TOOL_DEFINITIONS = Object.freeze([
         options: {
           type: 'object',
           properties: {
-            urine: { type: 'number' },
-            stool: { type: 'number' },
-            hunger: { type: 'number' },
-            sleep: { type: 'number' },
-            milk: { type: 'number' },
-            odor: { type: 'number' },
+            excretion: { type: 'number', minimum: 0, maximum: 200 },
+            hunger: { type: 'number', minimum: 0, maximum: 200 },
+            sleep: { type: 'number', minimum: 0, maximum: 200 },
+            milk: { type: 'number', minimum: 0, maximum: 200 },
+            odor: { type: 'number', minimum: 0, maximum: 200 },
+            companionship: { type: 'number', minimum: 0, maximum: 200 },
+            intimate: { type: 'boolean' },
+            flux: { type: 'number', minimum: 0, maximum: 400 },
           },
           additionalProperties: false,
         },
@@ -302,7 +304,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
   },
   {
     name: 'bsMaternalFetalInteraction',
-    description: '处理母体与胎儿之间的互动。平时会调整随机一胎的 affinity；若当前处于产兆前驱且 direction=maternal，则自动改为分娩抵抗，每次判定会延长或缩短距离第一产程的时间。若角色此前出现妊娠不适症状，调用此工具可额外补充供养力。',
+    description: '处理母体与胎儿之间的互动。每名角色在每个新小时内最多成功互动一次；在 bsPassedTime 推进满下一小时之前，重复调用会被跳过。direction=fetal 表示胎儿对母体的亲近或排斥，必须传 change，并调整随机一胎的 affinity，不会补充供养力。direction=maternal 表示母体安抚胎儿，不使用 change；系统会随机判定 affinity 变化，若成功且有尚待安抚的妊娠不适，会消耗一次并依轻微/显著变化补回 1/2 点供养力。若当前处于产兆前驱且 direction=maternal，则改为分娩抵抗判定。',
     input_schema: {
       type: 'object',
       properties: {
@@ -1024,6 +1026,11 @@ function isTruePregnancyStage(stage) {
   return PREGNANCY_STAGES.includes(stage) || stage === '产兆前驱' || LABOR_STAGES.includes(stage);
 }
 
+function canProduceMilk(profile) {
+  const stage = String(profile?.base?.stage || '');
+  return stage === '假孕期' || stage === '产后恢复' || isTruePregnancyStage(stage);
+}
+
 function hasDerivedMetabolism(profile) {
   return Boolean(String(profile?.base?.derivedType || '').trim());
 }
@@ -1046,11 +1053,45 @@ function applyDerivedMetabolismExemptions(profile) {
   profile.metabolism = metabolism;
 }
 
+const BASE_METABOLISM_CAP = 150;
+const EXPANDED_METABOLISM_CAP = 200;
+
+function getActiveExpansion(profile, key, currentFlux = 0) {
+  const expansion = profile?.pregnant?.expansion;
+  if (!expansion || typeof expansion !== 'object') return false;
+  const expansionKey = String(expansion.key || '').trim();
+  const isMatch = expansionKey === key
+    || (key === 'flux' && currentFlux > 0 && expansionKey === 'fluxPositive')
+    || (key === 'flux' && currentFlux < 0 && expansionKey === 'fluxNegative');
+  return isMatch && !isMetabolismExempt(profile, key);
+}
+
+function getMetabolismCap(profile, key, currentFlux = 0) {
+  return getActiveExpansion(profile, key, currentFlux) ? EXPANDED_METABOLISM_CAP : BASE_METABOLISM_CAP;
+}
+
+function applyMetabolismCapacityLimits(profile) {
+  const metabolism = profile?.metabolism || {};
+  for (const key of ['excretion', 'hunger', 'sleep', 'milk', 'odor', 'companionship']) {
+    metabolism[key] = isMetabolismExempt(profile, key)
+      ? 0
+      : clampNumber(metabolism[key], 0, getMetabolismCap(profile, key), 0);
+  }
+  if (hasDerivedMetabolism(profile)) {
+    const flux = Number(metabolism.flux) || 0;
+    const cap = getMetabolismCap(profile, 'flux', flux);
+    metabolism.flux = clampNumber(flux, -cap, cap, 0);
+  }
+  profile.metabolism = metabolism;
+}
+
 function addMetabolismValue(profile, key, delta, min = 0, max = 150) {
   if (!delta || profile?.immune?.metabolism || isMetabolismExempt(profile, key)) return 0;
   const metabolism = profile.metabolism || {};
-  const current = clampNumber(metabolism[key], min, max, 0);
-  const next = clampNumber(current + delta, min, max, current);
+  const activeMax = max === BASE_METABOLISM_CAP ? getMetabolismCap(profile, key, Number(metabolism[key]) || 0) : max;
+  const current = clampNumber(metabolism[key], min, activeMax, 0);
+  const adjustedDelta = delta > 0 ? delta * getActiveAccelerationMultiplier(profile, key) : delta;
+  const next = clampNumber(current + adjustedDelta, min, activeMax, current);
   metabolism[key] = next;
   profile.metabolism = metabolism;
   return next - current;
@@ -1112,37 +1153,37 @@ const PREGNANCY_BLOCKAGE_STAGE_SEVERITY = Object.freeze({
 });
 
 const PREGNANCY_BLOCKAGE_STAGE_WEIGHTS = Object.freeze({
-  假孕期: { milk: 3, hunger: 3, sleep: 2, odor: 1 },
-  孕早期: { hunger: 5, stool: 4, urine: 3, sleep: 3, odor: 1, milk: 1 },
-  孕中期: { stool: 4, hunger: 3, sleep: 3, urine: 2, milk: 2, odor: 1 },
-  孕晚期: { urine: 5, stool: 5, sleep: 3, milk: 3, hunger: 2, odor: 2 },
-  临产期: { urine: 5, stool: 4, sleep: 3, milk: 3, odor: 2, hunger: 2 },
-  逾期: { urine: 5, stool: 4, sleep: 4, milk: 3, odor: 2, hunger: 2 },
-  产兆前驱: { urine: 5, stool: 4, sleep: 4, milk: 3, odor: 2, hunger: 1 },
-  第一产程: { urine: 5, stool: 4, sleep: 4, odor: 2, milk: 2, hunger: 1 },
-  第二产程: { urine: 5, stool: 3, sleep: 4, odor: 2, milk: 2, hunger: 1 },
-  第三产程: { sleep: 4, odor: 3, milk: 3, stool: 2, urine: 1, hunger: 1 },
-  产后恢复: { milk: 5, sleep: 4, odor: 3, stool: 3, urine: 1, hunger: 1 },
+  假孕期: { milk: 3, hunger: 3, sleep: 2, companionship: 2, odor: 1 },
+  孕早期: { hunger: 5, excretion: 4, sleep: 3, companionship: 2, odor: 1, milk: 1 },
+  孕中期: { excretion: 5, hunger: 3, sleep: 3, companionship: 2, milk: 2, odor: 1 },
+  孕晚期: { excretion: 6, sleep: 3, milk: 3, hunger: 2, companionship: 2, odor: 2 },
+  临产期: { excretion: 6, sleep: 3, milk: 3, odor: 2, hunger: 2, companionship: 2 },
+  逾期: { excretion: 6, sleep: 4, milk: 3, odor: 2, hunger: 2, companionship: 2 },
+  产兆前驱: { excretion: 6, sleep: 4, milk: 3, odor: 2, companionship: 2, hunger: 1 },
+  第一产程: { excretion: 6, sleep: 4, odor: 2, milk: 2, companionship: 2, hunger: 1 },
+  第二产程: { excretion: 5, sleep: 4, odor: 2, milk: 2, companionship: 2, hunger: 1 },
+  第三产程: { sleep: 4, odor: 3, milk: 3, companionship: 3, excretion: 2, hunger: 1 },
+  产后恢复: { milk: 5, sleep: 4, companionship: 4, odor: 3, excretion: 2, hunger: 1 },
 });
 
 const PREGNANCY_BLOCKAGE_KEY_SEVERITY_MULTIPLIER = Object.freeze({
-  stool: 1.45,
-  urine: 1.20,
+  excretion: 1.35,
   sleep: 1.15,
   milk: 1.15,
   hunger: 1.15,
   odor: 0.85,
+  companionship: 1.0,
   fluxPositive: 1.25,
   fluxNegative: 1.25,
 });
 
 const PREGNANCY_BLOCKAGE_KEY_SEVERITY_CAP = Object.freeze({
-  stool: 0.90,
-  urine: 0.75,
+  excretion: 0.90,
   sleep: 0.75,
   milk: 0.75,
   hunger: 0.75,
   odor: 0.65,
+  companionship: 0.75,
   fluxPositive: 0.85,
   fluxNegative: 0.85,
 });
@@ -1158,10 +1199,10 @@ function canHavePregnancyBlockage(profile) {
     || stage === '产后恢复';
 }
 
-function getAvailablePregnancyBlockageKeys(profile) {
+function getAvailablePregnancySymptomKeys(profile) {
   const isDerived = hasDerivedMetabolism(profile);
   const exemptions = getMetabolismExemptionSet(profile);
-  const keys = ['urine', 'stool', 'hunger', 'sleep', 'milk', 'odor'].filter((key) => !exemptions.has(key));
+  const keys = ['excretion', 'hunger', 'sleep', 'milk', 'odor', 'companionship'].filter((key) => !exemptions.has(key));
   if (isDerived) keys.push('fluxPositive', 'fluxNegative');
   return keys;
 }
@@ -1203,8 +1244,9 @@ function pickWeightedKey(weightMap) {
   return entries[entries.length - 1]?.[0] || null;
 }
 
-function pickPregnancyBlockageKey(profile) {
-  const available = new Set(getAvailablePregnancyBlockageKeys(profile));
+function pickPregnancySymptomKey(profile, excludedKeys = []) {
+  const excluded = new Set(Array.isArray(excludedKeys) ? excludedKeys : [excludedKeys]);
+  const available = new Set(getAvailablePregnancySymptomKeys(profile).filter((key) => !excluded.has(key)));
   if (available.size === 0) return null;
   const stage = String(profile?.base?.stage || '');
   const weights = { ...(PREGNANCY_BLOCKAGE_STAGE_WEIGHTS[stage] || {}) };
@@ -1222,24 +1264,27 @@ function pickPregnancyBlockageKey(profile) {
   return pickWeightedKey(weights);
 }
 
-function refreshPregnancyBlockage(profile, tick) {
+function refreshPregnancySymptoms(profile, tick) {
   const pregnant = profile?.pregnant || {};
   if (tick.passedDays <= 0) return;
   if (!canHavePregnancyBlockage(profile)) {
     pregnant.blockage = null;
+    pregnant.acceleration = null;
+    pregnant.expansion = null;
     profile.pregnant = pregnant;
     return;
   }
   const chance = getPregnancyBlockageChance(profile);
-  if (chance <= 0 || Math.random() * 100 >= chance) {
-    pregnant.blockage = null;
-    profile.pregnant = pregnant;
-    return;
-  }
-  const key = pickPregnancyBlockageKey(profile);
+  const key = chance > 0 && Math.random() * 100 < chance ? pickPregnancySymptomKey(profile) : null;
   pregnant.blockage = key
     ? { key, severity: getPregnancyBlockageSeverity(profile, key) }
     : null;
+  const acceleratedKey = chance > 0 && Math.random() * 100 < chance ? pickPregnancySymptomKey(profile, [key]) : null;
+  pregnant.acceleration = acceleratedKey
+    ? { key: acceleratedKey, severity: getPregnancyBlockageSeverity(profile, acceleratedKey) }
+    : null;
+  const expandedKey = chance > 0 && Math.random() * 100 < chance ? pickPregnancySymptomKey(profile, [key, acceleratedKey]) : null;
+  pregnant.expansion = expandedKey ? { key: expandedKey, severity: 1 } : null;
   profile.pregnant = pregnant;
 }
 
@@ -1249,13 +1294,25 @@ function getActiveBlockageRetention(profile, key, currentFlux = 0) {
   const blockageKey = String(blockage.key || '').trim();
   if (!blockageKey) return 0;
   if (blockageKey === 'fluxPositive') {
-    return hasDerivedMetabolism(profile) && currentFlux > 0 ? clampNumber(blockage.severity, 0, 0.75, 0) : 0;
+    return hasDerivedMetabolism(profile) && currentFlux > 0 ? clampNumber(blockage.severity, 0, PREGNANCY_BLOCKAGE_KEY_SEVERITY_CAP.fluxPositive, 0) : 0;
   }
   if (blockageKey === 'fluxNegative') {
-    return hasDerivedMetabolism(profile) && currentFlux < 0 ? clampNumber(blockage.severity, 0, 0.75, 0) : 0;
+    return hasDerivedMetabolism(profile) && currentFlux < 0 ? clampNumber(blockage.severity, 0, PREGNANCY_BLOCKAGE_KEY_SEVERITY_CAP.fluxNegative, 0) : 0;
   }
   if (blockageKey !== key || isMetabolismExempt(profile, key)) return 0;
-  return clampNumber(blockage.severity, 0, 0.75, 0);
+  return clampNumber(blockage.severity, 0, PREGNANCY_BLOCKAGE_KEY_SEVERITY_CAP[key] || 0.75, 0);
+}
+
+function getActiveAccelerationMultiplier(profile, key, currentFlux = 0) {
+  const acceleration = profile?.pregnant?.acceleration;
+  if (!acceleration || typeof acceleration !== 'object') return 1;
+  const accelerationKey = String(acceleration.key || '').trim();
+  const isMatch = accelerationKey === key
+    || (key === 'flux' && currentFlux > 0 && accelerationKey === 'fluxPositive')
+    || (key === 'flux' && currentFlux < 0 && accelerationKey === 'fluxNegative');
+  if (!isMatch || isMetabolismExempt(profile, key)) return 1;
+  const cap = PREGNANCY_BLOCKAGE_KEY_SEVERITY_CAP[accelerationKey] || 0.75;
+  return 1 + clampNumber(acceleration.severity, 0, cap, 0);
 }
 
 function applyMilkGain(profile, rawAmount) {
@@ -1264,22 +1321,49 @@ function applyMilkGain(profile, rawAmount) {
   return addMetabolismValue(profile, 'milk', rawAmount * multiplier, 0, 150);
 }
 
-function applyPassiveMilkAndOdor(profile, tick) {
+function applyCycleBreastNeedGain(profile, hours) {
+  const stage = String(profile?.base?.stage || '');
+  const hourlyRate = stage === '黄体期' ? 0.15 : stage === '月经期' ? 0.10 : 0;
+  if (hourlyRate <= 0) return 0;
+  return addMetabolismValue(profile, 'milk', hourlyRate * hours, 0, 150);
+}
+
+function applyPassiveMetabolism(profile, tick) {
   if (profile?.immune?.metabolism) return;
   const hours = Math.max(0, tick.passedHours);
   if (hours <= 0) return;
+  applyCycleBreastNeedGain(profile, hours);
   applyMilkGain(profile, 0.08 * hours);
   addMetabolismValue(profile, 'odor', 0.04 * hours, 0, 150);
+  addMetabolismValue(profile, 'companionship', 0.05 * hours, 0, 150);
 }
 
 function applyMilkFromLibido(profile, changeValue) {
   const delta = Math.abs(Number(changeValue) || 0);
   if (delta <= 0) return;
+  if (String(profile?.base?.stage || '') === '排卵期') {
+    addMetabolismValue(profile, 'milk', delta * 0.05, 0, 150);
+  }
   applyMilkGain(profile, delta * 0.18);
 }
 
 function applyOdorGain(profile, amount) {
   return addMetabolismValue(profile, 'odor', Math.max(0, Number(amount) || 0), 0, 150);
+}
+
+function getOdorCompanionshipReliefMultiplier(odor) {
+  const value = clampNumber(odor, 0, 150, 0);
+  if (value >= 125) return 0.45;
+  if (value >= 100) return 0.60;
+  if (value >= 75) return 0.75;
+  return 1;
+}
+
+function applyAccelerationRebound(profile, key, relievedAmount) {
+  const released = Math.max(0, Number(relievedAmount) || 0);
+  const severity = getActiveAccelerationMultiplier(profile, key) - 1;
+  if (released <= 0 || severity <= 0) return 0;
+  return addMetabolismValue(profile, key, released * severity * 0.25, 0, 150);
 }
 
 function getDerivedFluxDirection(currentFlux, fallbackDirection = 1) {
@@ -1326,11 +1410,12 @@ function applyHourlyPregnancyMetabolism(profile, tick, female) {
   if (hasDerivedMetabolism(profile)) {
     const stressMultiplier = clampNumber(1 + ((clampNumber(profile?.base?.psyStress, 0, 200, 100) - 100) / 200), 0.5, 1.5, 1.0);
     const direction = getDerivedFluxDirection(metabolism.flux, 1);
-    metabolism.flux = clampNumber((Number(metabolism.flux) || 0) + (delta * stressMultiplier * direction), -150, 150, metabolism.flux || 0);
+    const acceleration = getActiveAccelerationMultiplier(profile, 'flux', Number(metabolism.flux) || direction);
+    const fluxCap = getMetabolismCap(profile, 'flux', Number(metabolism.flux) || direction);
+    metabolism.flux = clampNumber((Number(metabolism.flux) || 0) + (delta * stressMultiplier * direction * acceleration), -fluxCap, fluxCap, metabolism.flux || 0);
     profile.metabolism = metabolism;
   }
-  addMetabolismValue(profile, 'urine', delta, 0, 150);
-  addMetabolismValue(profile, 'stool', delta, 0, 150);
+  addMetabolismValue(profile, 'excretion', delta, 0, 150);
   addMetabolismValue(profile, 'hunger', delta, 0, 150);
   addMetabolismValue(profile, 'sleep', delta, 0, 150);
   applyDerivedMetabolismExemptions(profile);
@@ -1341,10 +1426,8 @@ function applyHourlyPregnancyMetabolism(profile, tick, female) {
   for (let i = 0; i < rounds; i += 1) {
     const symptomChance = (200 - vitality) * 0.5;
     if (Math.random() * 100 < symptomChance) {
-      const cooldown = profile.cooldown || {};
       pregnant.nutrition = (Number(pregnant.nutrition) || 0) - 1;
-      cooldown.pregnancySymptomActive = true;
-      profile.cooldown = cooldown;
+      pregnant.symptomReliefPending = clampNumber(pregnant.symptomReliefPending, 0, 999, 0) + 1;
       profile.pregnant = pregnant;
       profile.notify = {
         ...(profile.notify || {}),
@@ -1416,28 +1499,24 @@ function applyNaturalMetabolismRecovery(profile, tick) {
   const immune = profile?.immune || {};
   const metabolism = profile?.metabolism || {};
   if (immune.metabolism) {
-    metabolism.urine = 0;
-    metabolism.stool = 0;
+    metabolism.excretion = 0;
     metabolism.hunger = 0;
     metabolism.sleep = 0;
     metabolism.flux = 0;
     metabolism.milk = 0;
     metabolism.odor = 0;
+    metabolism.companionship = 0;
     profile.metabolism = metabolism;
     return;
   }
   applyDerivedMetabolismExemptions(profile);
 
   const passedDays = Math.max(0, tick.passedDays);
-  const passedWeeks = Math.floor(passedDays / 7);
-  const passedMonths = Math.floor(passedDays / 30);
-  const shouldFlush = passedWeeks > 0 || passedMonths > 0;
 
   if (hasDerivedMetabolism(profile)) {
-    if (shouldFlush) {
-      metabolism.flux = 0;
-    } else if (passedDays > 0) {
-      const currentFlux = clampNumber(metabolism.flux, -150, 150, 0);
+    if (passedDays > 0) {
+      const fluxCap = getMetabolismCap(profile, 'flux', Number(metabolism.flux) || 0);
+      const currentFlux = clampNumber(metabolism.flux, -fluxCap, fluxCap, 0);
       const recovery = 14 * passedDays;
       if (currentFlux > 0) metabolism.flux = Math.max(0, currentFlux - recovery);
       else if (currentFlux < 0) metabolism.flux = Math.min(0, currentFlux + recovery);
@@ -1446,28 +1525,32 @@ function applyNaturalMetabolismRecovery(profile, tick) {
     profile.metabolism = metabolism;
   }
 
-  if (shouldFlush) {
-    metabolism.urine = 0;
-    metabolism.stool = 0;
-    metabolism.hunger = 0;
-    metabolism.sleep = 0;
-    metabolism.milk = 0;
-    metabolism.odor = 0;
-    profile.metabolism = metabolism;
-    return;
-  }
-
   if (passedDays <= 0) return;
 
-  const dayUrineRecovery = 12 * passedDays;
-  const dayStoolRecovery = 8 * passedDays;
+  const dayExcretionRecovery = 12 * passedDays;
   const dayHungerRecovery = 16 * passedDays;
   const daySleepRecovery = 18 * passedDays;
 
-  metabolism.urine = isMetabolismExempt(profile, 'urine') ? 0 : Math.max(0, clampNumber(metabolism.urine, 0, 150, 0) - dayUrineRecovery);
-  metabolism.stool = isMetabolismExempt(profile, 'stool') ? 0 : Math.max(0, clampNumber(metabolism.stool, 0, 150, 0) - dayStoolRecovery);
-  metabolism.hunger = isMetabolismExempt(profile, 'hunger') ? 0 : Math.max(0, clampNumber(metabolism.hunger, 0, 150, 0) - dayHungerRecovery);
-  metabolism.sleep = isMetabolismExempt(profile, 'sleep') ? 0 : Math.max(0, clampNumber(metabolism.sleep, 0, 150, 0) - daySleepRecovery);
+  metabolism.excretion = isMetabolismExempt(profile, 'excretion') ? 0 : Math.max(0, clampNumber(metabolism.excretion, 0, getMetabolismCap(profile, 'excretion'), 0) - dayExcretionRecovery);
+  metabolism.hunger = isMetabolismExempt(profile, 'hunger') ? 0 : Math.max(0, clampNumber(metabolism.hunger, 0, getMetabolismCap(profile, 'hunger'), 0) - dayHungerRecovery);
+  metabolism.sleep = isMetabolismExempt(profile, 'sleep') ? 0 : Math.max(0, clampNumber(metabolism.sleep, 0, getMetabolismCap(profile, 'sleep'), 0) - daySleepRecovery);
+  applyDerivedMetabolismExemptions(profile);
+  profile.metabolism = metabolism;
+}
+
+function applyWeeklyMetabolismRoutine(profile, tick, options = {}) {
+  if (profile?.immune?.metabolism) return;
+  const metabolism = profile.metabolism || {};
+  const settledWeeks = Math.max(0, Math.floor(Number(tick.passedLifestyleWeeks) || 0));
+  if (settledWeeks > 0) {
+    metabolism.odor = 0;
+    metabolism.companionship = isMetabolismExempt(profile, 'companionship')
+      ? 0
+      : Math.max(0, clampNumber(metabolism.companionship, 0, getMetabolismCap(profile, 'companionship'), 0) - (35 * settledWeeks));
+  }
+  if (options.enteredFollicular && !canProduceMilk({ ...profile, base: { ...(profile.base || {}), stage: options.stage } })) {
+    metabolism.milk = 0;
+  }
   applyDerivedMetabolismExemptions(profile);
   profile.metabolism = metabolism;
 }
@@ -1484,13 +1567,14 @@ function applyMetabolismFromVitality(profile, changeValue) {
 
   if (hasDerivedMetabolism(profile)) {
     const direction = getDerivedFluxDirection(metabolism.flux, Math.sign(Number(changeValue) || 1));
-    metabolism.flux = clampNumber((Number(metabolism.flux) || 0) + (delta * direction), -150, 150, metabolism.flux || 0);
+    const acceleration = getActiveAccelerationMultiplier(profile, 'flux', Number(metabolism.flux) || direction);
+    const fluxCap = getMetabolismCap(profile, 'flux', Number(metabolism.flux) || direction);
+    metabolism.flux = clampNumber((Number(metabolism.flux) || 0) + (delta * direction * acceleration), -fluxCap, fluxCap, metabolism.flux || 0);
     profile.metabolism = metabolism;
   }
 
   if (changeValue > 0) {
-    addMetabolismValue(profile, 'urine', delta, 0, 150);
-    addMetabolismValue(profile, 'stool', delta, 0, 150);
+    addMetabolismValue(profile, 'excretion', delta, 0, 150);
   } else {
     addMetabolismValue(profile, 'hunger', delta, 0, 150);
     addMetabolismValue(profile, 'sleep', delta, 0, 150);
@@ -1498,17 +1582,18 @@ function applyMetabolismFromVitality(profile, changeValue) {
   applyDerivedMetabolismExemptions(profile);
 }
 
-function getMetabolismLevel(value) {
-  if (value >= 125) return '爆';
-  if (value >= 100) return '满';
-  if (value >= 75) return '高';
-  if (value >= 50) return '中';
-  if (value >= 25) return '低';
+function getMetabolismLevel(value, cap = BASE_METABOLISM_CAP) {
+  const scale = Math.max(1, Number(cap) || BASE_METABOLISM_CAP) / BASE_METABOLISM_CAP;
+  if (value >= 125 * scale) return '爆';
+  if (value >= 100 * scale) return '满';
+  if (value >= 75 * scale) return '高';
+  if (value >= 50 * scale) return '中';
+  if (value >= 25 * scale) return '低';
   return '无';
 }
 
-function getDerivedFluxLevel(value) {
-  return getMetabolismLevel(Math.abs(Number(value) || 0));
+function getDerivedFluxLevel(value, cap = BASE_METABOLISM_CAP) {
+  return getMetabolismLevel(Math.abs(Number(value) || 0), cap);
 }
 
 function getDerivedFluxNeedLabel(value) {
@@ -1522,34 +1607,40 @@ function updateAdvisoryNotify(profile, female) {
   const pregnant = profile?.pregnant || {};
   const needs = [];
 
-  const urineLevel = getMetabolismLevel(metabolism.urine);
-  const stoolLevel = getMetabolismLevel(metabolism.stool);
-  const hungerLevel = getMetabolismLevel(metabolism.hunger);
-  const sleepLevel = getMetabolismLevel(metabolism.sleep);
-  const milkLevel = getMetabolismLevel(metabolism.milk);
-  const odorLevel = getMetabolismLevel(metabolism.odor);
+  const excretionLevel = getMetabolismLevel(metabolism.excretion, getMetabolismCap(profile, 'excretion'));
+  const hungerLevel = getMetabolismLevel(metabolism.hunger, getMetabolismCap(profile, 'hunger'));
+  const sleepLevel = getMetabolismLevel(metabolism.sleep, getMetabolismCap(profile, 'sleep'));
+  const milkLevel = getMetabolismLevel(metabolism.milk, getMetabolismCap(profile, 'milk'));
+  const odorLevel = getMetabolismLevel(metabolism.odor, getMetabolismCap(profile, 'odor'));
+  const companionshipLevel = getMetabolismLevel(metabolism.companionship, getMetabolismCap(profile, 'companionship'));
   const maybePushNeed = (key, label, level) => {
     if (!isMetabolismExempt(profile, key) && ['高', '满', '爆'].includes(level)) needs.push(`${label}:${level}`);
   };
 
-  maybePushNeed('urine', '尿意', urineLevel);
-  maybePushNeed('stool', '便意', stoolLevel);
+  maybePushNeed('excretion', '泄意', excretionLevel);
   maybePushNeed('hunger', '饿意', hungerLevel);
   maybePushNeed('sleep', '困意', sleepLevel);
-  maybePushNeed('milk', '奶意', milkLevel);
+  maybePushNeed('milk', '乳意', milkLevel);
   maybePushNeed('odor', '臭意', odorLevel);
+  maybePushNeed('companionship', '伴意', companionshipLevel);
 
   const reminders = [];
   if (hasDerivedMetabolism(profile)) {
-    const flux = clampNumber(metabolism.flux, -150, 150, 0);
+    const fluxCap = getMetabolismCap(profile, 'flux', Number(metabolism.flux) || 0);
+    const flux = clampNumber(metabolism.flux, -fluxCap, fluxCap, 0);
     if (Math.abs(flux) >= 75) {
-      reminders.push(`${female}的${getDerivedFluxNeedLabel(flux)}已达到${getDerivedFluxLevel(flux)}，应优先使用 bsExcreteMetabolism 进行解放；若释放量足够大，需求极性才会跨过 0 翻转`);
+      reminders.push(`${female}的${getDerivedFluxNeedLabel(flux)}已达到${getDerivedFluxLevel(flux, fluxCap)}，应优先使用 bsExcreteMetabolism 进行解放；若释放量足够大，需求极性才会跨过 0 翻转`);
     }
     if (needs.length > 0) {
       reminders.push(`${female}仍有未被衍生代谢抵免的生理需求（${needs.join('、')}），可用 bsExcreteMetabolism 处理`);
     }
   } else if (needs.length > 0) {
     reminders.push(`${female}有强烈的生理需求（${needs.join('、')}），应优先使用 bsExcreteMetabolism 缓解生理不适`);
+  }
+  if (!isMetabolismExempt(profile, 'companionship') && ['高', '满', '爆'].includes(companionshipLevel)) {
+    reminders.push(odorLevel === '高' || odorLevel === '满' || odorLevel === '爆'
+      ? `${female}渴望陪伴，但当前臭意会妨碍社交舒适度；清洁后再给予陪伴或亲密安抚更有效`
+      : `${female}渴望陪伴，可优先给予陪伴或亲密安抚；若发生亲密陪伴，可在处理伴意时传 intimate=true`);
   }
 
   const stage = String(base.stage || '');
@@ -1613,19 +1704,20 @@ function applyExcreteMetabolism(chatState, args) {
   const immune = profile.immune || {};
   if (immune.metabolism) return { applied: false, message: `bsExcreteMetabolism skipped for ${female}: metabolism immune.` };
   applyDerivedMetabolismExemptions(profile);
+  applyMetabolismCapacityLimits(profile);
 
-  if (hasDerivedMetabolism(profile)) {
-    const currentFlux = clampNumber(metabolism.flux, -150, 150, 0);
+  const isDerived = hasDerivedMetabolism(profile);
+  const hasOptions = Object.keys(options).length > 0;
+  const wantsFluxRelease = isDerived && (!hasOptions || options.flux !== undefined);
+  if (wantsFluxRelease) {
+    const fluxCap = getMetabolismCap(profile, 'flux', Number(metabolism.flux) || 0);
+    const currentFlux = clampNumber(metabolism.flux, -fluxCap, fluxCap, 0);
     const direction = getDerivedFluxDirection(currentFlux, 1);
-    const optionValues = Object.entries(options)
-      .filter(([key]) => !['milk', 'odor'].includes(key))
-      .map(([, value]) => Math.abs(Number(value) || 0))
-      .filter((value) => value > 0);
     const blockageRetention = getActiveBlockageRetention(profile, currentFlux > 0 ? 'fluxPositive' : 'fluxNegative', currentFlux);
-    const releasePower = applyRetention(optionValues.length > 0 ? Math.max(...optionValues) : 40, blockageRetention);
-    metabolism.flux = clampNumber(currentFlux - (direction * releasePower), -150, 150, currentFlux);
+    const releasePower = applyRetention(options.flux !== undefined ? Math.max(0, Number(options.flux) || 0) : 40, blockageRetention);
+    metabolism.flux = clampNumber(currentFlux - (direction * releasePower), -fluxCap, fluxCap, currentFlux);
     profile.metabolism = metabolism;
-    const nextFlux = clampNumber(metabolism.flux, -150, 150, 0);
+    const nextFlux = clampNumber(metabolism.flux, -fluxCap, fluxCap, 0);
     const didFlip = currentFlux !== 0 && Math.sign(currentFlux) !== Math.sign(nextFlux) && nextFlux !== 0;
     profile.notify = {
       ...notify,
@@ -1635,36 +1727,56 @@ function applyExcreteMetabolism(chatState, args) {
     };
   }
 
-  const currentUrine = clampNumber(metabolism.urine, 0, 150, 0);
-  const currentStool = clampNumber(metabolism.stool, 0, 150, 0);
-  const currentHunger = clampNumber(metabolism.hunger, 0, 150, 0);
-  const currentSleep = clampNumber(metabolism.sleep, 0, 150, 0);
-  const currentMilk = clampNumber(metabolism.milk, 0, 150, 0);
-  const currentOdor = clampNumber(metabolism.odor, 0, 150, 0);
+  const currentExcretion = clampNumber(metabolism.excretion, 0, getMetabolismCap(profile, 'excretion'), 0);
+  const currentHunger = clampNumber(metabolism.hunger, 0, getMetabolismCap(profile, 'hunger'), 0);
+  const currentSleep = clampNumber(metabolism.sleep, 0, getMetabolismCap(profile, 'sleep'), 0);
+  const currentMilk = clampNumber(metabolism.milk, 0, getMetabolismCap(profile, 'milk'), 0);
+  const currentOdor = clampNumber(metabolism.odor, 0, getMetabolismCap(profile, 'odor'), 0);
+  const currentCompanionship = clampNumber(metabolism.companionship, 0, getMetabolismCap(profile, 'companionship'), 0);
 
-  const hasOptions = Object.keys(options).length > 0;
-  const isDerived = hasDerivedMetabolism(profile);
-  const urineReduction = isMetabolismExempt(profile, 'urine') ? 0 : (options.urine !== undefined ? Number(options.urine || 0) : (hasOptions || isDerived ? 0 : 30));
-  const stoolReduction = isMetabolismExempt(profile, 'stool') ? 0 : (options.stool !== undefined ? Number(options.stool || 0) : (hasOptions || isDerived ? 0 : 20));
-  const hungerReduction = isMetabolismExempt(profile, 'hunger') ? 0 : (options.hunger !== undefined ? Number(options.hunger || 0) : (hasOptions || isDerived ? 0 : 40));
-  const sleepReduction = isMetabolismExempt(profile, 'sleep') ? 0 : (options.sleep !== undefined ? Number(options.sleep || 0) : (hasOptions || isDerived ? 0 : 40));
-  const milkReduction = isMetabolismExempt(profile, 'milk') ? 0 : (options.milk !== undefined ? Number(options.milk || 0) : (hasOptions || isDerived ? 0 : 30));
-  const odorReduction = options.odor !== undefined ? Number(options.odor || 0) : 0;
+  const optionReduction = (key, fallback = 0) => Math.max(0, options[key] !== undefined ? Number(options[key]) || 0 : fallback);
+  const useDefaults = !hasOptions && !isDerived;
+  const excretionReduction = isMetabolismExempt(profile, 'excretion') ? 0 : optionReduction('excretion', useDefaults ? 30 : 0);
+  const hungerReduction = isMetabolismExempt(profile, 'hunger') ? 0 : optionReduction('hunger', useDefaults ? 40 : 0);
+  const sleepReduction = isMetabolismExempt(profile, 'sleep') ? 0 : optionReduction('sleep', useDefaults ? 40 : 0);
+  const milkReduction = isMetabolismExempt(profile, 'milk') ? 0 : optionReduction('milk', useDefaults ? 30 : 0);
+  const odorReduction = isMetabolismExempt(profile, 'odor') ? 0 : optionReduction('odor');
+  const companionshipReduction = isMetabolismExempt(profile, 'companionship') ? 0 : optionReduction('companionship');
 
-  const actualUrineReduction = applyRetention(urineReduction, getActiveBlockageRetention(profile, 'urine'));
-  const actualStoolReduction = applyRetention(stoolReduction, getActiveBlockageRetention(profile, 'stool'));
-  const actualHungerReduction = applyRetention(hungerReduction, getActiveBlockageRetention(profile, 'hunger'));
-  const actualSleepReduction = applyRetention(sleepReduction, getActiveBlockageRetention(profile, 'sleep'));
-  const actualMilkReduction = applyRetention(milkReduction, getActiveBlockageRetention(profile, 'milk'));
-  const actualOdorReduction = applyRetention(odorReduction, getActiveBlockageRetention(profile, 'odor'));
+  const relievedExcretion = Math.min(currentExcretion, applyRetention(excretionReduction, getActiveBlockageRetention(profile, 'excretion')));
+  const relievedHunger = Math.min(currentHunger, applyRetention(hungerReduction, getActiveBlockageRetention(profile, 'hunger')));
+  const relievedSleep = Math.min(currentSleep, applyRetention(sleepReduction, getActiveBlockageRetention(profile, 'sleep')));
+  const relievedMilk = Math.min(currentMilk, applyRetention(milkReduction, getActiveBlockageRetention(profile, 'milk')));
+  const relievedOdor = Math.min(currentOdor, applyRetention(odorReduction, getActiveBlockageRetention(profile, 'odor')));
+  const remainingOdor = Math.max(0, currentOdor - relievedOdor);
+  const companionshipRelief = applyRetention(companionshipReduction, getActiveBlockageRetention(profile, 'companionship'))
+    * getOdorCompanionshipReliefMultiplier(remainingOdor);
+  const relievedCompanionship = Math.min(currentCompanionship, companionshipRelief);
 
-  metabolism.urine = Math.max(0, currentUrine - actualUrineReduction);
-  metabolism.stool = Math.max(0, currentStool - actualStoolReduction);
-  metabolism.hunger = Math.max(0, currentHunger - actualHungerReduction);
-  metabolism.sleep = Math.max(0, currentSleep - actualSleepReduction);
-  metabolism.milk = Math.max(0, currentMilk - actualMilkReduction);
-  metabolism.odor = isMetabolismExempt(profile, 'odor') ? 0 : Math.max(0, currentOdor - actualOdorReduction);
-  applyOdorGain(profile, ((currentUrine - metabolism.urine) * 0.08) + ((currentStool - metabolism.stool) * 0.12) + ((currentMilk - metabolism.milk) * 0.05));
+  metabolism.excretion = Math.max(0, currentExcretion - relievedExcretion);
+  metabolism.hunger = Math.max(0, currentHunger - relievedHunger);
+  metabolism.sleep = Math.max(0, currentSleep - relievedSleep);
+  metabolism.milk = Math.max(0, currentMilk - relievedMilk);
+  metabolism.odor = isMetabolismExempt(profile, 'odor') ? 0 : remainingOdor;
+  metabolism.companionship = isMetabolismExempt(profile, 'companionship') ? 0 : Math.max(0, currentCompanionship - relievedCompanionship);
+
+  addMetabolismValue(profile, 'excretion', relievedHunger * 0.5, 0, 150);
+  addMetabolismValue(profile, 'sleep', relievedHunger * 0.1, 0, 150);
+  addMetabolismValue(profile, 'hunger', relievedSleep * 0.1, 0, 150);
+  applyOdorGain(profile, (relievedExcretion * 0.12) + (canProduceMilk(profile) ? relievedMilk * 0.05 : 0));
+  if (options.intimate === true && relievedCompanionship > 0) {
+    applyMilkGain(profile, relievedCompanionship * 0.1);
+  }
+  for (const [key, amount] of [
+    ['excretion', relievedExcretion],
+    ['hunger', relievedHunger],
+    ['sleep', relievedSleep],
+    ['milk', relievedMilk],
+    ['odor', relievedOdor],
+    ['companionship', relievedCompanionship],
+  ]) {
+    applyAccelerationRebound(profile, key, amount);
+  }
   applyDerivedMetabolismExemptions(profile);
 
   profile.metabolism = metabolism;
@@ -1694,7 +1806,10 @@ function clearPregnancyState(profile) {
   pregnant.fetalEnergyDrain = 0;
   pregnant.amnionDurability = 0;
   pregnant.nutrition = 0;
+  pregnant.symptomReliefPending = 0;
   pregnant.blockage = null;
+  pregnant.acceleration = null;
+  pregnant.expansion = null;
   profile.base = base;
   profile.pregnant = pregnant;
 }
@@ -1824,10 +1939,6 @@ function enterProdromalStage(profile, female, stage, message) {
   pregnant.prodromalRemainingHours = getProdromalInitialHours(profile);
   pregnant.prodromalDelayProgressHours = 0;
   pregnant.laborPain = 0;
-  profile.cooldown = {
-    ...(profile.cooldown || {}),
-    laborResistanceUsed: false,
-  };
   profile.pregnant = pregnant;
   updateLaborPain(profile, '产兆前驱', null, 0);
   profile.notify = {
@@ -2035,10 +2146,6 @@ function processLabor(profile, tick, female) {
       beginLaborPhase(pregnant, '潜伏期', 0);
       updateLaborPain(profile, '第一产程', '潜伏期', 0);
       clearProdromalState(pregnant);
-      profile.cooldown = {
-        ...(profile.cooldown || {}),
-        laborResistanceUsed: false,
-      };
       profile.notify = {
         ...notify,
         firstly: `${female}进入了第一产程`,
@@ -2394,7 +2501,6 @@ function applyLaborResistance(profile, female) {
   const base = profile.base || {};
   const pregnant = profile.pregnant || {};
   const notify = profile.notify || {};
-  const cooldown = profile.cooldown || {};
   const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
   if (String(base.stage || '') !== '产兆前驱') {
     profile.notify = {
@@ -2403,14 +2509,6 @@ function applyLaborResistance(profile, female) {
     };
     return { applied: false, message: `bsMaternalFetalInteraction skipped for ${female}: not in prodromal stage.` };
   }
-  if (cooldown.laborResistanceUsed) {
-    profile.notify = {
-      ...notify,
-      thirdly: `${female}在本轮产兆前驱中已经尝试抵抗，需要经过时间推进后才能再次尝试`,
-    };
-    return { applied: false, message: `bsMaternalFetalInteraction skipped for ${female}: labor resistance already used this interval.` };
-  }
-
   const vitality = clampNumber(base.vitality, 0, 9999, 100);
   const uterinePressure = clampNumber(base.uterinePressure, 0, 9999, 0);
   const fetalEnergyDrain = clampNumber(pregnant.fetalEnergyDrain, 0, 9999, 0);
@@ -2451,18 +2549,12 @@ function applyLaborResistance(profile, female) {
   updateLaborPain(profile, '产兆前驱', null, 1 - (Math.max(0, remainingHours) / initialHours));
   pregnant.fetuses = fetuses;
   profile.pregnant = pregnant;
-  profile.cooldown = {
-    ...cooldown,
-    laborResistanceUsed: true,
-  };
-
   if (remainingHours <= 0) {
     base.stage = '第一产程';
     base.days = 0;
     beginLaborPhase(pregnant, '潜伏期', 0);
     updateLaborPain(profile, '第一产程', '潜伏期', 0);
     clearProdromalState(pregnant);
-    profile.cooldown.laborResistanceUsed = false;
     profile.notify = {
       ...notify,
       firstly: `${female}进入了第一产程`,
@@ -2484,7 +2576,6 @@ function applyLaborResistance(profile, female) {
     pregnant.effectiveLaborHours = 0;
     pregnant.laborPain = 0;
     clearProdromalState(pregnant);
-    profile.cooldown.laborResistanceUsed = false;
     profile.notify = {
       ...notify,
       firstly: `${female}进入了${target.stage}`,
@@ -2503,8 +2594,8 @@ function applyLaborResistance(profile, female) {
 
 function applyMaternalFetalInteraction(chatState, args) {
   const female = String(args?.female || '').trim();
-  const change = String(args?.change || 'slight_increase').trim();
   const direction = String(args?.direction || 'fetal').trim();
+  const change = String(args?.change || '').trim();
   const character = chatState.characters?.[female];
   if (!female || !character) {
     return { applied: false, message: `bsMaternalFetalInteraction skipped: unknown character ${female || '(empty)'}.` };
@@ -2522,16 +2613,27 @@ function applyMaternalFetalInteraction(chatState, args) {
     slight_decrease: '轻微减少',
     significant_decrease: '显著减少',
   });
-  const changeValue = changeMap[change];
-  if (changeValue === undefined) {
-    return { applied: false, message: `bsMaternalFetalInteraction skipped: invalid change ${change}.` };
-  }
-
+  const maternalNutritionGainMap = Object.freeze({
+    slight_increase: 1,
+    significant_increase: 2,
+    slight_decrease: 1,
+    significant_decrease: 2,
+  });
   const next = cloneValue(character);
   const profile = next.profile || {};
   const stage = String(profile?.base?.stage || '');
+  const interactionCooldown = profile.cooldown || {};
+  if (interactionCooldown.maternalFetalInteractionUsed) {
+    return { applied: false, message: `bsMaternalFetalInteraction skipped for ${female}: already changed during this story hour.` };
+  }
   if (direction === 'maternal' && stage === '产兆前驱') {
     const result = applyLaborResistance(profile, female);
+    if (result.applied) {
+      profile.cooldown = {
+        ...(profile.cooldown || {}),
+        maternalFetalInteractionUsed: true,
+      };
+    }
     next.profile = profile;
     chatState.characters[female] = syncCharacterStageFromProfile(next);
     return result;
@@ -2544,56 +2646,74 @@ function applyMaternalFetalInteraction(chatState, args) {
   }
 
   const cooldown = profile.cooldown || {};
-  let nutritionMessage = '';
-  if (cooldown.pregnancySymptomActive) {
-    pregnant.nutrition = (Number(pregnant.nutrition) || 0) + 2;
-    cooldown.pregnancySymptomActive = false;
-    nutritionMessage = '，身体得到了额外的供养力补充';
-  }
-  profile.cooldown = cooldown;
-  profile.pregnant = pregnant;
+  if (direction === 'maternal') {
+    const selectedIndex = randomInt(0, fetuses.length - 1);
+    const selectedFetus = fetuses[selectedIndex];
+    const maternalChangeKeys = Object.keys(changeMap);
+    const maternalChange = maternalChangeKeys[randomInt(0, maternalChangeKeys.length - 1)];
+    const maternalChangeValue = changeMap[maternalChange];
+    const maternalChangeDisplay = changeDisplayMap[maternalChange];
+    let nutritionMessage = '';
 
-  const actualDirection = direction === 'maternal' ? 'maternal' : 'fetal';
-
-  const selectedIndex = randomInt(0, fetuses.length - 1);
-  const selectedFetus = fetuses[selectedIndex];
-
-  let success = true;
-  let appliedChange = changeValue;
-  let rotated = false;
-  if (actualDirection === 'maternal') {
     const psyStress = clampNumber(profile?.base?.psyStress, 0, 9999, 0);
-    const failureChance = Math.min(1, psyStress / 200);
-    success = Math.random() >= failureChance;
-    if (!success) {
-      appliedChange = 0;
+    const success = Math.random() >= Math.min(1, psyStress / 200);
+    if (success) {
+      const currentAffinity = clampNumber(selectedFetus?.affinity, -50, 50, 0);
+      selectedFetus.affinity = clampNumber(currentAffinity + maternalChangeValue, -50, 50, 0);
+      const symptomReliefPending = clampNumber(pregnant.symptomReliefPending, 0, 999, 0);
+      if (symptomReliefPending > 0) {
+        const nutritionGain = maternalNutritionGainMap[maternalChange];
+        pregnant.nutrition = (Number(pregnant.nutrition) || 0) + nutritionGain;
+        pregnant.symptomReliefPending = symptomReliefPending - 1;
+        nutritionMessage = pregnant.symptomReliefPending > 0
+          ? `，身体补回了${nutritionGain}点供养力（仍有${pregnant.symptomReliefPending}次不适待安抚）`
+          : `，身体补回了${nutritionGain}点供养力`;
+      }
+    } else {
       const currentAngle = Number.isFinite(Number(selectedFetus?.tendencyAngle))
         ? Number(selectedFetus.tendencyAngle)
         : randomInt(0, 360);
       selectedFetus.tendencyAngle = wrapAngle(currentAngle + randomInt(-10, 10));
-      rotated = true;
     }
+    pregnant.fetuses = fetuses;
+    pregnant.fetusesCount = fetuses.length;
+    profile.cooldown = {
+      ...cooldown,
+      maternalFetalInteractionUsed: true,
+    };
+    profile.pregnant = pregnant;
+    profile.notify = {
+      ...(profile.notify || {}),
+      secondly: success
+        ? `${female}安抚了第${selectedIndex + 1}胎，亲密度${maternalChangeDisplay}了${nutritionMessage}`
+        : `${female}尝试安抚第${selectedIndex + 1}胎，但因心理压力过大而失败，胎位角度发生了微小转动${nutritionMessage}`,
+    };
+    next.profile = profile;
+    chatState.characters[female] = next;
+    return { applied: true, message: `bsMaternalFetalInteraction applied to ${female}: maternal interaction.` };
   }
 
+  const changeValue = changeMap[change];
+  if (changeValue === undefined) {
+    return { applied: false, message: `bsMaternalFetalInteraction skipped for ${female}: direction=fetal requires a valid change.` };
+  }
+  const selectedIndex = randomInt(0, fetuses.length - 1);
+  const selectedFetus = fetuses[selectedIndex];
   const currentAffinity = clampNumber(selectedFetus?.affinity, -50, 50, 0);
-  selectedFetus.affinity = clampNumber(currentAffinity + appliedChange, -50, 50, 0);
+  selectedFetus.affinity = clampNumber(currentAffinity + changeValue, -50, 50, 0);
 
   pregnant.fetuses = fetuses;
   pregnant.fetusesCount = fetuses.length;
   profile.pregnant = pregnant;
+  profile.cooldown = {
+    ...cooldown,
+    maternalFetalInteractionUsed: true,
+  };
 
   const notify = profile.notify || {};
   const changeDisplay = changeDisplayMap[change];
   const targetName = `第${selectedIndex + 1}胎`;
-  if (actualDirection === 'fetal') {
-    notify.secondly = `${targetName}对${female}的亲密度${changeDisplay}了${nutritionMessage}`;
-  } else if (success) {
-    notify.secondly = `${female}对${targetName}的亲密度${changeDisplay}了${nutritionMessage}`;
-  } else if (rotated) {
-    notify.secondly = `${female}尝试与${targetName}建立联系，但因心理压力过大而失败，${targetName}的胚位角度发生了微小转动${nutritionMessage}`;
-  } else {
-    notify.secondly = `${female}尝试与${targetName}建立联系，但因心理压力过大而失败${nutritionMessage}`;
-  }
+  notify.secondly = `${targetName}对${female}的亲密度${changeDisplay}了`;
   profile.notify = notify;
 
   next.profile = profile;
@@ -2664,16 +2784,20 @@ function buildTimeTick(character, addedMinutes) {
   const runtime = character?.runtime || {};
   const dayCarryMinutes = clampNumber(runtime.dayCarryMinutes, 0, 24 * 60, 0);
   const hourCarryMinutes = clampNumber(runtime.hourCarryMinutes, 0, 60, 0);
+  const lifestyleWeekCarryMinutes = clampNumber(runtime.lifestyleWeekCarryMinutes, 0, 7 * 24 * 60, 0);
   const totalDayMinutes = dayCarryMinutes + addedMinutes;
   const totalHourMinutes = hourCarryMinutes + addedMinutes;
+  const totalLifestyleWeekMinutes = lifestyleWeekCarryMinutes + addedMinutes;
   return {
     deltaMinutes: addedMinutes,
     deltaDays: addedMinutes / (24 * 60),
     passedDays: Math.floor(totalDayMinutes / (24 * 60)),
     passedHours: Math.floor(totalHourMinutes / 60),
+    passedLifestyleWeeks: Math.floor(totalLifestyleWeekMinutes / (7 * 24 * 60)),
     nextRuntime: {
       dayCarryMinutes: totalDayMinutes % (24 * 60),
       hourCarryMinutes: totalHourMinutes % 60,
+      lifestyleWeekCarryMinutes: totalLifestyleWeekMinutes % (7 * 24 * 60),
     },
   };
 }
@@ -2718,18 +2842,21 @@ function advanceMenstrualStage(profile, stage, daysValue) {
   let nextStage = stage;
   let nextDays = daysValue;
   let changed = false;
+  let enteredFollicular = false;
   while (MENSTRUAL_STAGES.includes(nextStage)) {
     const limit = getStageLimit(profile, nextStage);
     if (limit === null || nextDays <= limit) break;
     nextDays -= limit;
     const stageIndex = MENSTRUAL_STAGES.indexOf(nextStage);
     nextStage = MENSTRUAL_STAGES[(stageIndex + 1) % MENSTRUAL_STAGES.length];
+    if (nextStage === '卵泡期') enteredFollicular = true;
     changed = true;
   }
   return {
     stage: nextStage,
     days: Math.max(0, nextDays),
     changed,
+    enteredFollicular,
   };
 }
 
@@ -2764,6 +2891,7 @@ function applyTimeToCharacter(character, tick) {
   let stage = String(base.stage || '');
   let days = clampNumber(base.days, 0, 9999, 0);
   let stageChanged = false;
+  let enteredFollicular = false;
   const oldStage = stage;
 
   if (deltaDays <= 0) return { character: next, stageChanged: false, oldStage, newStage: stage };
@@ -2780,6 +2908,7 @@ function applyTimeToCharacter(character, tick) {
     stage = advanced.stage;
     days = advanced.days;
     stageChanged = advanced.changed;
+    enteredFollicular = advanced.enteredFollicular;
     if (stageChanged && shouldEnterPseudoPregnancy(profile, oldStage, stage)) {
       stage = '假孕期';
       days = 0;
@@ -2826,6 +2955,7 @@ function applyTimeToCharacter(character, tick) {
       stage = '卵泡期';
       days = 0;
       stageChanged = true;
+      enteredFollicular = true;
       pregnant.pregnantDays = 0;
       pregnant.effectivePregnantDays = 0;
       pregnant.laborHours = 0;
@@ -2890,8 +3020,9 @@ function applyTimeToCharacter(character, tick) {
     }
   }
 
-  if (isHere) applyPassiveMilkAndOdor(profile, tick);
+  if (isHere) applyPassiveMetabolism(profile, tick);
   applyNaturalMetabolismRecovery(profile, tick);
+  applyWeeklyMetabolismRoutine(profile, tick, { enteredFollicular, stage });
 
   base.age = clampNumber(base.age, 0, 99999, 15) + (deltaDays / 365);
   if (Array.isArray(profile.children) && profile.children.length > 0) {
@@ -2919,10 +3050,13 @@ function applyTimeToCharacter(character, tick) {
     stage,
     days,
   };
-  refreshPregnancyBlockage(profile, tick);
+  refreshPregnancySymptoms(profile, tick);
+  applyMetabolismCapacityLimits(profile);
   profile.pregnant = {
     ...pregnant,
     blockage: profile.pregnant?.blockage ?? null,
+    acceleration: profile.pregnant?.acceleration ?? null,
+    expansion: profile.pregnant?.expansion ?? null,
     fetusesCount: Array.isArray(pregnant.fetuses) ? pregnant.fetuses.length : clampNumber(pregnant.fetusesCount, 0, 99, 0),
   };
   const currentNotify = profile.notify || notify;
@@ -2933,8 +3067,9 @@ function applyTimeToCharacter(character, tick) {
   profile.cooldown = {
     ...cooldown,
     orgasmOvulationUsed: shouldResetOrgasmOvulation(stage) ? false : Boolean(cooldown.orgasmOvulationUsed),
-    laborResistanceUsed: tick.passedHours > 0 || stage !== '产兆前驱' ? false : Boolean(cooldown.laborResistanceUsed),
     pregnancyPressureWarning: shouldKeepPregnancyPressureWarning(profile) ? Boolean((profile.cooldown || cooldown).pregnancyPressureWarning) : false,
+    psychologyUpdateUsed: tick.passedHours > 0 ? false : Boolean(cooldown.psychologyUpdateUsed),
+    maternalFetalInteractionUsed: tick.passedHours > 0 ? false : Boolean(cooldown.maternalFetalInteractionUsed),
   };
   updateAdvisoryNotify(profile, next.name);
   if (tick.passedDays > 0) {
@@ -3235,6 +3370,10 @@ function applyUpdatePsychology(chatState, args) {
   if (!changed) {
     return { applied: false, message: `bsUpdatePsychology skipped for ${female}: no allowed ${targetGroup} fields.` };
   }
+  const cooldown = profile.cooldown || {};
+  if (cooldown.psychologyUpdateUsed) {
+    return { applied: false, message: `bsUpdatePsychology skipped for ${female}: already changed during this story hour.` };
+  }
 
   const normalizedTarget = normalizePsychologyGroup(target, fieldConfig, { booleanFields: boolFieldConfig });
   profile.psychology = {
@@ -3245,6 +3384,10 @@ function applyUpdatePsychology(chatState, args) {
     preg: targetGroup === 'preg'
       ? normalizedTarget
       : normalizePsychologyGroup(profile.psychology?.preg, PSY_PREG_FIELDS, { booleanFields: PSY_PREG_BOOL_FIELDS }),
+  };
+  profile.cooldown = {
+    ...cooldown,
+    psychologyUpdateUsed: true,
   };
   next.profile = profile;
   chatState.characters[female] = next;
@@ -3362,6 +3505,12 @@ function applySetMenstrualPhases(chatState, args) {
 
   base.stage = stage;
   base.days = 0;
+  profile.base = base;
+  if (stage === '卵泡期') {
+    const metabolism = profile.metabolism || {};
+    metabolism.milk = 0;
+    profile.metabolism = metabolism;
+  }
   if (stage === '排卵期') {
     profile.cooldown = {
       ...cooldown,

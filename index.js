@@ -75,11 +75,6 @@ const GROUP_CHAT_DELETED_HANDLER_KEY = '__bs_biotracker_group_chat_deleted_handl
 const GROUP_CHAT_CREATED_HANDLER_KEY = '__bs_biotracker_group_chat_created_handler__';
 const PENDING_CHAT_INHERIT_KEY = '__bs_biotracker_pending_chat_inherit__';
 const WORLDBOOK_RELOAD_TIMER_KEY = '__bs_biotracker_worldbook_reload_timer__';
-const MAINFLOW_CONTEXT_SNAPSHOT_KEY = '__bs_biotracker_mainflow_context_snapshot__';
-const DEBUG_LAST_MAINFLOW_SNAPSHOT_KEY = '__bs_biotracker_debug_last_mainflow_snapshot__';
-const FETCH_CAPTURE_READY_KEY = '__bs_biotracker_fetch_capture_ready__';
-const ORIGINAL_FETCH_KEY = '__bs_biotracker_original_fetch__';
-const MAX_MAINFLOW_SNAPSHOT_MESSAGES = 48;
 const VITALITY_CAPS = { 1: 50, 2: 75, 3: 100, 4: 125, 5: 150, 6: 175, 7: 200 };
 const PSY_STRESS_CAPS = { 1: 20, 2: 50, 3: 80, 4: 110, 5: 140, 6: 170, 7: 200 };
 
@@ -214,7 +209,7 @@ function syncWorldbookFilterInput(ctx) {
     input.placeholder = mode === 'allowlist_all'
       ? '每行一个条目名。参考模式下，仅这些条目会传给 tracker；即使它们目前是 disabled 也会保留。'
       : mode === 'mainflow'
-        ? '每行一个条目名。主流模式下，tracker 优先引用上次 ST 主流 request 上下文；没有快照时会按常驻/关键字触发，并套用这些排除条目。'
+        ? '每行一个条目名。主流模式下，tracker 优先采用 ST 解析出的已启用世界书；没有解析结果时会按常驻/关键字触发，并套用这些排除条目。'
         : '每行一个条目名。正常模式下，这些条目会从 worldbook 传输中排除。';
   }
   if (globalInput) {
@@ -223,76 +218,6 @@ function syncWorldbookFilterInput(ctx) {
       ? '每行一个“书名 :: 条目名”。参考模式下，仅这些全域条目会传给 tracker。'
       : '每行一个“书名 :: 条目名”。正常模式下，这些全域条目会从 worldbook 传输中排除。';
   }
-}
-
-function trimMainflowSnapshotContent(content) {
-  return String(content || '');
-}
-
-function normalizeMainflowSnapshotMessages(messages) {
-  return (Array.isArray(messages) ? messages : [])
-    .filter((message) => message && typeof message === 'object')
-    .slice(-MAX_MAINFLOW_SNAPSHOT_MESSAGES)
-    .map((message) => ({
-      role: String(message.role || 'user'),
-      content: trimMainflowSnapshotContent(message.content ?? message.text ?? ''),
-      name: message.name ? String(message.name) : undefined,
-    }))
-    .filter((message) => message.content);
-}
-
-function captureMainflowRequestBody(body, source = 'fetch') {
-  if (!body || typeof body !== 'object') return;
-  const messages = normalizeMainflowSnapshotMessages(body.messages);
-  if (messages.length === 0) return;
-  globalThis[MAINFLOW_CONTEXT_SNAPSHOT_KEY] = {
-    source,
-    capturedAt: Date.now(),
-    model: body.model ? String(body.model) : '',
-    messages,
-  };
-  globalThis[DEBUG_LAST_MAINFLOW_SNAPSHOT_KEY] = globalThis[MAINFLOW_CONTEXT_SNAPSHOT_KEY];
-}
-
-function parseJsonText(value) {
-  if (!value || typeof value !== 'string') return null;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
-}
-
-function parseFetchBodyFromInit(init) {
-  const raw = init?.body;
-  return parseJsonText(raw);
-}
-
-async function parseFetchBodyFromRequest(input) {
-  if (!input || typeof input !== 'object' || typeof input.clone !== 'function') return null;
-  try {
-    return await input.clone().json();
-  } catch {
-    return null;
-  }
-}
-
-function installMainflowRequestCapture() {
-  if (globalThis[FETCH_CAPTURE_READY_KEY] || typeof globalThis.fetch !== 'function') return;
-  const originalFetch = globalThis.fetch.bind(globalThis);
-  globalThis[ORIGINAL_FETCH_KEY] = originalFetch;
-  globalThis.fetch = async (...args) => {
-    if (!globalThis.__bs_biotracker_async_request__) {
-      try {
-        const body = parseFetchBodyFromInit(args[1]) || await parseFetchBodyFromRequest(args[0]);
-        captureMainflowRequestBody(body, 'fetch');
-      } catch (error) {
-        console.warn('[BS BioTracker] mainflow request capture failed', error);
-      }
-    }
-    return originalFetch(...args);
-  };
-  globalThis[FETCH_CAPTURE_READY_KEY] = true;
 }
 
 function saveWorldbookExcludeNamesFromList(ctx, names) {
@@ -1306,36 +1231,38 @@ function getUterinePressureCap(stage, profile = null) {
   return 50;
 }
 
-function getMetabolismLevel(value) {
+function getMetabolismLevel(value, cap = 150) {
   const next = Number(value) || 0;
-  if (next >= 125) return '爆';
-  if (next >= 100) return '满';
-  if (next >= 75) return '高';
-  if (next >= 50) return '中';
-  if (next >= 25) return '低';
+  const scale = Math.max(1, Number(cap) || 150) / 150;
+  if (next >= 125 * scale) return '爆';
+  if (next >= 100 * scale) return '满';
+  if (next >= 75 * scale) return '高';
+  if (next >= 50 * scale) return '中';
+  if (next >= 25 * scale) return '低';
   return '无';
 }
 
-function getDerivedFluxSummary(value) {
+function getDerivedFluxSummary(value, cap = 150) {
   const next = Number(value) || 0;
   const abs = Math.abs(next);
+  const scale = Math.max(1, Number(cap) || 150) / 150;
   const polarity = next >= 0 ? '正极' : '负极';
   let stage = '平衡';
   let description = '需求接近平衡，暂时没有明显偏向。';
 
-  if (abs >= 125) {
+  if (abs >= 125 * scale) {
     stage = `${polarity}爆发`;
     description = `需求已严重偏向${polarity}，应尽快解放，否则容易压过理智与自控。`;
-  } else if (abs >= 100) {
+  } else if (abs >= 100 * scale) {
     stage = `${polarity}饱和`;
     description = `需求已高度集中于${polarity}，再继续累积就会逼近失衡边缘。`;
-  } else if (abs >= 75) {
+  } else if (abs >= 75 * scale) {
     stage = `${polarity}高涨`;
     description = `需求明显偏向${polarity}，已进入需要认真处理的危险区。`;
-  } else if (abs >= 50) {
+  } else if (abs >= 50 * scale) {
     stage = `${polarity}活跃`;
     description = `需求正稳定向${polarity}偏移，已经能感受到持续牵引。`;
-  } else if (abs >= 25) {
+  } else if (abs >= 25 * scale) {
     stage = `${polarity}浮动`;
     description = `需求轻度偏向${polarity}，目前仍属于可控范围。`;
   }
@@ -1344,33 +1271,33 @@ function getDerivedFluxSummary(value) {
 }
 
 const METABOLISM_NEED_LABELS = Object.freeze({
-  urine: '尿意',
-  stool: '便意',
+  excretion: '泄意',
   hunger: '饿意',
   sleep: '困意',
-  milk: '奶意',
+  milk: '乳意',
   odor: '臭意',
+  companionship: '伴意',
   flux: '极需',
 });
 
 const DEBUG_BLOCKAGE_LABELS = Object.freeze({
-  urine: '尿意',
-  stool: '便意',
+  excretion: '泄意',
   hunger: '饿意',
   sleep: '困意',
-  milk: '奶意',
+  milk: '乳意',
   odor: '臭意',
+  companionship: '伴意',
   fluxPositive: '极需正极',
   fluxNegative: '极需负极',
 });
 
 const DEBUG_BLOCKAGE_DEFAULT_SEVERITY = Object.freeze({
-  urine: 0.60,
-  stool: 0.80,
+  excretion: 0.70,
   hunger: 0.55,
   sleep: 0.55,
   milk: 0.55,
   odor: 0.45,
+  companionship: 0.55,
   fluxPositive: 0.65,
   fluxNegative: 0.65,
 });
@@ -1381,51 +1308,65 @@ function clampUiNumber(value, min, max, fallback = 0) {
   return Math.max(min, Math.min(max, next));
 }
 
-function normalizeMetabolismNeed(key, metabolism = {}, blockage = null) {
+function normalizeMetabolismNeed(key, metabolism = {}, blockage = null, acceleration = null, expansion = null) {
+  const expansionKey = String(expansion?.key || '');
+  const rawValue = Number(metabolism[key]) || 0;
+  const expanded = key === 'flux'
+    ? (rawValue > 0 && expansionKey === 'fluxPositive') || (rawValue < 0 && expansionKey === 'fluxNegative')
+    : expansionKey === key;
+  const cap = expanded ? 200 : 150;
   const value = key === 'flux'
-    ? clampUiNumber(metabolism[key], -150, 150, 0)
-    : clampUiNumber(metabolism[key], 0, 150, 0);
+    ? clampUiNumber(metabolism[key], -cap, cap, 0)
+    : clampUiNumber(metabolism[key], 0, cap, 0);
   const blockageKey = String(blockage?.key || '');
+  const accelerationKey = String(acceleration?.key || '');
   const blocked = key === 'flux'
     ? (value > 0 && blockageKey === 'fluxPositive') || (value < 0 && blockageKey === 'fluxNegative')
     : blockageKey === key;
+  const accelerated = key === 'flux'
+    ? (value > 0 && accelerationKey === 'fluxPositive') || (value < 0 && accelerationKey === 'fluxNegative')
+    : accelerationKey === key;
   return {
     key,
     label: METABOLISM_NEED_LABELS[key] || key,
     value,
-    level: key === 'flux' ? getDerivedFluxSummary(value) : getMetabolismLevel(value),
+    cap,
+    level: key === 'flux' ? getDerivedFluxSummary(value, cap) : getMetabolismLevel(value, cap),
     blocked,
     blockageSeverity: blocked ? clampUiNumber(blockage?.severity, 0, 1, 0) : 0,
+    accelerated,
+    accelerationSeverity: accelerated ? clampUiNumber(acceleration?.severity, 0, 1, 0) : 0,
+    expanded,
   };
 }
 
-function getMetabolismSummary(metabolism = {}, immune = {}, derivedType = null, blockage = null) {
+function getMetabolismSummary(metabolism = {}, immune = {}, derivedType = null, blockage = null, acceleration = null, expansion = null) {
   if (immune?.metabolism) return '代谢免疫';
   if (derivedType) {
     const exemptions = new Set(getDerivedTypeMetabolismExemptions(derivedType));
-    const visible = (key) => (exemptions.has(key) ? null : normalizeMetabolismNeed(key, metabolism, blockage));
+    const visible = (key) => (exemptions.has(key) ? null : normalizeMetabolismNeed(key, metabolism, blockage, acceleration, expansion));
     return {
-      flux: normalizeMetabolismNeed('flux', metabolism, blockage),
+      flux: normalizeMetabolismNeed('flux', metabolism, blockage, acceleration, expansion),
       hunger: visible('hunger'),
       sleep: visible('sleep'),
-      urine: visible('urine'),
-      stool: visible('stool'),
+      excretion: visible('excretion'),
       milk: visible('milk'),
       odor: visible('odor'),
+      companionship: visible('companionship'),
       derived: true,
     };
   }
   return {
-    hunger: normalizeMetabolismNeed('hunger', metabolism, blockage),
-    sleep: normalizeMetabolismNeed('sleep', metabolism, blockage),
-    urine: normalizeMetabolismNeed('urine', metabolism, blockage),
-    stool: normalizeMetabolismNeed('stool', metabolism, blockage),
-    milk: normalizeMetabolismNeed('milk', metabolism, blockage),
-    odor: normalizeMetabolismNeed('odor', metabolism, blockage),
+    hunger: normalizeMetabolismNeed('hunger', metabolism, blockage, acceleration, expansion),
+    sleep: normalizeMetabolismNeed('sleep', metabolism, blockage, acceleration, expansion),
+    excretion: normalizeMetabolismNeed('excretion', metabolism, blockage, acceleration, expansion),
+    milk: normalizeMetabolismNeed('milk', metabolism, blockage, acceleration, expansion),
+    odor: normalizeMetabolismNeed('odor', metabolism, blockage, acceleration, expansion),
+    companionship: normalizeMetabolismNeed('companionship', metabolism, blockage, acceleration, expansion),
   };
 }
 
-const METABOLISM_DISPLAY_ORDER = Object.freeze(['urine', 'stool', 'hunger', 'sleep', 'milk', 'odor']);
+const METABOLISM_DISPLAY_ORDER = Object.freeze(['excretion', 'hunger', 'sleep', 'milk', 'odor', 'companionship']);
 
 function getMetabolismNeedItems(summary) {
   if (!summary || typeof summary !== 'object') return [];
@@ -1439,23 +1380,26 @@ function getMetabolismNeedItems(summary) {
 function renderMetabolismNeedIcon(item) {
   const key = String(item?.key || '');
   const value = Number(item?.value) || 0;
+  const cap = Number(item?.cap) === 200 ? 200 : 150;
   const fillValue = key === 'flux' ? Math.abs(value) : value;
   const fill = key === 'flux'
-    ? Math.max(0, Math.min(100, (fillValue / 150) * 100))
+    ? Math.max(0, Math.min(100, (fillValue / cap) * 100))
     : Math.max(0, Math.min(100, (fillValue / 100) * 100));
   const overfill = key === 'flux'
     ? 0
-    : Math.max(0, Math.min(100, ((fillValue - 100) / 50) * 100));
+    : Math.max(0, Math.min(100, ((fillValue - 100) / (cap - 100)) * 100));
   const tone = key === 'flux'
     ? value > 0 ? 'positive' : value < 0 ? 'negative' : 'neutral'
     : value >= 100 ? 'high' : 'normal';
-  const title = `${item.label}: ${item.level}${key === 'flux' ? '' : ` (${Math.round(value)})`}${item.blocked ? `；阻塞 ${Math.round((item.blockageSeverity || 0) * 100)}%` : ''}`;
+  const title = `${item.label}: ${item.level}${key === 'flux' ? '' : ` (${Math.round(value)})`}${item.blocked ? `；阻塞 ${Math.round((item.blockageSeverity || 0) * 100)}%` : ''}${item.accelerated ? `；快积 ${Math.round((item.accelerationSeverity || 0) * 100)}%` : ''}${item.expanded ? '；扩容至 200' : ''}`;
   const displayValue = key === 'flux'
     ? (value > 0 ? '正极' : value < 0 ? '负极' : '平衡')
     : String(Math.round(value));
   return `
-    <div class="bs-bt-need-tile bs-bt-need-tile--${escapeHtml(key)} bs-bt-need-tile--${tone}${item.blocked ? ' is-blocked' : ''}" aria-label="${escapeHtml(title)}">
+    <div class="bs-bt-need-tile bs-bt-need-tile--${escapeHtml(key)} bs-bt-need-tile--${tone}${item.blocked ? ' is-blocked' : ''}${item.accelerated ? ' is-accelerated' : ''}${item.expanded ? ' is-expanded' : ''}" aria-label="${escapeHtml(title)}">
       ${item.blocked ? '<span class="bs-bt-need-blockage" aria-hidden="true"></span>' : ''}
+      ${item.accelerated ? '<span class="bs-bt-need-acceleration" aria-hidden="true"></span>' : ''}
+      ${item.expanded ? '<span class="bs-bt-need-expansion" aria-hidden="true"></span>' : ''}
       <span class="bs-bt-need-icon-wrap" style="--bs-bt-need-fill: ${fill.toFixed(1)}%; --bs-bt-need-overfill: ${overfill.toFixed(1)}%;">
         <span class="bs-bt-need-icon bs-bt-need-icon--${escapeHtml(key)} bs-bt-need-icon-base" aria-hidden="true"></span>
         <span class="bs-bt-need-icon-fill" aria-hidden="true">
@@ -1605,7 +1549,7 @@ function buildTrackCharacterViewModel(character) {
         },
         { label: '宫压', value: Number(base.uterinePressure) || 0, cap: getUterinePressureCap(stage, profile) },
       ],
-      metabolismSummary: getMetabolismSummary(profile.metabolism, immune, base.derivedType, pregnant.blockage),
+      metabolismSummary: getMetabolismSummary(profile.metabolism, immune, base.derivedType, pregnant.blockage, pregnant.acceleration, pregnant.expansion),
     },
     description: {
       normalBlocks: parseDescriptionBlocks(descriptions.normalDescription),
@@ -1679,6 +1623,13 @@ function buildTrackCharacterViewModel(character) {
       blockage: pregnant.blockage && typeof pregnant.blockage === 'object' ? {
         key: String(pregnant.blockage.key || ''),
         severity: Number(pregnant.blockage.severity) || 0,
+      } : null,
+      acceleration: pregnant.acceleration && typeof pregnant.acceleration === 'object' ? {
+        key: String(pregnant.acceleration.key || ''),
+        severity: Number(pregnant.acceleration.severity) || 0,
+      } : null,
+      expansion: pregnant.expansion && typeof pregnant.expansion === 'object' ? {
+        key: String(pregnant.expansion.key || ''),
       } : null,
       hasConceptionState: (Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0)
         || (Number(base.fertilizationDays) || 0) > 0
@@ -1965,7 +1916,10 @@ function renderTrackDebug(viewModel) {
   const hasConceptionState = Boolean(viewModel.debug?.hasConceptionState);
   const gestationModifier = viewModel.debug?.gestationModifier || {};
   const derivedType = String(viewModel.debug?.derivedType || '').trim();
+  const currentStage = viewModel.base?.stage || '';
   const currentBlockageKey = String(viewModel.debug?.blockage?.key || '');
+  const currentAccelerationKey = String(viewModel.debug?.acceleration?.key || '');
+  const currentExpansionKey = String(viewModel.debug?.expansion?.key || '');
   const blockageExemptions = derivedType ? new Set(getDerivedTypeMetabolismExemptions(derivedType)) : new Set();
   const blockageKeys = METABOLISM_DISPLAY_ORDER.filter((key) => !blockageExemptions.has(key));
   if (derivedType) blockageKeys.push('fluxPositive', 'fluxNegative');
@@ -1975,8 +1929,19 @@ function renderTrackDebug(viewModel) {
       `<option value="${escapeHtml(key)}"${currentBlockageKey === key ? ' selected' : ''}>${escapeHtml(DEBUG_BLOCKAGE_LABELS[key] || key)}</option>`,
     ),
   ].join('');
+  const accelerationOptions = [
+    `<option value=""${currentAccelerationKey ? '' : ' selected'}>无</option>`,
+    ...blockageKeys.map((key) =>
+      `<option value="${escapeHtml(key)}"${currentAccelerationKey === key ? ' selected' : ''}>${escapeHtml(DEBUG_BLOCKAGE_LABELS[key] || key)}</option>`,
+    ),
+  ].join('');
+  const expansionOptions = [
+    `<option value=""${currentExpansionKey ? '' : ' selected'}>无</option>`,
+    ...blockageKeys.map((key) =>
+      `<option value="${escapeHtml(key)}"${currentExpansionKey === key ? ' selected' : ''}>${escapeHtml(DEBUG_BLOCKAGE_LABELS[key] || key)}</option>`,
+    ),
+  ].join('');
 
-  const currentStage = viewModel.base?.stage || '';
   const hasProtectedPregnancyState = hasConceptionState || ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产兆前驱', '第一产程', '第二产程', '第三产程'].includes(currentStage);
   const canEnterProdromal = ['孕晚期', '临产期', '逾期'].includes(currentStage);
   const isProdromal = currentStage === '产兆前驱';
@@ -2037,16 +2002,37 @@ function renderTrackDebug(viewModel) {
       <div class="bs-bt-track-debug-hint">淨空胎儿时，若当前已是着床后的妊娠状态，会追加一次流产/堕胎经验；尚未着床的受精卵不计入。</div>
     </div>
     <div class="bs-bt-track-section" style="margin-top: 10px;">
-      <div class="bs-bt-track-section-title">妊娠阻塞调适</div>
+      <div class="bs-bt-track-section-title">妊娠需求症状调试</div>
       <fieldset class="bs-bt-track-debug-form">
-        <div class="bs-bt-track-inline-action">
-          <select id="bs-bt-debug-blockage-select" class="text_pole">
-            ${blockageOptions}
-          </select>
-          <button type="button" class="menu_button bs-bt-inline-button" data-debug-action="set-blockage">应用阻塞</button>
+        <div class="bs-bt-track-debug-field">
+          <div class="bs-bt-track-debug-label">阻塞：降低排解效果（当前强度 ${Number(viewModel.debug?.blockage?.severity || 0).toFixed(2)}）</div>
+          <div class="bs-bt-track-inline-action">
+            <select id="bs-bt-debug-blockage-select" class="text_pole">
+              ${blockageOptions}
+            </select>
+            <button type="button" class="menu_button bs-bt-inline-button" data-debug-action="set-blockage">应用阻塞</button>
+          </div>
+        </div>
+        <div class="bs-bt-track-debug-field">
+          <div class="bs-bt-track-debug-label">快积：增加累积速度（当前强度 ${Number(viewModel.debug?.acceleration?.severity || 0).toFixed(2)}）</div>
+          <div class="bs-bt-track-inline-action">
+            <select id="bs-bt-debug-acceleration-select" class="text_pole">
+              ${accelerationOptions}
+            </select>
+            <button type="button" class="menu_button bs-bt-inline-button" data-debug-action="set-acceleration">应用快积</button>
+          </div>
+        </div>
+        <div class="bs-bt-track-debug-field">
+          <div class="bs-bt-track-debug-label">扩容：需求上限由 150 提高到 200</div>
+          <div class="bs-bt-track-inline-action">
+            <select id="bs-bt-debug-expansion-select" class="text_pole">
+              ${expansionOptions}
+            </select>
+            <button type="button" class="menu_button bs-bt-inline-button" data-debug-action="set-expansion">应用扩容</button>
+          </div>
         </div>
       </fieldset>
-      <div class="bs-bt-track-debug-hint">衍生角色只会列出未被代谢抵免的需求；非衍生角色不会出现 flux。当前强度 ${Number(viewModel.debug?.blockage?.severity || 0).toFixed(2)}。</div>
+      <div class="bs-bt-track-debug-hint">阻塞、快积与扩容不能作用于同一需求；设置冲突项时会自动替换原症状。</div>
     </div>
     <div class="bs-bt-track-section" style="margin-top: 10px;">
       <div class="bs-bt-track-section-title">生理周期强制切換</div>
@@ -2105,7 +2091,7 @@ function renderTrackDebug(viewModel) {
       <div class="bs-bt-track-debug-hint">${canSetProdromal ? '0% 为刚进入产兆前驱，100% 为剩余时间耗尽；设为 100% 后，下一次时间推进会进入第一产程。' : '只有孕晚期、临产期或逾期角色可以切换至产兆前驱。'}</div>
     </div>
     <div class="bs-bt-track-section" style="margin-top: 10px;">
-      <div class="bs-bt-track-section-title">胎儿自主活动调适</div>
+      <div class="bs-bt-track-section-title">胎儿自主活动调试</div>
       <fieldset class="bs-bt-track-debug-form"${canTriggerFetalActivity ? '' : ' disabled'}>
         <label class="bs-bt-track-debug-field">
           <span class="bs-bt-track-debug-label">事件内容</span>
@@ -2320,6 +2306,20 @@ function clearSelectedTrackContainer(ctx, container) {
   globalThis.toastr?.success?.(`[BS BioTracker] 已为 ${selectedTrackName} 淨空${label}`);
 }
 
+function clampSelectedTrackExpansionCapacity(profile) {
+  const metabolism = profile?.metabolism;
+  if (!metabolism || typeof metabolism !== 'object') return;
+  const expansionKey = String(profile?.pregnant?.expansion?.key || '');
+  for (const key of METABOLISM_DISPLAY_ORDER) {
+    const cap = expansionKey === key ? 200 : 150;
+    metabolism[key] = Math.max(0, Math.min(cap, Number(metabolism[key]) || 0));
+  }
+  const flux = Number(metabolism.flux) || 0;
+  const isExpandedFlux = (flux > 0 && expansionKey === 'fluxPositive') || (flux < 0 && expansionKey === 'fluxNegative');
+  const fluxCap = isExpandedFlux ? 200 : 150;
+  metabolism.flux = Math.max(-fluxCap, Math.min(fluxCap, flux));
+}
+
 function setSelectedTrackBlockage(ctx, key) {
   if (!selectedTrackName) return;
   const settings = getSettings(ctx);
@@ -2348,8 +2348,11 @@ function setSelectedTrackBlockage(ctx, key) {
       key: nextKey,
       severity: DEBUG_BLOCKAGE_DEFAULT_SEVERITY[nextKey] || 0.5,
     };
+    if (profile.pregnant.acceleration?.key === nextKey) profile.pregnant.acceleration = null;
+    if (profile.pregnant.expansion?.key === nextKey) profile.pregnant.expansion = null;
   }
 
+  clampSelectedTrackExpansionCapacity(profile);
   recordChatStateSnapshot(ctx, chatState, { reason: 'debug_set_pregnancy_blockage' });
   saveSettings(ctx);
   renderStatusPanel(ctx);
@@ -2358,6 +2361,87 @@ function setSelectedTrackBlockage(ctx, key) {
     nextKey
       ? `[BS BioTracker] 已设置 ${selectedTrackName} 的妊娠阻塞：${DEBUG_BLOCKAGE_LABELS[nextKey] || nextKey}`
       : `[BS BioTracker] 已清除 ${selectedTrackName} 的妊娠阻塞`,
+  );
+}
+
+function setSelectedTrackAcceleration(ctx, key) {
+  if (!selectedTrackName) return;
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const character = chatState.characters?.[selectedTrackName];
+  if (!character?.profile) return;
+
+  const profile = character.profile;
+  const derivedType = String(profile?.base?.derivedType || '').trim();
+  const exemptions = derivedType ? new Set(getDerivedTypeMetabolismExemptions(derivedType)) : new Set();
+  const allowed = new Set(METABOLISM_DISPLAY_ORDER.filter((item) => !exemptions.has(item)));
+  if (derivedType) {
+    allowed.add('fluxPositive');
+    allowed.add('fluxNegative');
+  }
+  const nextKey = String(key || '').trim();
+  profile.pregnant = profile.pregnant && typeof profile.pregnant === 'object' ? profile.pregnant : {};
+  if (!nextKey) {
+    profile.pregnant.acceleration = null;
+  } else if (!allowed.has(nextKey)) {
+    globalThis.toastr?.warning?.('[BS BioTracker] 该角色不能使用这个妊娠快积项');
+    return;
+  } else {
+    profile.pregnant.acceleration = {
+      key: nextKey,
+      severity: DEBUG_BLOCKAGE_DEFAULT_SEVERITY[nextKey] || 0.5,
+    };
+    if (profile.pregnant.blockage?.key === nextKey) profile.pregnant.blockage = null;
+    if (profile.pregnant.expansion?.key === nextKey) profile.pregnant.expansion = null;
+  }
+  clampSelectedTrackExpansionCapacity(profile);
+  recordChatStateSnapshot(ctx, chatState, { reason: 'debug_set_pregnancy_acceleration' });
+  saveSettings(ctx);
+  renderStatusPanel(ctx);
+  renderFullStatePage(ctx);
+  globalThis.toastr?.success?.(
+    nextKey
+      ? `[BS BioTracker] 已设置 ${selectedTrackName} 的妊娠快积：${DEBUG_BLOCKAGE_LABELS[nextKey] || nextKey}`
+      : `[BS BioTracker] 已清除 ${selectedTrackName} 的妊娠快积`,
+  );
+}
+
+function setSelectedTrackExpansion(ctx, key) {
+  if (!selectedTrackName) return;
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const character = chatState.characters?.[selectedTrackName];
+  if (!character?.profile) return;
+
+  const profile = character.profile;
+  const derivedType = String(profile?.base?.derivedType || '').trim();
+  const exemptions = derivedType ? new Set(getDerivedTypeMetabolismExemptions(derivedType)) : new Set();
+  const allowed = new Set(METABOLISM_DISPLAY_ORDER.filter((item) => !exemptions.has(item)));
+  if (derivedType) {
+    allowed.add('fluxPositive');
+    allowed.add('fluxNegative');
+  }
+  const nextKey = String(key || '').trim();
+  profile.pregnant = profile.pregnant && typeof profile.pregnant === 'object' ? profile.pregnant : {};
+  if (!nextKey) {
+    profile.pregnant.expansion = null;
+  } else if (!allowed.has(nextKey)) {
+    globalThis.toastr?.warning?.('[BS BioTracker] 该角色不能使用这个妊娠扩容项');
+    return;
+  } else {
+    profile.pregnant.expansion = { key: nextKey, severity: 1 };
+    if (profile.pregnant.blockage?.key === nextKey) profile.pregnant.blockage = null;
+    if (profile.pregnant.acceleration?.key === nextKey) profile.pregnant.acceleration = null;
+  }
+  clampSelectedTrackExpansionCapacity(profile);
+  recordChatStateSnapshot(ctx, chatState, { reason: 'debug_set_pregnancy_expansion' });
+  saveSettings(ctx);
+  renderStatusPanel(ctx);
+  renderFullStatePage(ctx);
+  globalThis.toastr?.success?.(
+    nextKey
+      ? `[BS BioTracker] 已设置 ${selectedTrackName} 的妊娠扩容：${DEBUG_BLOCKAGE_LABELS[nextKey] || nextKey}`
+      : `[BS BioTracker] 已清除 ${selectedTrackName} 的妊娠扩容`,
   );
 }
 
@@ -2420,6 +2504,18 @@ function bindDebugPanelControls(ctx, root, refresh = () => renderFullStatePage(c
     node.addEventListener('click', () => {
       const key = root.querySelector('#bs-bt-debug-blockage-select')?.value || '';
       setSelectedTrackBlockage(ctx, key);
+    }),
+  );
+  root.querySelectorAll('[data-debug-action="set-acceleration"]').forEach((node) =>
+    node.addEventListener('click', () => {
+      const key = root.querySelector('#bs-bt-debug-acceleration-select')?.value || '';
+      setSelectedTrackAcceleration(ctx, key);
+    }),
+  );
+  root.querySelectorAll('[data-debug-action="set-expansion"]').forEach((node) =>
+    node.addEventListener('click', () => {
+      const key = root.querySelector('#bs-bt-debug-expansion-select')?.value || '';
+      setSelectedTrackExpansion(ctx, key);
     }),
   );
   root.querySelectorAll('[data-debug-clear]').forEach((node) =>
@@ -2711,6 +2807,24 @@ function renderStatusPanel(ctx) {
   content.querySelectorAll('[data-debug-action="clear-gestation-modifier"]').forEach((node) =>
     node.addEventListener('click', () => {
       applySelectedTrackGestationModifier(ctx, true);
+    }),
+  );
+  content.querySelectorAll('[data-debug-action="set-blockage"]').forEach((node) =>
+    node.addEventListener('click', () => {
+      const key = content.querySelector('#bs-bt-debug-blockage-select')?.value || '';
+      setSelectedTrackBlockage(ctx, key);
+    }),
+  );
+  content.querySelectorAll('[data-debug-action="set-acceleration"]').forEach((node) =>
+    node.addEventListener('click', () => {
+      const key = content.querySelector('#bs-bt-debug-acceleration-select')?.value || '';
+      setSelectedTrackAcceleration(ctx, key);
+    }),
+  );
+  content.querySelectorAll('[data-debug-action="set-expansion"]').forEach((node) =>
+    node.addEventListener('click', () => {
+      const key = content.querySelector('#bs-bt-debug-expansion-select')?.value || '';
+      setSelectedTrackExpansion(ctx, key);
     }),
   );
   content.querySelectorAll('[data-debug-action="set-prodromal"]').forEach((node) =>
@@ -4459,6 +4573,28 @@ async function ensureModal(ctx) {
     setRegisterStatus('当前聊天状态已清除。');
     globalThis.toastr?.success?.('[BS BioTracker] 当前聊天状态已清除');
   });
+  document.getElementById('bs-bt-clear-all-chats')?.addEventListener('click', () => {
+    const settings = getSettings(ctx);
+    const chatCount = Object.keys(settings.chatStates || {}).length;
+    if (chatCount <= 0) {
+      globalThis.toastr?.info?.('[BS BioTracker] 没有可清除的聊天追踪状态');
+      return;
+    }
+    const confirmed = globalThis.confirm?.(
+      `[BS BioTracker] 确定清空全部 ${chatCount} 个聊天的追踪状态吗？\n\n角色状态、快照、日记与累计时间都会删除，且无法复原。设置与种族参数不会被清除。`,
+    );
+    if (!confirmed) return;
+    settings.chatStates = {};
+    selectedTrackName = '';
+    selectedFullStateName = '';
+    closeFullStateConfirm();
+    saveSettings(ctx);
+    renderStatusPanel(ctx);
+    renderFullStatePage(ctx);
+    updateMainFlowPrompt(ctx);
+    setRegisterStatus(`已清空全部 ${chatCount} 个聊天的 BioTracker 追踪状态。`);
+    globalThis.toastr?.success?.(`[BS BioTracker] 已清空全部 ${chatCount} 个聊天的追踪状态`);
+  });
   document.getElementById('bs-bt-close')?.addEventListener('click', () => {
     const modalRoot = document.getElementById(MODAL_ID);
     const dialog = modalRoot?.querySelector('.bs-bt-modal__dialog');
@@ -4656,7 +4792,6 @@ async function bootstrap() {
   if (globalThis[BOOTSTRAP_RUNTIME_KEY]) return;
   globalThis[BOOTSTRAP_RUNTIME_KEY] = true;
   try {
-    installMainflowRequestCapture();
     await ensureModal(ctx);
     await registerMenuItem(ctx);
     trackerDeps.updateMainFlowPrompt = updateMainFlowPrompt;

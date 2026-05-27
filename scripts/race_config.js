@@ -176,16 +176,16 @@ export const DERIVED_TYPE_FLUX_PROFILES = Object.freeze({
 });
 
 export const DERIVED_TYPE_METABOLISM_EXEMPTIONS = Object.freeze({
-  "血族": Object.freeze(["hunger", "stool", "urine"]),
+  "血族": Object.freeze(["hunger", "excretion", "odor"]),
   "不死": Object.freeze(["odor", "sleep", "milk"]),
-  "修行": Object.freeze(["hunger", "stool", "sleep"]),
-  "妖怪": Object.freeze(["hunger", "urine", "stool"]),
-  "神祇": Object.freeze(["hunger", "sleep", "odor"]),
-  "机械": Object.freeze(["hunger", "stool", "milk"]),
-  "器灵": Object.freeze(["hunger", "urine", "milk"]),
-  "星际": Object.freeze(["sleep", "urine", "milk"]),
+  "修行": Object.freeze(["hunger", "excretion", "companionship"]),
+  "妖怪": Object.freeze(["hunger", "excretion", "sleep"]),
+  "神祇": Object.freeze(["hunger", "sleep", "companionship"]),
+  "机械": Object.freeze(["hunger", "milk", "companionship"]),
+  "器灵": Object.freeze(["hunger", "milk", "sleep"]),
+  "星际": Object.freeze(["sleep", "milk", "companionship"]),
   "变异": Object.freeze(["sleep", "hunger", "odor"]),
-  "序列": Object.freeze(["sleep", "odor", "milk"]),
+  "序列": Object.freeze(["sleep", "odor", "companionship"]),
 });
 
 export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({

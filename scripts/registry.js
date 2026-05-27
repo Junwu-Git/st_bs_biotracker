@@ -37,7 +37,6 @@ import {
   saveSettings,
 } from './state.js';
 
-const MAINFLOW_CONTEXT_SNAPSHOT_KEY = '__bs_biotracker_mainflow_context_snapshot__';
 const DEBUG_LAST_REGISTRY_REQUEST_KEY = '__bs_biotracker_debug_last_registry_request__';
 const DEBUG_LAST_REGISTRY_RESULT_KEY = '__bs_biotracker_debug_last_registry_result__';
 
@@ -217,27 +216,6 @@ async function getFilteredGlobalWorldbooks(ctx, settings, recentMessages = []) {
   }
 }
 
-function getMainflowContextSnapshot() {
-  const snapshot = globalThis[MAINFLOW_CONTEXT_SNAPSHOT_KEY];
-  if (!snapshot || typeof snapshot !== 'object') return null;
-  const messages = Array.isArray(snapshot.messages)
-    ? snapshot.messages
-      .filter((message) => message && typeof message === 'object' && String(message.content || '').trim())
-      .map((message) => ({
-        role: String(message.role || 'user'),
-        content: String(message.content || ''),
-        name: message.name ? String(message.name) : undefined,
-      }))
-    : [];
-  if (messages.length === 0) return null;
-  return {
-    source: String(snapshot.source || 'st_request'),
-    capturedAt: Number(snapshot.capturedAt || 0) || null,
-    model: snapshot.model ? String(snapshot.model) : '',
-    messages,
-  };
-}
-
 function recordRegistryRequestDebug(systemPrompt, payload) {
   globalThis[DEBUG_LAST_REGISTRY_REQUEST_KEY] = {
     capturedAt: Date.now(),
@@ -308,7 +286,7 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '- base.uterinePressure: 初始宫压。非妊娠上限50；妊娠後会随进度平滑提升，臨產期上限达150。【危险警告】孕早期与孕中期前期上限极低，超过15便极易触发流产警告！除非开局正在临盆或剧烈腹痛，否则强烈建议填 0。',
     '- base.latestSexDays: 距最近一次性行为经过的天数。若 experience.latestSexPartner 有意义，建议一并填写；若已超过最近一月经周期或无从判断，可为 null。',
     '- base.sperms: 体内残留精液来源列表。适用于刚性交结束、仍有精液残留的开局；每项包含 male、race、value。race 可直接写 [衍生]种族，系统会自动拆出 derivedType。',
-    '- metabolism: 初始代谢状态。普通种族上限皆為150，包含 urine、stool、hunger、sleep、milk、odor；可用于表达一开始很饿、很困、憋尿、乳胀或需要清理等状态。',
+    '- metabolism: 初始需求状态。普通种族上限皆為150，包含 excretion、hunger、sleep、milk、odor、companionship，分别表示泄意、饿意、困意、乳意、臭意、伴意；excretion（泄意）同时包含排尿与排便需求；milk 在普通周期表示乳房胀敏或周期不适，在妊娠、假孕或产后恢复阶段也可表示泌乳需求。',
     '- 若 base.derivedType 不为 null，则 metabolism 可填写 flux（范围 -150 到 150），并保留该衍生类型未抵免的普通需求。flux 是衍生种族专用的单一极性需求值：正值与负值分别代表两种相反的释放需求，绝对值越高需求越强。',
     '- pregnant.nutrition 是妊娠供养力盈余/赤字，专注参与胎儿体重/供养结算，不作为 metabolism 排解阻塞来源。',
     '注意：vitalityLevel 与 psyStressLevel 是角色内在特质等级，不根据当前疲劳、刚哭过、当下崩溃等暂时状态调整。',
@@ -470,12 +448,12 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '      }',
     '    },',
     '    "metabolism": {',
-    '      "urine": 0,',
-    '      "stool": 0,',
+    '      "excretion": 0,',
     '      "hunger": 0,',
     '      "sleep": 0,',
     '      "milk": 0,',
-    '      "odor": 0',
+    '      "odor": 0,',
+    '      "companionship": 0',
     '    },',
     '    "children": [],',
     '    "diary": [',
@@ -510,7 +488,7 @@ const EXPERIENCE_FIELDS = [
 ];
 
 const DESCRIPTION_FIELDS = ['normalDescription', 'closeupDescription', 'pregnantDescription'];
-const METABOLISM_FIELDS = ['urine', 'stool', 'hunger', 'sleep', 'milk', 'odor', 'flux'];
+const METABOLISM_FIELDS = ['excretion', 'hunger', 'sleep', 'milk', 'odor', 'companionship', 'flux'];
 
 function clampNumber(value, min, max, fallback = 0) {
   const next = Number(value);
@@ -896,15 +874,6 @@ export async function runRegistry(ctx, options = {}) {
   if (!targetName) throw new Error('runRegistry 需要 targetName');
   const currentCharacter = getCharacterCard(ctx);
   const recentMessages = buildRecentMessages(ctx, settings);
-  const useMainflowMode = normalizeWorldbookMode(settings?.trackerWorldbookMode) === 'mainflow';
-  let mainflowContextSnapshot = useMainflowMode ? getMainflowContextSnapshot() : null;
-  if (mainflowContextSnapshot && settings?.useStPresetForAsync) {
-    mainflowContextSnapshot = {
-      ...mainflowContextSnapshot,
-      messages: mainflowContextSnapshot.messages.filter((message) => message.role !== 'system'),
-    };
-    if (mainflowContextSnapshot.messages.length === 0) mainflowContextSnapshot = null;
-  }
   const rawCharacterWorldBook = await getCharacterWorldBook(ctx);
   const characterWorldBook = filterRegistryWorldbookEntries(
     rawCharacterWorldBook,
@@ -912,8 +881,8 @@ export async function runRegistry(ctx, options = {}) {
     settings,
     recentMessages,
   );
-  const payloadWorldBook = mainflowContextSnapshot ? null : characterWorldBook;
-  const payloadGlobalWorldbooks = mainflowContextSnapshot ? [] : await getFilteredGlobalWorldbooks(ctx, settings, recentMessages);
+  const payloadWorldBook = characterWorldBook;
+  const payloadGlobalWorldbooks = await getFilteredGlobalWorldbooks(ctx, settings, recentMessages);
   const payload = {
     reason: options.reason || 'manual_registry',
     chat_id: getChatKey(ctx),
@@ -925,7 +894,6 @@ export async function runRegistry(ctx, options = {}) {
     character_worldbook_name: payloadWorldBook ? (getCharacterWorldBookName(ctx) || null) : null,
     character_worldbook: payloadWorldBook,
     global_worldbooks: payloadGlobalWorldbooks,
-    mainflow_context_snapshot: mainflowContextSnapshot,
     target_character: targetName,
     existing_state: chatState.characters[targetName] || null,
     recent_messages: recentMessages,

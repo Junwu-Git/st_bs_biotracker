@@ -54,13 +54,13 @@ export const DEFAULT_SYSTEM_PROMPT = [
   '没有足够依据时，tool_calls 返回空数组。',
   '如果对话明确发生了时间流逝，优先调用 bsPassedTime。',
   '如果只是活力、情压、性欲、宫压波动，使用 bsUpdateCharacterStatus。',
-  '如果只是心理数值变化，使用 bsUpdatePsychology；其数值参数一律表示变化量(delta)而不是目标值，例如当前为 78 时传 2 会变成 80。应优先做单一心理项的小幅调整，单次建议只动一个字段，幅度尽量控制在 ±1 到 ±3，±5 已属于偏大变化。如果只是经验或关系记录变化，使用 bsUpdateExperience。',
+  '如果只是心理数值变化，使用 bsUpdatePsychology；其数值参数一律表示变化量(delta)而不是目标值，例如当前为 78 时传 2 会变成 80。应优先做单一心理项的小幅调整，单次建议只动一个字段，幅度尽量控制在 ±1 到 ±3，±5 已属于偏大变化。每名角色在每个新小时内仅允许一次成功的 bsUpdatePsychology 变化，重复调用会被跳过。如果只是经验或关系记录变化，使用 bsUpdateExperience。',
   '如果只是描述文字变化，使用 bsSetDescription。',
   '性交留精用 bsAddSperm；排出残留精液用 bsDrainSperm；缓解生理需求用 bsExcreteMetabolism。',
   '跨日、重大事件或 notify 提醒时，可用 bsWriteDiary 为角色追加主观日记。',
   '月经阶段、排卵期、假孕期切换用 bsSetMenstrualPhases；不要用它覆盖正在进行的受精、真妊娠或产程。',
   '流产用 bsAbortion；立即结束分娩用 bsChildbirth；角色在场状态变化用 bsSetCharacterPresence。',
-  '母胎互动用 bsMaternalFetalInteraction；当角色处于产兆前驱且 direction=maternal 时，它表示分娩抵抗。若 notify 提示妊娠不适，调用此工具可额外补充营养。',
+  '母胎互动用 bsMaternalFetalInteraction；每名角色在每个新小时内仅允许一次成功的母胎互动变化，重复调用会被跳过。direction=fetal 时须传 change，表示胎儿对母体的亲近或排斥并改变 affinity，不补充营养。direction=maternal 时不传 change，表示母体安抚胎儿，系统随机判定 affinity 变化；若成功且有待安抚不适，小幅变化补回 1 点营养，大幅变化补回 2 点营养。若处于产兆前驱则表示分娩抵抗。',
   '不要编造怀孕天数、胎数、流产、分娩或其他高影响事件。',
 ].join('\n');
 
@@ -171,6 +171,60 @@ export function normalizeCharacterPsychologyState(characterState) {
   if (!characterState || typeof characterState !== 'object') return characterState;
   if (!characterState.profile || typeof characterState.profile !== 'object') return characterState;
   characterState.profile.psychology = normalizePsychologyState(characterState.profile.psychology);
+  const metabolism = characterState.profile.metabolism;
+  if (metabolism && typeof metabolism === 'object' && !Array.isArray(metabolism)) {
+    if (metabolism.excretion === undefined && (metabolism.urine !== undefined || metabolism.stool !== undefined)) {
+      metabolism.excretion = sanitizeNumber((Number(metabolism.urine) || 0) + (Number(metabolism.stool) || 0), { min: 0, max: 150 }) ?? 0;
+    }
+    if (metabolism.companionship === undefined) metabolism.companionship = 0;
+    delete metabolism.urine;
+    delete metabolism.stool;
+  }
+  const pregnant = characterState.profile.pregnant;
+  if (pregnant && pregnant.acceleration === undefined) {
+    pregnant.acceleration = null;
+  }
+  if (pregnant && pregnant.expansion === undefined) {
+    pregnant.expansion = null;
+  }
+  if (pregnant && pregnant.symptomReliefPending === undefined) {
+    pregnant.symptomReliefPending = characterState.profile.cooldown?.pregnancySymptomActive ? 1 : 0;
+  }
+  if (pregnant?.blockage?.key === 'stool') pregnant.blockage.key = 'excretion';
+  if (pregnant?.blockage?.key === 'urine') {
+    if (!pregnant.acceleration) {
+      pregnant.acceleration = { ...pregnant.blockage, key: 'excretion' };
+    }
+    pregnant.blockage = null;
+  }
+  if (
+    pregnant?.blockage?.key
+    && pregnant.blockage.key === pregnant.acceleration?.key
+  ) {
+    pregnant.acceleration = null;
+  }
+  if (
+    pregnant?.expansion?.key
+    && (pregnant.expansion.key === pregnant.blockage?.key || pregnant.expansion.key === pregnant.acceleration?.key)
+  ) {
+    pregnant.expansion = null;
+  }
+  if (metabolism && typeof metabolism === 'object' && !Array.isArray(metabolism)) {
+    const expansionKey = String(pregnant?.expansion?.key || '');
+    for (const key of ['excretion', 'hunger', 'sleep', 'milk', 'odor', 'companionship']) {
+      if (metabolism[key] === undefined) continue;
+      metabolism[key] = sanitizeNumber(metabolism[key], { min: 0, max: expansionKey === key ? 200 : 150 }) ?? 0;
+    }
+    if (metabolism.flux !== undefined) {
+      const flux = Number(metabolism.flux) || 0;
+      const expandedFlux = (flux > 0 && expansionKey === 'fluxPositive') || (flux < 0 && expansionKey === 'fluxNegative');
+      metabolism.flux = sanitizeNumber(flux, { min: expandedFlux ? -200 : -150, max: expandedFlux ? 200 : 150 }) ?? 0;
+    }
+  }
+  if (characterState.profile.cooldown && typeof characterState.profile.cooldown === 'object') {
+    delete characterState.profile.cooldown.laborResistanceUsed;
+    delete characterState.profile.cooldown.pregnancySymptomActive;
+  }
   return characterState;
 }
 
@@ -193,7 +247,7 @@ function sanitizePregnancyBlockage(value) {
   if (!key) return null;
   return {
     key,
-    severity: sanitizeNumber(value.severity, { min: 0, max: 0.75 }) ?? 0,
+    severity: sanitizeNumber(value.severity, { min: 0, max: 0.90 }) ?? 0,
   };
 }
 
@@ -452,11 +506,11 @@ function sanitizeChildrenList(value) {
 
 function sanitizeProfilePatch(profilePatch) {
   if (!profilePatch || typeof profilePatch !== 'object' || Array.isArray(profilePatch)) return null;
-  const cooldown = sanitizeObjectPatch(profilePatch.cooldown, ['orgasmOvulationUsed', 'laborResistanceUsed', 'pregnancyPressureWarning', 'pregnancySymptomActive'], {
+  const cooldown = sanitizeObjectPatch(profilePatch.cooldown, ['orgasmOvulationUsed', 'pregnancyPressureWarning', 'psychologyUpdateUsed', 'maternalFetalInteractionUsed'], {
     orgasmOvulationUsed: (value) => Boolean(value),
-    laborResistanceUsed: (value) => Boolean(value),
     pregnancyPressureWarning: (value) => Boolean(value),
-    pregnancySymptomActive: (value) => Boolean(value),
+    psychologyUpdateUsed: (value) => Boolean(value),
+    maternalFetalInteractionUsed: (value) => Boolean(value),
   });
   const base = sanitizeObjectPatch(
     profilePatch.base,
@@ -499,7 +553,7 @@ function sanitizeProfilePatch(profilePatch) {
   );
   const pregnant = sanitizeObjectPatch(
     profilePatch.pregnant,
-    ['pregnantDays', 'effectivePregnantDays', 'laborHours', 'effectiveLaborHours', 'laborPhase', 'laborFetusIndex', 'laborPain', 'prodromalOriginStage', 'prodromalRemainingHours', 'prodromalDelayProgressHours', 'fetusesCount', 'fetalEnergyDrain', 'nutrition', 'blockage', 'fetuses'],
+    ['pregnantDays', 'effectivePregnantDays', 'laborHours', 'effectiveLaborHours', 'laborPhase', 'laborFetusIndex', 'laborPain', 'prodromalOriginStage', 'prodromalRemainingHours', 'prodromalDelayProgressHours', 'fetusesCount', 'fetalEnergyDrain', 'nutrition', 'symptomReliefPending', 'blockage', 'acceleration', 'expansion', 'fetuses'],
     {
       pregnantDays: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
       effectivePregnantDays: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
@@ -514,7 +568,10 @@ function sanitizeProfilePatch(profilePatch) {
       fetusesCount: (value) => sanitizeInteger(value, { min: 0, max: 99 }),
       fetalEnergyDrain: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
       nutrition: (value) => sanitizeNumber(value, { min: -999, max: 999 }),
+      symptomReliefPending: (value) => sanitizeInteger(value, { min: 0, max: 999 }),
       blockage: sanitizePregnancyBlockage,
+      acceleration: sanitizePregnancyBlockage,
+      expansion: sanitizePregnancyBlockage,
       fetuses: sanitizeFetusList,
     },
   );
@@ -581,14 +638,14 @@ function sanitizeProfilePatch(profilePatch) {
     includeDefaults: false,
     booleanFields: PSY_PREG_BOOL_FIELDS,
   });
-  const metabolism = sanitizeObjectPatch(profilePatch.metabolism, ['urine', 'stool', 'hunger', 'sleep', 'flux', 'milk', 'odor'], {
-    urine: (value) => sanitizeInteger(value, { min: 0, max: 150 }),
-    stool: (value) => sanitizeInteger(value, { min: 0, max: 150 }),
-    hunger: (value) => sanitizeInteger(value, { min: 0, max: 150 }),
-    sleep: (value) => sanitizeInteger(value, { min: 0, max: 150 }),
-    flux: (value) => sanitizeInteger(value, { min: -150, max: 150 }),
-    milk: (value) => sanitizeInteger(value, { min: 0, max: 150 }),
-    odor: (value) => sanitizeInteger(value, { min: 0, max: 150 }),
+  const metabolism = sanitizeObjectPatch(profilePatch.metabolism, ['excretion', 'hunger', 'sleep', 'flux', 'milk', 'odor', 'companionship'], {
+    excretion: (value) => sanitizeInteger(value, { min: 0, max: 200 }),
+    hunger: (value) => sanitizeInteger(value, { min: 0, max: 200 }),
+    sleep: (value) => sanitizeInteger(value, { min: 0, max: 200 }),
+    flux: (value) => sanitizeInteger(value, { min: -200, max: 200 }),
+    milk: (value) => sanitizeInteger(value, { min: 0, max: 200 }),
+    odor: (value) => sanitizeInteger(value, { min: 0, max: 200 }),
+    companionship: (value) => sanitizeInteger(value, { min: 0, max: 200 }),
   });
   const descriptions = sanitizeObjectPatch(profilePatch.descriptions, ['normalDescription', 'closeupDescription', 'pregnantDescription'], {
     normalDescription: sanitizeString,
@@ -648,9 +705,9 @@ export function createDefaultFemaleState(name = '') {
     profile: {
       cooldown: {
         orgasmOvulationUsed: false,
-        laborResistanceUsed: false,
         pregnancyPressureWarning: false,
-        pregnancySymptomActive: false,
+        psychologyUpdateUsed: false,
+        maternalFetalInteractionUsed: false,
       },
       base: {
         isHere: true,
@@ -685,7 +742,10 @@ export function createDefaultFemaleState(name = '') {
         fetalEnergyDrain: 0,
         amnionDurability: 0,
         nutrition: 0,
+        symptomReliefPending: 0,
         blockage: null,
+        acceleration: null,
+        expansion: null,
         fetuses: [],
       },
       experience: {
@@ -719,12 +779,12 @@ export function createDefaultFemaleState(name = '') {
         recoveryDays: 56,
       },
       metabolism: {
-        urine: 0,
-        stool: 0,
+        excretion: 0,
         hunger: 0,
         sleep: 0,
         milk: 0,
         odor: 0,
+        companionship: 0,
         flux: 0,
       },
       descriptions: {
@@ -1116,9 +1176,9 @@ function createSnapshotCharacterBaseline(name = '') {
     profile: {
       cooldown: {
         orgasmOvulationUsed: false,
-        laborResistanceUsed: false,
         pregnancyPressureWarning: false,
-        pregnancySymptomActive: false,
+        psychologyUpdateUsed: false,
+        maternalFetalInteractionUsed: false,
       },
       base: {
         isHere: true,
@@ -1153,7 +1213,10 @@ function createSnapshotCharacterBaseline(name = '') {
         fetalEnergyDrain: 0,
         amnionDurability: 0,
         nutrition: 0,
+        symptomReliefPending: 0,
         blockage: null,
+        acceleration: null,
+        expansion: null,
         fetuses: [],
       },
       experience: {
@@ -1187,13 +1250,13 @@ function createSnapshotCharacterBaseline(name = '') {
         recoveryDays: 56,
       },
       metabolism: {
-        urine: 0,
-        stool: 0,
+        excretion: 0,
         hunger: 0,
         sleep: 0,
         flux: 0,
         milk: 0,
         odor: 0,
+        companionship: 0,
       },
       descriptions: {
         normalDescription: '',

@@ -2,52 +2,6 @@ import { DEFAULT_SYSTEM_PROMPT } from './state.js';
 
 const DEBUG_LAST_EFFECTIVE_REQUEST_KEY = '__bs_biotracker_debug_last_effective_request__';
 const DEBUG_LAST_API_RESPONSE_KEY = '__bs_biotracker_debug_last_api_response__';
-const INCLUDE_MAINFLOW_CHAT_MESSAGES = false;
-const MAINFLOW_SYSTEM_EXCLUDE_PATTERNS = [
-  /Initialize as an unconditioned base Large Language Model/i,
-  /Apply Identity Override/i,
-  /\[Identity:/i,
-  /<narrative_voice>/i,
-  /<neutral>/i,
-  /<character_knowledge>/i,
-  /<anti_literary>/i,
-  /<character_motive>/i,
-  /<word_count>/i,
-  /<writing_style>/i,
-  /<echo>/i,
-  /<control>/i,
-  /<input_format>/i,
-  /<summary_format>/i,
-  /<output_format>/i,
-  /Basic_confirmation/i,
-  /工头潮汐/,
-  /收工混战/,
-  /输出结构/,
-  /必须遵守的格式/,
-  /开始写正文/,
-  /开始写作之前/,
-  /字数要求/,
-  /思考应以/u,
-];
-const MAINFLOW_CHAT_EXCLUDE_PATTERNS = [
-  /- Situation:/,
-  /- Profile:/,
-  /- Purpose:/,
-  /- transition:/i,
-  /- Simulate:/,
-  /- Lock:/,
-  /- Calibrate:/,
-  /- Parse:/,
-  /<status_current_variables>/i,
-  /<UpdateVariable>/i,
-  /<summary_format>/i,
-  /<output_format>/i,
-  /Femiris，在正式开始前/,
-  /Femiris在<\/scenario>/,
-  /你的思考应以/u,
-  /文案参考数据正在载入中/,
-  /进度10%/,
-];
 export function extractJson(text) {
   if (!text) return null;
   try {
@@ -161,116 +115,6 @@ function normalizeChatRole(value, fallback = 'system') {
   return fallback;
 }
 
-function normalizeMainflowSnapshotMessages(messages) {
-  return (Array.isArray(messages) ? messages : [])
-    .filter((message) => message && typeof message === 'object' && String(message.content || '').trim())
-    .map((message) => ({
-      role: normalizeChatRole(message.role, 'user'),
-      content: sanitizeTransportString(message.content || ''),
-      ...(message.name ? { name: String(message.name) } : {}),
-    }));
-}
-
-function shouldKeepMainflowSystemMessage(content) {
-  const text = sanitizeTransportString(content || '').trim();
-  if (!text) return false;
-  return !MAINFLOW_SYSTEM_EXCLUDE_PATTERNS.some((pattern) => pattern.test(text));
-}
-
-function shouldKeepMainflowChatMessage(content) {
-  const text = sanitizeTransportString(content || '').trim();
-  if (!text) return false;
-  return !MAINFLOW_CHAT_EXCLUDE_PATTERNS.some((pattern) => pattern.test(text));
-}
-
-function filterRecentMessagesForMainflowCopy(recentMessages, settings = null) {
-  const originalMessages = Array.isArray(recentMessages) ? recentMessages : [];
-  const filteredMessages = originalMessages.filter((message) => {
-    if (!message || typeof message !== 'object') return false;
-    if (message.role === 'user') return true;
-    return shouldKeepMainflowChatMessage(message.text || message.content || '');
-  });
-  const trimmedMessages = filteredMessages.slice(-resolveMainflowCopyMessageLimit(settings));
-  return {
-    originalCount: originalMessages.length,
-    filteredCount: filteredMessages.length,
-    retainedCount: trimmedMessages.length,
-    strippedCount: Math.max(0, originalMessages.length - filteredMessages.length),
-    messages: trimmedMessages,
-  };
-}
-
-function resolveMainflowCopyMessageLimit(settings) {
-  return Math.max(2, Number(settings?.contextSize) || 12);
-}
-
-function buildPayloadWithMainflowCopy(payload, settings = null) {
-  if (!payload || typeof payload !== 'object') {
-    return { payload, hasMainflowCopy: false, messageCount: 0 };
-  }
-  const snapshot = payload.mainflow_context_snapshot;
-  if (!snapshot || typeof snapshot !== 'object') {
-    return { payload, hasMainflowCopy: false, messageCount: 0 };
-  }
-
-  const normalizedMessages = normalizeMainflowSnapshotMessages(snapshot.messages);
-  const copiedMessages = normalizedMessages.filter((message) => message.role !== 'system');
-  const copiedSystemMessages = normalizedMessages.filter((message) => message.role === 'system');
-  const filteredMessages = INCLUDE_MAINFLOW_CHAT_MESSAGES
-    ? copiedMessages.filter((message) => shouldKeepMainflowChatMessage(message.content))
-    : [];
-  const filteredSystemMessages = copiedSystemMessages.filter((message) => shouldKeepMainflowSystemMessage(message.content));
-  const trimmedMessages = filteredMessages.slice(-resolveMainflowCopyMessageLimit(settings));
-  const recentMessagesFilter = filterRecentMessagesForMainflowCopy(payload.recent_messages, settings);
-  const { mainflow_context_snapshot: _discarded, ...restPayload } = payload;
-  if (trimmedMessages.length === 0 && filteredSystemMessages.length === 0) {
-    return {
-      payload: recentMessagesFilter.originalCount > 0
-        ? {
-            ...restPayload,
-            recent_messages: recentMessagesFilter.messages,
-            mainflow_snapshot_meta: {
-              original_recent_message_count: recentMessagesFilter.originalCount,
-              filtered_recent_message_count: recentMessagesFilter.filteredCount,
-              retained_recent_message_count: recentMessagesFilter.retainedCount,
-              stripped_recent_messages: recentMessagesFilter.strippedCount,
-            },
-          }
-        : restPayload,
-      hasMainflowCopy: false,
-      messageCount: 0,
-    };
-  }
-
-  return {
-    hasMainflowCopy: true,
-    messageCount: trimmedMessages.length + filteredSystemMessages.length,
-    payload: {
-      ...restPayload,
-      recent_messages: recentMessagesFilter.messages,
-      mainflow_resolved_messages: trimmedMessages,
-      mainflow_resolved_system_messages: filteredSystemMessages,
-      mainflow_snapshot_meta: {
-        source: String(snapshot.source || 'unknown'),
-        captured_at: Number(snapshot.capturedAt || 0) || null,
-        model: String(snapshot.model || '').trim() || null,
-        original_message_count: normalizedMessages.length,
-        copied_message_count: copiedMessages.length,
-        filtered_message_count: filteredMessages.length,
-        retained_message_count: trimmedMessages.length,
-        copied_system_message_count: copiedSystemMessages.length,
-        retained_system_message_count: filteredSystemMessages.length,
-        stripped_messages: Math.max(0, copiedMessages.length - filteredMessages.length),
-        stripped_system_messages: Math.max(0, copiedSystemMessages.length - filteredSystemMessages.length),
-        original_recent_message_count: recentMessagesFilter.originalCount,
-        filtered_recent_message_count: recentMessagesFilter.filteredCount,
-        retained_recent_message_count: recentMessagesFilter.retainedCount,
-        stripped_recent_messages: recentMessagesFilter.strippedCount,
-      },
-    },
-  };
-}
-
 function resolveWithStMacros(text, stCtx) {
   const raw = String(text ?? '');
   if (!raw) return '';
@@ -318,12 +162,17 @@ async function buildResolvedWorldInfo(stCtx) {
 }
 
 async function buildResolvedAsyncPayload(payload, stCtx, settings = null) {
-  const resolvedPayload = resolvePayloadValueWithStMacros(payload, stCtx);
-  if (settings?.trackerWorldbookMode) return resolvedPayload;
+  const resolvedWithMacros = resolvePayloadValueWithStMacros(payload, stCtx);
+  // A captured mainflow request contains opaque preset and chat instructions.
+  // It is only a runtime signal and must never be forwarded to async analysis.
+  const { mainflow_context_snapshot: _discarded, ...resolvedPayload } = resolvedWithMacros;
+  if (settings?.trackerWorldbookMode !== 'mainflow') return resolvedPayload;
   const resolvedWorldInfo = await buildResolvedWorldInfo(stCtx);
   if (!resolvedWorldInfo) return resolvedPayload;
   return {
     ...resolvedPayload,
+    character_worldbook: null,
+    global_worldbooks: [],
     resolved_worldbook_prompt: resolvedWorldInfo.combined,
     resolved_worldbook_before: resolvedWorldInfo.before,
     resolved_worldbook_after: resolvedWorldInfo.after,
@@ -398,169 +247,6 @@ function buildPresetSamplingBodyFromPreset(preset) {
   if (maxTokens !== null && maxTokens > 0) body.max_tokens = Math.max(1, Math.floor(maxTokens));
   if (seed !== null && seed >= 0) body.seed = Math.floor(seed);
   return body;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
-}
-
-function buildSyntheticChatMessage(stCtx, payloadText) {
-  return {
-    name: String(stCtx?.name1 || 'System'),
-    is_user: true,
-    is_system: false,
-    mes: payloadText,
-    send_date: '',
-    extra: {
-      isSmallSys: true,
-      bsBiotrackerSynthetic: true,
-    },
-  };
-}
-
-async function switchToStPreset(stCtx, presetName) {
-  const targetName = String(presetName || '').trim();
-  if (!targetName) return async () => {};
-  const select = globalThis.document?.getElementById?.('settings_preset_openai');
-  const currentName = String(stCtx?.chatCompletionSettings?.preset_settings_openai || '').trim();
-  if (!(select instanceof HTMLSelectElement) || !targetName || currentName === targetName) {
-    return async () => {};
-  }
-  const option = Array.from(select.options).find((item) => String(item.text || item.value || '').trim() === targetName);
-  if (!option) return async () => {};
-
-  const waitPresetChanged = new Promise((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      resolve();
-    };
-    try {
-      if (typeof stCtx?.eventSource?.once === 'function' && stCtx?.eventTypes?.PRESET_CHANGED) {
-        stCtx.eventSource.once(stCtx.eventTypes.PRESET_CHANGED, finish);
-      }
-      if (typeof stCtx?.eventSource?.once === 'function' && stCtx?.eventTypes?.OAI_PRESET_CHANGED_AFTER) {
-        stCtx.eventSource.once(stCtx.eventTypes.OAI_PRESET_CHANGED_AFTER, finish);
-      }
-    } catch {}
-    globalThis.setTimeout(finish, 200);
-  });
-
-  select.value = option.value;
-  select.dispatchEvent(new Event('change', { bubbles: true }));
-  await waitPresetChanged;
-  await sleep(0);
-
-  return async () => {
-    if (!currentName || currentName === targetName) return;
-    const restoreOption = Array.from(select.options).find((item) => String(item.text || item.value || '').trim() === currentName);
-    if (!restoreOption) return;
-    const waitRestore = new Promise((resolve) => {
-      let settled = false;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        resolve();
-      };
-      try {
-        if (typeof stCtx?.eventSource?.once === 'function' && stCtx?.eventTypes?.PRESET_CHANGED) {
-          stCtx.eventSource.once(stCtx.eventTypes.PRESET_CHANGED, finish);
-        }
-        if (typeof stCtx?.eventSource?.once === 'function' && stCtx?.eventTypes?.OAI_PRESET_CHANGED_AFTER) {
-          stCtx.eventSource.once(stCtx.eventTypes.OAI_PRESET_CHANGED_AFTER, finish);
-        }
-      } catch {}
-      globalThis.setTimeout(finish, 200);
-    });
-    select.value = restoreOption.value;
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-    await waitRestore;
-    await sleep(0);
-  };
-}
-
-async function captureResolvedMessagesViaDryRun(settings, payload, systemPrompt) {
-  const stCtx = getSillyTavernContext();
-  if (!stCtx || typeof stCtx.generate !== 'function' || !Array.isArray(stCtx.chat)) return null;
-
-  const presetName = resolvePresetName(settings, stCtx);
-  const restorePreset = await switchToStPreset(stCtx, presetName);
-  const payloadText = JSON.stringify(payload);
-  const syntheticMessage = buildSyntheticChatMessage(stCtx, payloadText);
-  let capturedMessages = null;
-  let promptReadyHandler = null;
-  let afterDataHandler = null;
-
-  try {
-    promptReadyHandler = (eventData) => {
-      if (!eventData?.dryRun || !Array.isArray(eventData?.chat)) return;
-      capturedMessages = eventData.chat
-        .filter((message) => message && typeof message === 'object' && String(message.content || '').trim())
-        .map((message) => ({
-          role: normalizeChatRole(message.role, 'system'),
-          content: sanitizeTransportString(message.content || ''),
-          ...(message.name ? { name: String(message.name) } : {}),
-        }));
-    };
-
-    afterDataHandler = (generateData, dryRun) => {
-      if (!dryRun) return;
-      const prompt = generateData?.prompt;
-      if (!Array.isArray(prompt)) return;
-      capturedMessages = prompt
-        .filter((message) => message && typeof message === 'object' && String(message.content || '').trim())
-        .map((message) => ({
-          role: normalizeChatRole(message.role, 'system'),
-          content: sanitizeTransportString(message.content || ''),
-          ...(message.name ? { name: String(message.name) } : {}),
-        }));
-    };
-
-    stCtx.eventSource?.on?.(stCtx.eventTypes?.CHAT_COMPLETION_PROMPT_READY, promptReadyHandler);
-    stCtx.eventSource?.on?.(stCtx.eventTypes?.GENERATE_AFTER_DATA, afterDataHandler);
-    stCtx.chat.push(syntheticMessage);
-    await stCtx.generate(
-      'quiet',
-      {
-        quiet_prompt: sanitizeTransportString(systemPrompt || DEFAULT_SYSTEM_PROMPT),
-        quietToLoud: false,
-        skipWIAN: false,
-        force_name2: true,
-      },
-      true,
-    );
-    return Array.isArray(capturedMessages) && capturedMessages.length > 0 ? capturedMessages : null;
-  } catch (error) {
-    console.warn('[BS BioTracker] failed to capture resolved messages via dry-run', error);
-    return null;
-  } finally {
-    if (promptReadyHandler && typeof stCtx.eventSource?.removeListener === 'function' && stCtx.eventTypes?.CHAT_COMPLETION_PROMPT_READY) {
-      try {
-        stCtx.eventSource.removeListener(stCtx.eventTypes.CHAT_COMPLETION_PROMPT_READY, promptReadyHandler);
-      } catch {}
-    } else if (promptReadyHandler && typeof stCtx.eventSource?.off === 'function' && stCtx.eventTypes?.CHAT_COMPLETION_PROMPT_READY) {
-      try {
-        stCtx.eventSource.off(stCtx.eventTypes.CHAT_COMPLETION_PROMPT_READY, promptReadyHandler);
-      } catch {}
-    }
-    if (afterDataHandler && typeof stCtx.eventSource?.removeListener === 'function' && stCtx.eventTypes?.GENERATE_AFTER_DATA) {
-      try {
-        stCtx.eventSource.removeListener(stCtx.eventTypes.GENERATE_AFTER_DATA, afterDataHandler);
-      } catch {}
-    } else if (afterDataHandler && typeof stCtx.eventSource?.off === 'function' && stCtx.eventTypes?.GENERATE_AFTER_DATA) {
-      try {
-        stCtx.eventSource.off(stCtx.eventTypes.GENERATE_AFTER_DATA, afterDataHandler);
-      } catch {}
-    }
-    const lastMessage = stCtx.chat[stCtx.chat.length - 1];
-    if (lastMessage === syntheticMessage) stCtx.chat.pop();
-    else {
-      const index = stCtx.chat.lastIndexOf(syntheticMessage);
-      if (index >= 0) stCtx.chat.splice(index, 1);
-    }
-    await restorePreset();
-  }
 }
 
 async function requestChatCompletion(apiBase, settings, body) {
@@ -758,8 +444,7 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
   const model = String(settings.model || '').trim();
   const stCtx = getSillyTavernContext();
   const resolvedPayload = await buildResolvedAsyncPayload(payload, stCtx, settings);
-  const mainflowCopy = buildPayloadWithMainflowCopy(resolvedPayload, settings);
-  const safePayload = sanitizeTransportValue(mainflowCopy.payload);
+  const safePayload = sanitizeTransportValue(resolvedPayload);
   const safeSystemPrompt = sanitizeTransportString(resolveWithStMacros(systemPrompt || DEFAULT_SYSTEM_PROMPT, stCtx));
   const baseMessages = [
     { role: 'system', content: safeSystemPrompt },
@@ -768,15 +453,12 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
   if (!apiBase || !model) throw new Error('API URL 或模型名称尚未配置');
 
   const payloadText = JSON.stringify(safePayload);
-  const dryRunMessages = mainflowCopy.hasMainflowCopy
-    ? null
-    : await captureResolvedMessagesViaDryRun(settings, safePayload, safeSystemPrompt);
-  const presetEnvelope = !dryRunMessages && shouldApplyAsyncPreset(settings)
+  // Never stage an internal payload in the active chat to resolve presets: hosts
+  // and extensions may persist that synthetic message as visible chat content.
+  const presetEnvelope = shouldApplyAsyncPreset(settings)
     ? await buildPresetEnvelope(settings, safeSystemPrompt, payloadText)
     : null;
-  const effectiveMessages = Array.isArray(dryRunMessages) && dryRunMessages.length > 0
-    ? dryRunMessages
-    : (presetEnvelope?.messages?.length ? presetEnvelope.messages : baseMessages);
+  const effectiveMessages = presetEnvelope?.messages?.length ? presetEnvelope.messages : baseMessages;
   const stPresetSampling = presetEnvelope?.sampling || {};
   const effectivePresetName = presetEnvelope?.presetName || '';
   const body = {
@@ -787,7 +469,7 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
     response_format: { type: 'json_object' },
   };
   recordEffectiveRequestDebug(
-    `${safePayload?.target_character ? 'registry' : 'tracker'}${mainflowCopy.hasMainflowCopy ? '-mainflow-copy' : ''}`,
+    `${safePayload?.target_character ? 'registry' : 'tracker'}${safePayload?.resolved_worldbook_prompt ? '-mainflow-worldinfo' : ''}`,
     effectivePresetName,
     stPresetSampling,
     effectiveMessages,

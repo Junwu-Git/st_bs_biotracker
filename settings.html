@@ -166,6 +166,9 @@
             <div class="settings_section bs-bt-action-row">
               <button id="bs-bt-clear" class="menu_button" type="button">清除当前聊天状态</button>
             </div>
+            <div class="settings_section bs-bt-action-row">
+              <button id="bs-bt-clear-all-chats" class="menu_button" type="button">清空所有聊天的追踪状态</button>
+            </div>
           </div>
         </section>
 
@@ -280,7 +283,7 @@
               <label for="bs-bt-tracker-worldbook-mode">传输模式</label>
               <select id="bs-bt-tracker-worldbook-mode" class="text_pole">
                 <option value="exclude">正常模式：传输启用条目，可手动排除</option>
-                <option value="mainflow">主流模式：优先拷贝 ST 主流上下文，无快照时按常驻/关键字触发</option>
+                <option value="mainflow">主流模式：优先采用 ST 已启用的世界书，无解析结果时按常驻/关键字触发</option>
                 <option value="allowlist_all">参考模式：默认全排除，仅传输手动指定条目（可包含 disabled）</option>
               </select>
             </div>
