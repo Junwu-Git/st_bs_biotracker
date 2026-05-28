@@ -252,7 +252,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
   },
   {
     name: 'bsExcreteMetabolism',
-    description: '缓解角色的生理需求。普通种族用于处理泄意、饿意、困意、乳意、臭意与伴意；其中 excretion（泄意）同时包含排尿与排便需求。乳意在普通周期表示乳房胀敏，在妊娠、假孕或产后恢复则可表示乳胀与泌乳需求。进食缓解 hunger 会增加 excretion 与少量 sleep，睡眠缓解 sleep 会增加少量 hunger，高 odor 会降低 companionship 的社交缓解效果。只有亲密陪伴确实发生并处理 companionship 时，才传 intimate=true 触发符合泌乳条件者的幸福产乳。带 derivedType 的角色以 flux 进行极性解放，并处理未抵免需求；要解放 flux 时请传 flux，或不传 options 使用默认释放量。pregnant.blockage 会降低排解效果，pregnant.acceleration 会加快累积并让刚缓解的对应需求较快回升，pregnant.expansion 会使对应需求容量由 150 扩为 200。',
+    description: '缓解角色的生理需求。普通种族用于处理泄意、饿意、困意、乳意、臭意与伴意；其中 excretion（泄意）同时包含排尿与排便需求。乳意在普通周期表示乳房胀敏，在妊娠、假孕或产后恢复则可表示乳胀与泌乳需求；性欲波动会自然产生乳意，不由伴意解除额外转化。进食缓解 hunger 会增加 excretion 与少量 sleep，睡眠缓解 sleep 会增加少量 hunger，高 odor 会降低 companionship 的社交缓解效果。带 derivedType 的角色以 flux 进行极性解放，并处理未抵免需求；要解放 flux 时请传 flux，或不传 options 使用默认释放量。pregnant.blockage 会降低排解效果，pregnant.acceleration 会加快累积并让刚缓解的对应需求较快回升，pregnant.expansion 会使对应需求容量由 150 扩为 200。',
     input_schema: {
       type: 'object',
       properties: {
@@ -266,7 +266,6 @@ export const TOOL_DEFINITIONS = Object.freeze([
             milk: { type: 'number', minimum: 0, maximum: 200 },
             odor: { type: 'number', minimum: 0, maximum: 200 },
             companionship: { type: 'number', minimum: 0, maximum: 200 },
-            intimate: { type: 'boolean' },
             flux: { type: 'number', minimum: 0, maximum: 400 },
           },
           additionalProperties: false,
@@ -1639,8 +1638,8 @@ function updateAdvisoryNotify(profile, female) {
   }
   if (!isMetabolismExempt(profile, 'companionship') && ['高', '满', '爆'].includes(companionshipLevel)) {
     reminders.push(odorLevel === '高' || odorLevel === '满' || odorLevel === '爆'
-      ? `${female}渴望陪伴，但当前臭意会妨碍社交舒适度；清洁后再给予陪伴或亲密安抚更有效`
-      : `${female}渴望陪伴，可优先给予陪伴或亲密安抚；若发生亲密陪伴，可在处理伴意时传 intimate=true`);
+      ? `${female}渴望陪伴，但当前臭意会妨碍社交舒适度；清洁后再给予陪伴或安抚更有效`
+      : `${female}渴望陪伴，可优先给予陪伴、交流或安抚`);
   }
 
   const stage = String(base.stage || '');
@@ -1764,9 +1763,6 @@ function applyExcreteMetabolism(chatState, args) {
   addMetabolismValue(profile, 'sleep', relievedHunger * 0.1, 0, 150);
   addMetabolismValue(profile, 'hunger', relievedSleep * 0.1, 0, 150);
   applyOdorGain(profile, (relievedExcretion * 0.12) + (canProduceMilk(profile) ? relievedMilk * 0.05 : 0));
-  if (options.intimate === true && relievedCompanionship > 0) {
-    applyMilkGain(profile, relievedCompanionship * 0.1);
-  }
   for (const [key, amount] of [
     ['excretion', relievedExcretion],
     ['hunger', relievedHunger],

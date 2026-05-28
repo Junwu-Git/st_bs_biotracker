@@ -585,7 +585,7 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
   const payloadText = JSON.stringify(safePayload);
   // Never stage an internal payload in the active chat to resolve presets: hosts
   // and extensions may persist that synthetic message as visible chat content.
-  const presetEnvelope = !mainflowCopy.hasMainflowCopy && shouldApplyAsyncPreset(settings)
+  const presetEnvelope = shouldApplyAsyncPreset(settings)
     ? await buildPresetEnvelope(settings, safeSystemPrompt, payloadText)
     : null;
   const effectiveMessages = presetEnvelope?.messages?.length ? presetEnvelope.messages : baseMessages;
