@@ -994,6 +994,16 @@ function mergeGenderRatioValues(values) {
   return 50;
 }
 
+function mergeGestationSpeciesSpeedByAverageDays(values) {
+  const speeds = values.filter((value) => Number.isFinite(value) && value > 0);
+  if (speeds.length === 0) return null;
+
+  const averageDays = speeds
+    .map((speed) => 280 / speed)
+    .reduce((sum, days) => sum + days, 0) / speeds.length;
+  return averageDays > 0 ? 280 / averageDays : null;
+}
+
 export function getMergedRacePhysiologyProfile(race) {
   const parts = getRaceComponents(race);
   if (parts.length === 0) return null;
@@ -1010,7 +1020,9 @@ export function getMergedRacePhysiologyProfile(race) {
       .map((profile) => Number(profile[field]))
       .filter((value) => Number.isFinite(value));
     if (values.length > 0) {
-      merged[field] = values.reduce((sum, value) => sum + value, 0) / values.length;
+      merged[field] = field === 'gestationSpeciesSpeed'
+        ? mergeGestationSpeciesSpeedByAverageDays(values)
+        : values.reduce((sum, value) => sum + value, 0) / values.length;
     }
   }
 

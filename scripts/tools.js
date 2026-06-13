@@ -383,11 +383,7 @@ function deriveFetusRace(motherRace, fatherRace) {
   const fatherParts = getRaceComponents(fatherRace);
   const combined = [...fatherParts, ...motherParts].filter(Boolean);
   if (combined.length === 0) return '人类';
-  const unique = [];
-  for (const part of combined) {
-    if (!unique.includes(part)) unique.push(part);
-  }
-  return unique.join('x');
+  return combined.join('x');
 }
 
 function deriveFetusEmbryoType(race) {
@@ -578,8 +574,10 @@ function applyPregnancyPhysiology(profile, runtime) {
   };
 
   let totalWeight = 0;
-  let gestationAccumulator = 0;
+  let gestationDaysAccumulator = 0;
+  let gestationCount = 0;
   let birthAccumulator = 0;
+  let birthCount = 0;
   let toleranceAccumulator = 0;
   let recoveryAccumulator = 0;
 
@@ -589,23 +587,27 @@ function applyPregnancyPhysiology(profile, runtime) {
     const raceProfile = getMergedRacePhysiologyProfile(fetus?.race) || {};
 
     totalWeight += weight;
-    gestationAccumulator += weight * clampNumber(raceProfile.gestationSpeciesSpeed, 0.1, 20, 1.0);
-    birthAccumulator += weight * clampNumber(raceProfile.birthDifficulty, 0.1, 100, 1.0);
+    const gestationSpeed = clampNumber(raceProfile.gestationSpeciesSpeed, 0.1, 20, 1.0);
+    gestationDaysAccumulator += 280 / gestationSpeed;
+    gestationCount += 1;
+    birthAccumulator += clampNumber(raceProfile.birthDifficulty, 0.1, 100, 1.0);
+    birthCount += 1;
     toleranceAccumulator += weight * clampNumber(raceProfile.breedTolerance, 0.1, 100, 1.0);
     recoveryAccumulator += weight * embryoModifiers.recoveryCoefficient;
   }
 
-  const averageGestation = gestationAccumulator / Math.max(totalWeight, 0.33);
-  const averageBirth = birthAccumulator / Math.max(totalWeight, 0.33);
+  const averageGestationDays = gestationDaysAccumulator / Math.max(gestationCount, 1);
+  const averageGestation = averageGestationDays > 0 ? 280 / averageGestationDays : 1.0;
+  const averageBirth = birthAccumulator / Math.max(birthCount, 1);
   const averageTolerance = toleranceAccumulator / Math.max(totalWeight, 0.33);
   const averageRecoveryCoefficient = recoveryAccumulator / Math.max(totalWeight, 0.33);
   const fetusCountModifier = 1 + ((fetuses.length - 1) * 0.08);
   const toleranceCountModifier = Math.max(0.6, 1 - ((fetuses.length - 1) * 0.04));
   const gestationModifierMultiplier = getGestationModifierMultiplier(profile);
 
-  const gestationEffectiveSpeed = clampNumber(originalBio.gestationSpeciesSpeed * gestationModifierMultiplier * averageGestation, 0, 20, originalBio.gestationSpeciesSpeed);
-  const recoveryGestationSpeed = Math.max(0.1, gestationEffectiveSpeed > 0 ? gestationEffectiveSpeed : (originalBio.gestationSpeciesSpeed * averageGestation));
-  const birthDifficulty = clampNumber(originalBio.birthDifficulty * averageBirth * fetusCountModifier, 0.1, 100, originalBio.birthDifficulty);
+  const gestationEffectiveSpeed = clampNumber(averageGestation * gestationModifierMultiplier, 0, 20, averageGestation);
+  const recoveryGestationSpeed = Math.max(0.1, gestationEffectiveSpeed > 0 ? gestationEffectiveSpeed : averageGestation);
+  const birthDifficulty = clampNumber(averageBirth * fetusCountModifier, 0.1, 100, originalBio.birthDifficulty);
   const breedTolerance = clampNumber(originalBio.breedTolerance * averageTolerance * toleranceCountModifier, 0.1, 100, originalBio.breedTolerance);
   const recoveryDays = Math.max(
     1,
@@ -614,7 +616,7 @@ function applyPregnancyPhysiology(profile, runtime) {
 
   profile.bio = {
     ...(profile.bio || {}),
-    gestationSpeciesSpeed: clampNumber(originalBio.gestationSpeciesSpeed, 0.1, 20, 1.0),
+    gestationSpeciesSpeed: clampNumber(averageGestation, 0.1, 20, 1.0),
     gestationEffectiveSpeed,
     birthDifficulty,
     breedTolerance,

@@ -1172,10 +1172,16 @@ function getStageProgress(profile) {
     return { label: '前驱进展', value: Math.max(0, max - remaining), max, unit: 'h', integerDisplay: true };
   }
   if (Object.prototype.hasOwnProperty.call(PREGNANCY_STAGE_DAYS, stage)) {
-    return { label: '阶段进度', value: Number(base.days) || 0, max: PREGNANCY_STAGE_DAYS[stage], unit: 'd' };
+    return {
+      label: '阶段进度',
+      value: Number(base.days) || 0,
+      max: PREGNANCY_STAGE_DAYS[stage],
+      unit: 'd',
+      displayStartAtOne: true,
+    };
   }
   if (stage === '逾期') {
-    return { label: '阶段进度', value: Number(base.days) || 0, unbounded: true, unit: 'd' };
+    return { label: '阶段进度', value: Number(base.days) || 0, unbounded: true, unit: 'd', displayStartAtOne: true };
   }
   if (Object.prototype.hasOwnProperty.call(MENSTRUAL_STAGE_DAYS, stage)) {
     const ratio = Math.max(0.1, Math.min(20, Number(profile?.bio?.menstrualLengthRatio) || 1));
@@ -1184,9 +1190,10 @@ function getStageProgress(profile) {
       value: Number(base.days) || 0,
       max: Math.max(1, MENSTRUAL_STAGE_DAYS[stage] * ratio),
       unit: 'd',
+      displayStartAtOne: true,
     };
   }
-  return { label: '阶段进度', value: Number(base.days) || 0, max: 1, unit: 'd' };
+  return { label: '阶段进度', value: Number(base.days) || 0, max: 1, unit: 'd', displayStartAtOne: true };
 }
 
 function wrapLaborAngle(angle) {
@@ -1737,10 +1744,15 @@ function renderProgressList(items) {
       const value = Math.max(0, Number(item.value) || 0);
       const unbounded = item.unbounded === true;
       const cap = Math.max(1, Number(item.cap) || 1);
-      const fill = unbounded ? '100%' : `${Math.min(100, (value / cap) * 100)}%`;
+      const displayOffset = item.displayStartAtOne ? 1 : 0;
+      const fillValue = item.displayStartAtOne ? Math.min(cap, value + 1) : value;
+      const fill = unbounded ? '100%' : `${Math.min(100, (fillValue / cap) * 100)}%`;
       const scale = unbounded ? '100%' : `${Math.max(25, (cap / MAX_PROGRESS_BAR_CAP) * 100)}%`;
       const displayCap = item.integerDisplay ? Math.ceil(cap) : cap;
-      const displayValue = unbounded ? String(Math.floor(value)) : `${Math.floor(value)} / ${displayCap}`;
+      const displayCurrent = unbounded
+        ? Math.floor(value) + displayOffset
+        : Math.min(displayCap, Math.floor(value) + displayOffset);
+      const displayValue = unbounded ? String(displayCurrent) : `${displayCurrent} / ${displayCap}`;
       return `<div class="bs-bt-track-progress">
         <div class="bs-bt-track-progress-head"><span>${escapeHtml(item.label)}</span><span>${displayValue}</span></div>
         <div class="bs-bt-track-progress-bar" style="width:${scale};"><div class="bs-bt-track-progress-fill" style="width:${fill};"></div></div>
@@ -1761,6 +1773,10 @@ function renderTrackTitle(title, badge = '') {
     ? `<span class="bs-bt-track-title-badge">${escapeHtml(badge)}</span>`
     : '';
   return `<span class="bs-bt-track-title-main">${escapeHtml(title)}</span>${badgeHtml}`;
+}
+
+function formatOneBasedDay(value) {
+  return Math.max(1, Math.floor(Math.max(0, Number(value) || 0)) + 1);
 }
 
 function renderCardCarouselSection(title, items, renderCard, emptyText, kind, options = {}) {
@@ -1874,7 +1890,7 @@ function renderTrackPregnancy(viewModel) {
       ? '危险期'
       : '安全期';
   const pregnantDaysBadge = data.showPregnantFields
-    ? `妊娠 ${Math.floor(Number(data.pregnantDays) || 0)}d`
+    ? `妊娠 ${formatOneBasedDay(data.pregnantDays)}d`
     : '';
   const amnionDurability = Math.max(0, Math.min(100, Number(data.amnionDurability) || 0));
   const pregnantDescriptionOptions = data.showLaborFields
