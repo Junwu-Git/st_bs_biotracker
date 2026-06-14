@@ -5,6 +5,8 @@ import { DEFAULT_DIARY_WRITING_PROMPT, DEFAULT_REGISTRY_DESCRIPTION_GUIDES } fro
 import {
   buildEmptyPsychologyGroup,
   normalizePsychologyGroup,
+  normalizePsychologyStageProfiles,
+  PSY_STAGE_KEYS,
   PSY_MENS_FIELDS,
   PSY_MENS_BOOL_FIELDS,
   PSY_PREG_FIELDS,
@@ -39,6 +41,8 @@ import {
 
 const DEBUG_LAST_REGISTRY_REQUEST_KEY = '__bs_biotracker_debug_last_registry_request__';
 const DEBUG_LAST_REGISTRY_RESULT_KEY = '__bs_biotracker_debug_last_registry_result__';
+const DEBUG_LAST_BREEDING_INFERENCE_REQUEST_KEY = '__bs_biotracker_debug_last_breeding_inference_request__';
+const DEBUG_LAST_BREEDING_INFERENCE_RESULT_KEY = '__bs_biotracker_debug_last_breeding_inference_result__';
 
 function normalizeWorldbookMode(value) {
   const mode = String(value || 'exclude').trim();
@@ -237,6 +241,231 @@ function recordRegistryResultDebug(result, error = null) {
   };
 }
 
+function recordBreedingInferenceRequestDebug(systemPrompt, payload) {
+  globalThis[DEBUG_LAST_BREEDING_INFERENCE_REQUEST_KEY] = {
+    capturedAt: Date.now(),
+    systemPrompt,
+    payload,
+    messages: [
+      { role: 'system', content: String(systemPrompt || '') },
+      { role: 'user', content: JSON.stringify(payload, null, 2) },
+    ],
+  };
+}
+
+function recordBreedingInferenceResultDebug(result, error = null) {
+  globalThis[DEBUG_LAST_BREEDING_INFERENCE_RESULT_KEY] = {
+    capturedAt: Date.now(),
+    ok: !error,
+    result: result ?? null,
+    error: error ? String(error?.message || error) : null,
+  };
+}
+
+export function buildBreedingInferenceSystemPrompt(settings, options = {}) {
+  const customNotes = String(options.customNotes || settings?.registryCustomNotes || '').trim();
+  const declaredRace = String(options.declaredRace || '').trim();
+  const psyMensLines = Object.entries(PSY_MENS_FIELDS).map(([key, value]) => `- mens.${key}_value: ${value.definition}`);
+  const psyMensBoolLines = Object.entries(PSY_MENS_BOOL_FIELDS).map(([key, value]) => `- mens.${key}: ${value.definition}`);
+  const psyPregLines = Object.entries(PSY_PREG_FIELDS).map(([key, value]) => `- preg.${key}_value: ${value.definition}`);
+  const psyPregBoolLines = Object.entries(PSY_PREG_BOOL_FIELDS).map(([key, value]) => `- preg.${key}: ${value.definition}`);
+  const stageKeysText = PSY_STAGE_KEYS.join(', ');
+  return [
+    '你是 AIRP 角色繁育推演器。',
+    '你的任务不是注册角色，而是在注册前根据角色卡、世界书、最近对话与用户补充，推演该角色的繁育心理底盘。',
+    '繁育推演描述的是较稳定的人格、经历、认知与关系倾向，不是当下短暂情绪；不要因为角色刚害羞、刚哭、刚受伤就大幅改写长期心理轴。',
+    '若资料能支持判断，必须给出数值；只有完全没有线索时才使用 null。',
+    '如果角色当前未怀孕或没有明确初登场怀孕迹象，填写 mens；如果角色当前已怀孕、假孕、产兆前驱或产程中，填写 preg。mens 与 preg 二选一，另一项用 null。',
+    '启用 mens 时，必须同时推演 isChaste 与 hasContraception；启用 preg 时，必须同时推演 knowsFatherSource 与 hasProfessionalPrenatalCare。',
+    '数值范围为 0-100。0 是极端封闭/否认/失控，50 是普通中性，100 是极端掌控/执迷/展现。不要使用 100+，注册阶段只给 0-100 起始点。',
+    declaredRace ? `用户已声明角色种族倾向：${declaredRace}` : '',
+    customNotes ? `用户自订补充设定：${customNotes}` : '',
+    'mens 字段定义：',
+    ...psyMensLines,
+    ...psyMensBoolLines,
+    'preg 字段定义：',
+    ...psyPregLines,
+    ...psyPregBoolLines,
+    '推演准则：',
+    '- mastery/cognition 主要看角色对自身生理、医学/魔法知识、经验与冷静程度。',
+    '- desire 主要看角色对受孕、承接种子、繁衍使命、避孕与恐惧怀孕的长期态度。',
+    '- autonomy 主要看角色在亲密关系与权力互动中的主动/被动、支配/顺从倾向。',
+    '- bonding 主要看母性、责任感、对胎儿的接纳或排斥，不等同于是否喜欢伴侣。',
+    '- stance 主要看角色如何处理孕妇身份的社会风险、公开程度、资源调度与身份利益。',
+    '- 布林字段是当前状态判定，不属于 6x6 阶段表；必须根据角色设定、最近剧情、医疗/魔法条件与关系线索合理推断，不确定时填 false。',
+    '- isChaste 代表当前保持贞洁取向、未发生性关系，或处于稳定单一性伴侣关系；若角色已有多对象关系、频繁性接触、被设定为非单伴侣，或资料无法确认单一关系，应填 false。',
+    '- hasContraception 代表当前确有稳定生效中的避孕措施；不要因为角色“不想怀孕”就自动视为 true。',
+    '- knowsFatherSource 代表角色能明确判断或相信胎儿父源；多对象、记忆缺口、魔法混淆或刻意隐瞒时应谨慎。',
+    '- hasProfessionalPrenatalCare 代表已有持续、专业、可信的产检或等价照护；一次性的民间判断或自我猜测不算 true。',
+    `- stageProfiles 必须保存 6 轴 × 6 阶段的角色专属解释。每个轴都必须包含这些阶段键：${stageKeysText}。`,
+    '- stageProfiles 的六个阶段只代表数值区间：0=极低或封闭，1_25=低位倾向，26_50=中低到中性，51_75=中高位倾向，76_100=高位强化，100_plus=超常或不可逆倾向。',
+    '- stageProfiles 的文字必须从角色资料重新诠释：写她在该区间会如何理解、掩饰、表达、合理化、抗拒或推进繁育相关变化。',
+    '- 不要使用任何预设阶段名、模板标签、括号式总称或分级标题；每段文本必须直接进入角色专属表现。',
+    '- 不要复述字段定义，不要写通用人群说明，不要把每段开头写成同一种固定句式。',
+    '- 即使当前只使用 mens 或 preg，也要同时生成 mens 与 preg 全部 6 轴阶段表，供未来阶段切换后继续推演。',
+    '只输出 JSON，不要输出解释文字。JSON 结构必须是：',
+    '{',
+    '  "target_character": "string",',
+    '  "pregnancy_status": "mens|preg|unknown",',
+    '  "confidence": 0,',
+    '  "evidence": ["string"],',
+    '  "mens": {',
+    '    "mastery_value": 0,',
+    '    "desire_value": 0,',
+    '    "autonomy_value": 0,',
+    '    "isChaste": false,',
+    '    "hasContraception": false',
+    '  },',
+    '  "preg": {',
+    '    "cognition_value": 0,',
+    '    "bonding_value": 0,',
+    '    "stance_value": 0,',
+    '    "knowsFatherSource": false,',
+    '    "hasProfessionalPrenatalCare": false',
+    '  },',
+    '  "stageProfiles": {',
+    '    "mens": {',
+    '      "mastery": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" },',
+    '      "desire": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" },',
+    '      "autonomy": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" }',
+    '    },',
+    '    "preg": {',
+    '      "cognition": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" },',
+    '      "bonding": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" },',
+    '      "stance": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" }',
+    '    }',
+    '  },',
+    '  "notes": "string"',
+    '}',
+    '如果使用 mens，preg 必须为 null；如果使用 preg，mens 必须为 null。',
+  ].filter(Boolean).join('\n');
+}
+
+async function runBreedingInference(settings, payload, options = {}) {
+  const systemPrompt = options.breedingInferenceSystemPrompt || buildBreedingInferenceSystemPrompt(settings, options);
+  recordBreedingInferenceRequestDebug(systemPrompt, payload);
+  try {
+    const result = await callOpenAICompatible(settings, payload, systemPrompt);
+    const stageProfiles = normalizePsychologyStageProfiles(result?.stageProfiles);
+    const missing = getMissingPsychologyStageProfileKeys(stageProfiles);
+    if (missing.length > 0) {
+      throw new Error(`繁育推演缺少 6x6 stageProfiles：${missing.slice(0, 12).join(', ')}${missing.length > 12 ? '...' : ''}`);
+    }
+    const labelLeaks = getPsychologyStageProfileLabelLeaks(stageProfiles);
+    if (labelLeaks.length > 0) {
+      throw new Error(`繁育推演 stageProfiles 使用了默认阶段标签，请重新诠释：${labelLeaks.slice(0, 12).join(', ')}${labelLeaks.length > 12 ? '...' : ''}`);
+    }
+    result.stageProfiles = stageProfiles;
+    recordBreedingInferenceResultDebug(result);
+    return result && typeof result === 'object' && !Array.isArray(result) ? result : null;
+  } catch (error) {
+    recordBreedingInferenceResultDebug(null, error);
+    throw error;
+  }
+}
+
+function getMissingPsychologyStageProfileKeys(stageProfiles) {
+  const missing = [];
+  const groups = [
+    ['mens', PSY_MENS_FIELDS],
+    ['preg', PSY_PREG_FIELDS],
+  ];
+  for (const [groupKey, fieldConfig] of groups) {
+    for (const field of Object.keys(fieldConfig || {})) {
+      for (const stageKey of PSY_STAGE_KEYS) {
+        if (!String(stageProfiles?.[groupKey]?.[field]?.[stageKey] || '').trim()) {
+          missing.push(`${groupKey}.${field}.${stageKey}`);
+        }
+      }
+    }
+  }
+  return missing;
+}
+
+function getPsychologyStageProfileLabelLeaks(stageProfiles) {
+  const leaks = [];
+  const groups = [
+    ['mens', PSY_MENS_FIELDS],
+    ['preg', PSY_PREG_FIELDS],
+  ];
+  for (const [groupKey, fieldConfig] of groups) {
+    for (const [field, config] of Object.entries(fieldConfig || {})) {
+      for (const stageKey of PSY_STAGE_KEYS) {
+        const label = String(config?.stages?.[stageKey]?.meaning || '').trim();
+        const text = String(stageProfiles?.[groupKey]?.[field]?.[stageKey] || '').trim();
+        if (!label || !text) continue;
+        const normalizedText = text.replace(/^[「『“"']+/, '').trim();
+        if (
+          normalizedText === label
+          || normalizedText.startsWith(`${label}，`)
+          || normalizedText.startsWith(`${label},`)
+          || normalizedText.startsWith(`${label}。`)
+          || normalizedText.startsWith(`${label}：`)
+          || normalizedText.startsWith(`${label}:`)
+          || normalizedText.startsWith(`${label} `)
+        ) {
+          leaks.push(`${groupKey}.${field}.${stageKey}=${label}`);
+        }
+      }
+    }
+  }
+  return leaks;
+}
+
+async function buildRegistryPayload(ctx, settings, chatState, options = {}) {
+  const targetName = String(options.targetName || '').trim();
+  const customNotes = String(options.customNotes || settings.registryCustomNotes || '').trim();
+  const declaredRace = String(options.declaredRace || '').trim();
+  if (!targetName) throw new Error('runRegistry 需要 targetName');
+  const currentCharacter = getCharacterCard(ctx);
+  const recentMessages = buildRecentMessages(ctx, settings);
+  const rawCharacterWorldBook = await getCharacterWorldBook(ctx);
+  const characterWorldBook = filterRegistryWorldbookEntries(
+    rawCharacterWorldBook,
+    parseRegistryWorldbookExcludeNames(settings),
+    settings,
+    recentMessages,
+  );
+  const payloadWorldBook = characterWorldBook;
+  const payloadGlobalWorldbooks = await getFilteredGlobalWorldbooks(ctx, settings, recentMessages);
+  return {
+    reason: options.reason || 'manual_registry',
+    chat_id: getChatKey(ctx),
+    current_character: {
+      ...currentCharacter,
+      worldBook: payloadWorldBook,
+    },
+    character_description: currentCharacter.description || '',
+    character_worldbook_name: payloadWorldBook ? (getCharacterWorldBookName(ctx) || null) : null,
+    character_worldbook: payloadWorldBook,
+    global_worldbooks: payloadGlobalWorldbooks,
+    target_character: targetName,
+    existing_state: chatState.characters[targetName] || null,
+    recent_messages: recentMessages,
+    custom_notes: customNotes,
+    declared_race: declaredRace || null,
+    user_instruction: String(options.userInstruction || '').trim(),
+  };
+}
+
+export async function runRegistryBreedingInference(ctx, options = {}) {
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const customNotes = String(options.customNotes || settings.registryCustomNotes || '').trim();
+  const declaredRace = String(options.declaredRace || '').trim();
+  const payload = await buildRegistryPayload(ctx, settings, chatState, {
+    ...options,
+    reason: options.reason || 'breeding_inference',
+    customNotes,
+    declaredRace,
+  });
+  return runBreedingInference(settings, payload, {
+    ...options,
+    customNotes,
+    declaredRace,
+  });
+}
+
 
 export function buildRegistrySystemPrompt(settings, options = {}) {
   const guides = {
@@ -264,6 +493,7 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '你是 AIRP 女性角色注册初始化器。',
     '只在用户明确要求注册指定角色时工作，不得擅自新增其他角色。',
     '根据角色卡、用户要求、已有资料，输出角色初始化 JSON。',
+    '正式注册前可能已有 payload.breeding_inference（繁育推演）。若存在，必须优先把它当作繁育心理初稿，再结合角色资料校正，不要无故忽略。',
     '你只需要填写角色注册时真正需要声明的内容，不需要补充其他无关信息。',
     '不要扩写额外分类，不要发散到注册步骤之外的内容。',
     '你只需要填写以下声明内容：',
@@ -315,10 +545,14 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '- 刚做爱开局: {"base":{"latestSexDays":0,"sperms":[{"male":"丈夫","race":"[不死-僵尸]人类","value":30}]},"experience":{"latestSexPartner":"丈夫"}}',
     '【3. 繁育心理】',
     '参数说明：',
+    '- 若 payload.breeding_inference 存在，先采用其中对应 mens 或 preg 的数值作为心理起始点；只有当角色资料与繁育推演明显冲突时才调整。',
+    '- 若 payload.breeding_inference.stageProfiles 存在，必须原样写入 profile.psychology.stageProfiles，除非需要修正明显错误或空缺。',
+    '- 繁育心理是角色长期繁育人格底盘，不是临时情绪。注册时应让它能支撑后续 bsUpdatePsychology 的小幅推演。',
     '- 非怀孕角色只填写 psychology.mens，包含 mastery_value、mastery_interpret、desire_value、desire_interpret、autonomy_value、autonomy_interpret，以及 isChaste、hasContraception。',
     '- 怀孕角色只填写 psychology.preg，包含 cognition_value、cognition_interpret、bonding_value、bonding_interpret、stance_value、stance_interpret，以及 knowsFatherSource、hasProfessionalPrenatalCare。',
     '- psychology.mens 与 psychology.preg 互斥，不要同时填写。',
     '- 你主要填写 *_value，数值范围为 0-100；*_interpret 可省略，系统会按阶段自动补全。布林旗标只填 true/false。',
+    '- psychology.stageProfiles 用来保存该角色专属 6 轴 × 6 阶段解释。结构为 psychology.stageProfiles.mens.{mastery,desire,autonomy}.{0,1_25,26_50,51_75,76_100,100_plus} 与 psychology.stageProfiles.preg.{cognition,bonding,stance}.{0,1_25,26_50,51_75,76_100,100_plus}。',
     '非怀孕使用以下定义与阶段预览：',
     ...psyMensLines,
     ...psyMensBoolLines,
@@ -445,6 +679,18 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '        "stance_interpret": "string",',
     '        "knowsFatherSource": false,',
     '        "hasProfessionalPrenatalCare": false',
+    '      },',
+    '      "stageProfiles": {',
+    '        "mens": {',
+    '          "mastery": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" },',
+    '          "desire": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" },',
+    '          "autonomy": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" }',
+    '        },',
+    '        "preg": {',
+    '          "cognition": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" },',
+    '          "bonding": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" },',
+    '          "stance": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" }',
+    '        }',
     '      }',
     '    },',
     '    "metabolism": {',
@@ -687,11 +933,21 @@ function normalizeRegisteredPregnancy(profile) {
 
 function sanitizePsy(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const mens = normalizePsychologyGroup(value.mens, PSY_MENS_FIELDS, { includeDefaults: false, booleanFields: PSY_MENS_BOOL_FIELDS });
-  const preg = normalizePsychologyGroup(value.preg, PSY_PREG_FIELDS, { includeDefaults: false, booleanFields: PSY_PREG_BOOL_FIELDS });
-  if (preg) return { preg };
-  if (mens) return { mens };
-  return null;
+  const stageProfiles = normalizePsychologyStageProfiles(value.stageProfiles);
+  const mens = normalizePsychologyGroup(value.mens, PSY_MENS_FIELDS, {
+    includeDefaults: false,
+    booleanFields: PSY_MENS_BOOL_FIELDS,
+    stageProfiles: stageProfiles.mens,
+  });
+  const preg = normalizePsychologyGroup(value.preg, PSY_PREG_FIELDS, {
+    includeDefaults: false,
+    booleanFields: PSY_PREG_BOOL_FIELDS,
+    stageProfiles: stageProfiles.preg,
+  });
+  const hasStageProfiles = Object.keys(stageProfiles).length > 0;
+  if (preg) return { preg, ...(hasStageProfiles ? { stageProfiles } : {}) };
+  if (mens) return { mens, ...(hasStageProfiles ? { stageProfiles } : {}) };
+  return hasStageProfiles ? { stageProfiles } : null;
 }
 
 function sanitizeMeter(value, { min = 0, max = 999 } = {}) {
@@ -787,6 +1043,38 @@ export function applyRegistryResult(chatState, result) {
   const sanitizedProfile = sanitizeRegistryProfile(result.profile, base.profile);
   const effectiveRace = sanitizedProfile.base?.race ?? base.profile.base.race;
   const mergedRaceProfile = getMergedRacePhysiologyProfile(effectiveRace);
+  const basePsychology = normalizeCharacterPsychologyState(base).profile.psychology;
+  const stageProfiles = Object.keys(sanitizedProfile.psychology?.stageProfiles || {}).length > 0
+    ? sanitizedProfile.psychology.stageProfiles
+    : (basePsychology.stageProfiles || {});
+  const nextPsychology = sanitizedProfile.psychology?.preg
+    ? {
+      stageProfiles,
+      mens: buildEmptyPsychologyGroup(PSY_MENS_FIELDS, PSY_MENS_BOOL_FIELDS),
+      preg: {
+        ...buildEmptyPsychologyGroup(PSY_PREG_FIELDS, PSY_PREG_BOOL_FIELDS),
+        ...normalizePsychologyGroup(sanitizedProfile.psychology.preg, PSY_PREG_FIELDS, {
+          booleanFields: PSY_PREG_BOOL_FIELDS,
+          stageProfiles: stageProfiles.preg,
+        }),
+      },
+    }
+    : sanitizedProfile.psychology?.mens
+      ? {
+        stageProfiles,
+        mens: {
+          ...buildEmptyPsychologyGroup(PSY_MENS_FIELDS, PSY_MENS_BOOL_FIELDS),
+          ...normalizePsychologyGroup(sanitizedProfile.psychology.mens, PSY_MENS_FIELDS, {
+            booleanFields: PSY_MENS_BOOL_FIELDS,
+            stageProfiles: stageProfiles.mens,
+          }),
+        },
+        preg: buildEmptyPsychologyGroup(PSY_PREG_FIELDS, PSY_PREG_BOOL_FIELDS),
+      }
+      : {
+        ...basePsychology,
+        stageProfiles,
+      };
   const nextCharacter = {
     ...base,
     name,
@@ -809,23 +1097,7 @@ export function applyRegistryResult(chatState, result) {
         ...(sanitizedProfile.experience || {}),
       },
       diary: sanitizedProfile.diary ?? base.profile.diary,
-      psychology: sanitizedProfile.psychology?.preg
-        ? {
-          mens: buildEmptyPsychologyGroup(PSY_MENS_FIELDS, PSY_MENS_BOOL_FIELDS),
-          preg: {
-            ...buildEmptyPsychologyGroup(PSY_PREG_FIELDS, PSY_PREG_BOOL_FIELDS),
-            ...sanitizedProfile.psychology.preg,
-          },
-        }
-        : sanitizedProfile.psychology?.mens
-          ? {
-            mens: {
-              ...buildEmptyPsychologyGroup(PSY_MENS_FIELDS, PSY_MENS_BOOL_FIELDS),
-              ...sanitizedProfile.psychology.mens,
-            },
-            preg: buildEmptyPsychologyGroup(PSY_PREG_FIELDS, PSY_PREG_BOOL_FIELDS),
-          }
-          : normalizeCharacterPsychologyState(base).profile.psychology,
+      psychology: nextPsychology,
       descriptions: {
         ...base.profile.descriptions,
         ...(sanitizedProfile.descriptions || {}),
@@ -865,6 +1137,64 @@ export function applyRegistryResult(chatState, result) {
   return chatState.characters[name];
 }
 
+export function applyBreedingInferenceResult(chatState, targetName, inference) {
+  const name = String(targetName || '').trim();
+  if (!name) throw new Error('applyBreedingInferenceResult 需要 targetName');
+  const current = chatState.characters?.[name];
+  if (!current) throw new Error(`找不到已注册角色：${name}`);
+  if (!inference || typeof inference !== 'object' || Array.isArray(inference)) throw new Error('缺少可套用的繁育推演');
+
+  const next = normalizeCharacterPsychologyState({
+    ...current,
+    profile: {
+      ...(current.profile || {}),
+      psychology: current.profile?.psychology || {},
+    },
+  });
+  const psychology = next.profile.psychology || {};
+  const stageProfiles = Object.keys(inference.stageProfiles || {}).length > 0
+    ? normalizePsychologyStageProfiles(inference.stageProfiles)
+    : (psychology.stageProfiles || {});
+
+  const mens = inference.mens && typeof inference.mens === 'object'
+    ? normalizePsychologyGroup(inference.mens, PSY_MENS_FIELDS, {
+      booleanFields: PSY_MENS_BOOL_FIELDS,
+      stageProfiles: stageProfiles.mens,
+    })
+    : normalizePsychologyGroup(psychology.mens, PSY_MENS_FIELDS, {
+      booleanFields: PSY_MENS_BOOL_FIELDS,
+      stageProfiles: stageProfiles.mens,
+    });
+  const preg = inference.preg && typeof inference.preg === 'object'
+    ? normalizePsychologyGroup(inference.preg, PSY_PREG_FIELDS, {
+      booleanFields: PSY_PREG_BOOL_FIELDS,
+      stageProfiles: stageProfiles.preg,
+    })
+    : normalizePsychologyGroup(psychology.preg, PSY_PREG_FIELDS, {
+      booleanFields: PSY_PREG_BOOL_FIELDS,
+      stageProfiles: stageProfiles.preg,
+    });
+
+  next.profile.psychology = {
+    mens,
+    preg,
+    stageProfiles,
+  };
+  next.updatedAt = Date.now();
+  chatState.characters[name] = syncCharacterStageFromProfile(normalizeCharacterPsychologyState(next));
+  return chatState.characters[name];
+}
+
+export function applyRegistryBreedingInference(ctx, options = {}) {
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const targetName = String(options.targetName || '').trim();
+  const character = applyBreedingInferenceResult(chatState, targetName, options.breedingInference);
+  recordChatStateSnapshot(ctx, chatState, { reason: 'breeding_inference_apply' });
+  saveSettings(ctx);
+  return character;
+}
+
 export async function runRegistry(ctx, options = {}) {
   const settings = getSettings(ctx);
   const chatState = getChatState(ctx, settings);
@@ -872,49 +1202,24 @@ export async function runRegistry(ctx, options = {}) {
   const customNotes = String(options.customNotes || settings.registryCustomNotes || '').trim();
   const declaredRace = String(options.declaredRace || '').trim();
   if (!targetName) throw new Error('runRegistry 需要 targetName');
-  const currentCharacter = getCharacterCard(ctx);
-  const recentMessages = buildRecentMessages(ctx, settings);
-  const rawCharacterWorldBook = await getCharacterWorldBook(ctx);
-  const characterWorldBook = filterRegistryWorldbookEntries(
-    rawCharacterWorldBook,
-    parseRegistryWorldbookExcludeNames(settings),
-    settings,
-    recentMessages,
-  );
-  const payloadWorldBook = characterWorldBook;
-  const payloadGlobalWorldbooks = await getFilteredGlobalWorldbooks(ctx, settings, recentMessages);
-  const payload = {
-    reason: options.reason || 'manual_registry',
-    chat_id: getChatKey(ctx),
-    current_character: {
-      ...currentCharacter,
-      worldBook: payloadWorldBook,
-    },
-    character_description: currentCharacter.description || '',
-    character_worldbook_name: payloadWorldBook ? (getCharacterWorldBookName(ctx) || null) : null,
-    character_worldbook: payloadWorldBook,
-    global_worldbooks: payloadGlobalWorldbooks,
-    target_character: targetName,
-    existing_state: chatState.characters[targetName] || null,
-    recent_messages: recentMessages,
-    custom_notes: customNotes,
-    declared_race: declaredRace || null,
-    user_instruction: String(options.userInstruction || '').trim(),
-  };
+  const payload = await buildRegistryPayload(ctx, settings, chatState, { ...options, customNotes, declaredRace });
+  if (options.breedingInference) payload.breeding_inference = options.breedingInference;
   try {
-    const currentCharacterText = JSON.stringify(currentCharacter) || '';
-    const characterWorldBookText = JSON.stringify(characterWorldBook) || '';
+    const currentCharacterText = JSON.stringify(payload.current_character) || '';
+    const characterWorldBookText = JSON.stringify(payload.character_worldbook) || '';
     const recentMessagesText = JSON.stringify(payload.recent_messages) || '';
+    const breedingInferenceText = JSON.stringify(payload.breeding_inference) || '';
     const payloadText = JSON.stringify(payload) || '';
-    const worldbookEntries = Array.isArray(characterWorldBook?.entries)
-      ? characterWorldBook.entries.length
-      : (Array.isArray(characterWorldBook?.worldBook?.entries) ? characterWorldBook.worldBook.entries.length : 0);
+    const worldbookEntries = Array.isArray(payload.character_worldbook?.entries)
+      ? payload.character_worldbook.entries.length
+      : (Array.isArray(payload.character_worldbook?.worldBook?.entries) ? payload.character_worldbook.worldBook.entries.length : 0);
     console.log('[BS BioTracker][registry] payload size', {
       target_character: targetName,
       current_character_chars: currentCharacterText.length,
       character_worldbook_chars: characterWorldBookText.length,
       character_worldbook_entries: worldbookEntries,
       recent_messages_chars: recentMessagesText.length,
+      breeding_inference_chars: breedingInferenceText.length,
       payload_chars: payloadText.length,
     });
   } catch (error) {
@@ -928,6 +1233,22 @@ export async function runRegistry(ctx, options = {}) {
       payload,
       systemPrompt,
     );
+    if (
+      options.breedingInference?.stageProfiles
+      && result
+      && typeof result === 'object'
+      && !Array.isArray(result)
+    ) {
+      result.profile = result.profile && typeof result.profile === 'object' && !Array.isArray(result.profile)
+        ? result.profile
+        : {};
+      result.profile.psychology = result.profile.psychology && typeof result.profile.psychology === 'object' && !Array.isArray(result.profile.psychology)
+        ? result.profile.psychology
+        : {};
+      if (!result.profile.psychology.stageProfiles) {
+        result.profile.psychology.stageProfiles = options.breedingInference.stageProfiles;
+      }
+    }
     recordRegistryResultDebug(result);
     const character = applyRegistryResult(chatState, result);
     recordChatStateSnapshot(ctx, chatState, { reason: 'registry' });

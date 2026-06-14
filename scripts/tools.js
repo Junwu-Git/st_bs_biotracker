@@ -16,6 +16,7 @@ import {
 import {
   buildEmptyPsychologyGroup,
   normalizePsychologyGroup,
+  normalizePsychologyStageProfiles,
   PSY_MENS_FIELDS,
   PSY_MENS_BOOL_FIELDS,
   PSY_PREG_FIELDS,
@@ -3347,7 +3348,11 @@ function applyUpdatePsychology(chatState, args) {
 
   const fieldConfig = targetGroup === 'preg' ? PSY_PREG_FIELDS : PSY_MENS_FIELDS;
   const boolFieldConfig = targetGroup === 'preg' ? PSY_PREG_BOOL_FIELDS : PSY_MENS_BOOL_FIELDS;
-  const target = normalizePsychologyGroup(psychology[targetGroup], fieldConfig, { booleanFields: boolFieldConfig });
+  const stageProfiles = normalizePsychologyStageProfiles(psychology.stageProfiles);
+  const target = normalizePsychologyGroup(psychology[targetGroup], fieldConfig, {
+    booleanFields: boolFieldConfig,
+    stageProfiles: stageProfiles[targetGroup],
+  });
   const allowedFields = Object.keys(fieldConfig);
   const allowedBoolFields = Object.keys(boolFieldConfig);
 
@@ -3373,15 +3378,25 @@ function applyUpdatePsychology(chatState, args) {
     return { applied: false, message: `bsUpdatePsychology skipped for ${female}: already changed during this story hour.` };
   }
 
-  const normalizedTarget = normalizePsychologyGroup(target, fieldConfig, { booleanFields: boolFieldConfig });
+  const normalizedTarget = normalizePsychologyGroup(target, fieldConfig, {
+    booleanFields: boolFieldConfig,
+    stageProfiles: stageProfiles[targetGroup],
+  });
   profile.psychology = {
     ...(profile.psychology || {}),
+    stageProfiles,
     mens: targetGroup === 'mens'
       ? normalizedTarget
-      : normalizePsychologyGroup(profile.psychology?.mens, PSY_MENS_FIELDS, { booleanFields: PSY_MENS_BOOL_FIELDS }),
+      : normalizePsychologyGroup(profile.psychology?.mens, PSY_MENS_FIELDS, {
+        booleanFields: PSY_MENS_BOOL_FIELDS,
+        stageProfiles: stageProfiles.mens,
+      }),
     preg: targetGroup === 'preg'
       ? normalizedTarget
-      : normalizePsychologyGroup(profile.psychology?.preg, PSY_PREG_FIELDS, { booleanFields: PSY_PREG_BOOL_FIELDS }),
+      : normalizePsychologyGroup(profile.psychology?.preg, PSY_PREG_FIELDS, {
+        booleanFields: PSY_PREG_BOOL_FIELDS,
+        stageProfiles: stageProfiles.preg,
+      }),
   };
   profile.cooldown = {
     ...cooldown,

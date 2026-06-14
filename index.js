@@ -1,5 +1,5 @@
 import { fetchModelList } from './scripts/api.js';
-import { runRegistry } from './scripts/registry.js';
+import { applyRegistryBreedingInference, runRegistry, runRegistryBreedingInference } from './scripts/registry.js';
 import {
   AMORPHOUS_RACES,
   DERIVED_TYPE_RACES,
@@ -78,6 +78,7 @@ const WORLDBOOK_RELOAD_TIMER_KEY = '__bs_biotracker_worldbook_reload_timer__';
 const MAINFLOW_CONTEXT_SNAPSHOT_KEY = '__bs_biotracker_mainflow_context_snapshot__';
 const DEBUG_LAST_MAINFLOW_SNAPSHOT_KEY = '__bs_biotracker_debug_last_mainflow_snapshot__';
 const FETCH_CAPTURE_READY_KEY = '__bs_biotracker_fetch_capture_ready__';
+let registryBreedingInferenceDraft = null;
 const ORIGINAL_FETCH_KEY = '__bs_biotracker_original_fetch__';
 const MAX_MAINFLOW_SNAPSHOT_MESSAGES = 48;
 const VITALITY_CAPS = { 1: 50, 2: 75, 3: 100, 4: 125, 5: 150, 6: 175, 7: 200 };
@@ -178,6 +179,64 @@ function setRegisterStatus(message, isError = false) {
   if (!el) return;
   el.textContent = message;
   el.dataset.state = isError ? 'error' : 'normal';
+}
+
+function setRegisterTab(tab) {
+  const next = String(tab || 'inference') === 'registry' ? 'registry' : 'inference';
+  document.querySelectorAll('#bs-bt-register-tabs [data-register-tab]').forEach((node) => {
+    node.classList.toggle('is-active', String(node.getAttribute('data-register-tab') || '') === next);
+  });
+  document.querySelectorAll('#bs-bt-view-register [data-register-page]').forEach((node) => {
+    const active = String(node.getAttribute('data-register-page') || '') === next;
+    node.classList.toggle('is-active', active);
+    node.hidden = !active;
+  });
+}
+
+function getRegisterFormValues() {
+  return {
+    targetName: String(document.getElementById('bs-bt-register-name')?.value || '').trim(),
+    declaredRace: String(document.getElementById('bs-bt-register-race')?.value || '').trim(),
+    customNotes: String(document.getElementById('bs-bt-register-custom-notes')?.value || '').trim(),
+  };
+}
+
+function setBreedingInferenceStatus(message, isError = false) {
+  const el = document.getElementById('bs-bt-breeding-inference-message');
+  if (!el) return;
+  el.textContent = message;
+  el.dataset.kind = isError ? 'error' : 'normal';
+}
+
+function setBreedingInferenceEditor(message, isError = false) {
+  const el = document.getElementById('bs-bt-breeding-inference-status');
+  if (!el) return;
+  if ('value' in el) el.value = message;
+  else el.textContent = message;
+  el.dataset.state = isError ? 'error' : 'normal';
+}
+
+function formatBreedingInferencePreview(result) {
+  if (!result || typeof result !== 'object') return '尚未执行繁育推演。';
+  return JSON.stringify(result, null, 2);
+}
+
+function getApplicableBreedingInferenceDraft(values) {
+  const draft = registryBreedingInferenceDraft;
+  if (!draft?.result) return null;
+  if (draft.targetName !== values.targetName) return null;
+  if (draft.declaredRace !== values.declaredRace) return null;
+  if (draft.customNotes !== values.customNotes) return null;
+  const editor = document.getElementById('bs-bt-breeding-inference-status');
+  const raw = String((editor && 'value' in editor ? editor.value : editor?.textContent) || '').trim();
+  if (!raw || raw === '尚未执行繁育推演。若直接注册，会使用默认繁育心理规则。') return draft.result;
+  try {
+    const edited = JSON.parse(raw);
+    if (!edited || typeof edited !== 'object' || Array.isArray(edited)) throw new Error('繁育推演 JSON 必须是对象');
+    return edited;
+  } catch (error) {
+    throw new Error(`繁育推演 JSON 无法解析：${String(error?.message || error)}`);
+  }
 }
 
 function getWorldbookFilterInputNames(ctx) {
@@ -1530,9 +1589,9 @@ function getPsychologyView(profile = {}) {
     return {
       title: '繁育心理',
       items: [
-        { label: '察觉', value: preg.cognition_value ?? 0 },
-        { label: '依附', value: preg.bonding_value ?? 0 },
-        { label: '导向', value: preg.stance_value ?? 0 },
+        { label: '察觉', value: preg.cognition_value ?? 0, prompt: preg.cognition_interpret || '' },
+        { label: '依附', value: preg.bonding_value ?? 0, prompt: preg.bonding_interpret || '' },
+        { label: '导向', value: preg.stance_value ?? 0, prompt: preg.stance_interpret || '' },
       ],
       flags: [
         { label: '知晓父源', active: Boolean(preg.knowsFatherSource) },
@@ -1543,9 +1602,9 @@ function getPsychologyView(profile = {}) {
   return {
     title: '繁育心理',
     items: [
-      { label: '掌控', value: mens.mastery_value ?? 0 },
-      { label: '欲望', value: mens.desire_value ?? 0 },
-      { label: '自主', value: mens.autonomy_value ?? 0 },
+      { label: '掌控', value: mens.mastery_value ?? 0, prompt: mens.mastery_interpret || '' },
+      { label: '欲望', value: mens.desire_value ?? 0, prompt: mens.desire_interpret || '' },
+      { label: '自主', value: mens.autonomy_value ?? 0, prompt: mens.autonomy_interpret || '' },
     ],
     flags: [
       { label: '贞洁/单伴侣', active: Boolean(mens.isChaste) },
@@ -1589,6 +1648,33 @@ function buildRadarSvg(items) {
     <circle cx="${cx}" cy="${cy}" r="2.5" fill="currentColor" />
     ${labels}
   </svg>`;
+}
+
+function renderPsychologyPrompts(items) {
+  const prompts = (Array.isArray(items) ? items : [])
+    .map((item) => ({
+      label: String(item?.label || '').trim(),
+      value: item?.value,
+      prompt: String(item?.prompt || '').trim(),
+    }))
+    .filter((item) => item.prompt);
+  if (prompts.length === 0) {
+    return '<div class="bs-bt-track-description-empty bs-bt-track-psych-prompt-empty">暂无阶段提示</div>';
+  }
+  return `
+    <div class="bs-bt-track-psych-prompts">
+      ${prompts
+    .map(
+      (item) => `
+        <div class="bs-bt-track-psych-prompt">
+          <div class="bs-bt-track-description-title">${escapeHtml(item.label)} · ${escapeHtml(formatIntegerDisplay(item.value))}</div>
+          <div>${escapeHtml(item.prompt)}</div>
+        </div>
+      `,
+    )
+    .join('')}
+    </div>
+  `;
 }
 
 function buildTrackCharacterViewModel(character) {
@@ -1869,6 +1955,7 @@ function renderTrackPsychology(viewModel) {
     <div class="bs-bt-track-section">
       <div class="bs-bt-track-section-title">${escapeHtml(psychology.title)}</div>
       <div class="bs-bt-track-radar-wrap">${buildRadarSvg(psychology.items)}</div>
+      ${renderPsychologyPrompts(psychology.items)}
       <div class="bs-bt-track-psych-flags">
         ${flags
       .map(
@@ -3446,6 +3533,10 @@ function applySettingsToForm(ctx) {
   setValue('bs-bt-diary-writing-prompt', settings.diaryWritingPrompt);
   populateModelList(settings);
   setConnectStatus(settings.modelOptions.length > 0 ? `已缓存 ${settings.modelOptions.length} 个模型` : '尚未连接');
+  registryBreedingInferenceDraft = null;
+  setRegisterTab('inference');
+  setBreedingInferenceEditor('尚未执行繁育推演。若直接注册，会使用默认繁育心理规则。');
+  setBreedingInferenceStatus('');
   setRegisterStatus('输入名字与 Description 规则后发送注册请求，完成后可在“角色追踪”查看该角色状态变量。');
   syncWorldbookFilterInput(ctx);
   renderWorldbookEntryList(ctx, parseWorldbookExcludeNamesInput(settings.trackerWorldbookExcludeNames));
@@ -4523,23 +4614,115 @@ async function ensureModal(ctx) {
       globalThis.toastr?.error?.(String(error?.message || error), '[BS BioTracker]');
     }
   });
+  document.querySelectorAll('#bs-bt-register-tabs [data-register-tab]').forEach((node) => {
+    node.addEventListener('click', () => {
+      setRegisterTab(String(node.getAttribute('data-register-tab') || 'inference'));
+    });
+  });
+  document.getElementById('bs-bt-breeding-inference-run')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const values = getRegisterFormValues();
+    if (!values.targetName) {
+      setBreedingInferenceStatus('请先输入要推演的角色名。', true);
+      globalThis.toastr?.warning?.('[BS BioTracker] 请先输入角色名');
+      return;
+    }
+    readSettingsFromForm(ctx);
+    button.disabled = true;
+    button.textContent = '推演中...';
+    setBreedingInferenceStatus(`正在推演 ${values.targetName} 的繁育心理...`);
+    try {
+      const result = await runRegistryBreedingInference(ctx, values);
+      registryBreedingInferenceDraft = {
+        ...values,
+        result,
+      };
+      setBreedingInferenceEditor(formatBreedingInferencePreview(result));
+      setBreedingInferenceStatus('推演完成。可以直接在上方 JSON 文本框微调，再注册或套用。');
+      globalThis.toastr?.success?.(`[BS BioTracker] 已完成 ${values.targetName} 的繁育推演`);
+    } catch (error) {
+      registryBreedingInferenceDraft = null;
+      console.error('[BS BioTracker] runRegistryBreedingInference failed', error);
+      const message = String(error?.message || error);
+      setBreedingInferenceStatus(message, true);
+      globalThis.toastr?.error?.(message, '[BS BioTracker]');
+    } finally {
+      button.disabled = false;
+      button.textContent = '繁育推演';
+    }
+  });
+  document.getElementById('bs-bt-breeding-inference-apply')?.addEventListener('click', () => {
+    const values = getRegisterFormValues();
+    let breedingInference = null;
+    try {
+      breedingInference = getApplicableBreedingInferenceDraft(values);
+    } catch (error) {
+      const message = String(error?.message || error);
+      setBreedingInferenceStatus(message, true);
+      globalThis.toastr?.error?.(message, '[BS BioTracker]');
+      return;
+    }
+    if (!values.targetName) {
+      setBreedingInferenceStatus('请先输入要套用推演的角色名。', true);
+      globalThis.toastr?.warning?.('[BS BioTracker] 请先输入角色名');
+      return;
+    }
+    if (!breedingInference) {
+      setBreedingInferenceStatus('没有可套用的繁育推演，或当前角色名/种族/补充设定已和推演时不同。', true);
+      globalThis.toastr?.warning?.('[BS BioTracker] 请先为当前输入执行繁育推演');
+      return;
+    }
+    const settings = getSettings(ctx);
+    const chatState = getChatState(ctx, settings);
+    if (!chatState.characters?.[values.targetName]) {
+      setBreedingInferenceStatus(`尚未找到已注册角色：${values.targetName}。若这是新角色，请切到“注册”分頁按“注册当前角色”；注册会自动套用这份推演。`, true);
+      setRegisterTab('registry');
+      globalThis.toastr?.info?.('[BS BioTracker] 新角色请用注册分頁套用推演');
+      return;
+    }
+    try {
+      const character = applyRegistryBreedingInference(ctx, {
+        targetName: values.targetName,
+        breedingInference,
+      });
+      renderStatusPanel(ctx);
+      renderFullStatePage(ctx);
+      updateMainFlowPrompt(ctx);
+      setBreedingInferenceStatus(`已套用到：${character.name}`);
+      globalThis.toastr?.success?.(`[BS BioTracker] 已套用 ${character.name} 的繁育推演`);
+    } catch (error) {
+      console.error('[BS BioTracker] applyRegistryBreedingInference failed', error);
+      const message = String(error?.message || error);
+      setBreedingInferenceStatus(message, true);
+      globalThis.toastr?.error?.(message, '[BS BioTracker]');
+    }
+  });
   document.getElementById('bs-bt-register-run')?.addEventListener('click', async () => {
-    const targetName = String(document.getElementById('bs-bt-register-name')?.value || '').trim();
-    const declaredRace = String(document.getElementById('bs-bt-register-race')?.value || '').trim();
-    const customNotes = String(document.getElementById('bs-bt-register-custom-notes')?.value || '').trim();
+    const { targetName, declaredRace, customNotes } = getRegisterFormValues();
     if (!targetName) {
       setRegisterStatus('请先输入要注册的角色名。', true);
       globalThis.toastr?.warning?.('[BS BioTracker] 请先输入角色名');
       return;
     }
     readSettingsFromForm(ctx);
-    setRegisterStatus(`正在注册 ${targetName}...`);
+    let breedingInference = null;
     try {
-      const character = await runRegistry(ctx, { targetName, customNotes, declaredRace });
+      breedingInference = getApplicableBreedingInferenceDraft({ targetName, declaredRace, customNotes });
+    } catch (error) {
+      const message = String(error?.message || error);
+      setRegisterStatus(message, true);
+      globalThis.toastr?.error?.(message, '[BS BioTracker]');
+      return;
+    }
+    setRegisterStatus(breedingInference
+      ? `正在使用繁育推演注册 ${targetName}...`
+      : `正在注册 ${targetName}...`);
+    try {
+      const character = await runRegistry(ctx, { targetName, customNotes, declaredRace, breedingInference });
       renderStatusPanel(ctx);
       renderFullStatePage(ctx);
       updateMainFlowPrompt(ctx);
-      setRegisterStatus(`注册完成：${character.name}`);
+      setRegisterStatus(breedingInference ? `注册完成：${character.name}（已套用繁育推演）` : `注册完成：${character.name}`);
       setView('track-list');
       globalThis.toastr?.success?.(`[BS BioTracker] 已注册 ${character.name}`);
     } catch (error) {

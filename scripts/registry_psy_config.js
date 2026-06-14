@@ -4,6 +4,8 @@ function clampPsychValue(value) {
   return Math.max(0, Math.min(100, Math.round(next)));
 }
 
+export const PSY_STAGE_KEYS = Object.freeze(['0', '1_25', '26_50', '51_75', '76_100', '100_plus']);
+
 export const PSY_MENS_FIELDS = Object.freeze({
   mastery: {
     definition: '个体对月经周期与生理征兆的感知与掌控力。数值越高，反应越从容且精准；数值低则表现为混乱与恐慌。',
@@ -231,14 +233,44 @@ export function resolvePsychStageKey(value) {
   return '100_plus';
 }
 
-export function buildPsychInterpret(fieldConfig, value) {
+export function buildPsychInterpret(fieldConfig, value, stageProfile = null) {
   const stageKey = resolvePsychStageKey(value);
+  const customInterpret = stageProfile && typeof stageProfile === 'object'
+    ? String(stageProfile[stageKey] || '').trim()
+    : '';
+  if (customInterpret) return customInterpret;
   if (!stageKey || !fieldConfig?.stages?.[stageKey]) return '';
   const stage = fieldConfig.stages[stageKey];
   return [stage.meaning, stage.performance, stage.breakthrough_condition, stage.transcend_condition]
     .filter(Boolean)
     .join(' ')
     .trim();
+}
+
+export function normalizePsychologyStageProfiles(value, { mensFields = PSY_MENS_FIELDS, pregFields = PSY_PREG_FIELDS } = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const result = {};
+  const groups = [
+    ['mens', mensFields],
+    ['preg', pregFields],
+  ];
+  for (const [groupKey, fieldConfig] of groups) {
+    const sourceGroup = value[groupKey];
+    if (!sourceGroup || typeof sourceGroup !== 'object' || Array.isArray(sourceGroup)) continue;
+    const normalizedGroup = {};
+    for (const field of Object.keys(fieldConfig || {})) {
+      const sourceField = sourceGroup[field];
+      if (!sourceField || typeof sourceField !== 'object' || Array.isArray(sourceField)) continue;
+      const normalizedField = {};
+      for (const stageKey of PSY_STAGE_KEYS) {
+        const text = String(sourceField[stageKey] || '').trim();
+        if (text) normalizedField[stageKey] = text;
+      }
+      if (Object.keys(normalizedField).length > 0) normalizedGroup[field] = normalizedField;
+    }
+    if (Object.keys(normalizedGroup).length > 0) result[groupKey] = normalizedGroup;
+  }
+  return result;
 }
 
 export function buildEmptyPsychologyGroup(fieldConfig, booleanFields = {}) {
@@ -253,7 +285,7 @@ export function buildEmptyPsychologyGroup(fieldConfig, booleanFields = {}) {
   return result;
 }
 
-export function normalizePsychologyGroup(value, fieldConfig, { includeDefaults = true, booleanFields = {} } = {}) {
+export function normalizePsychologyGroup(value, fieldConfig, { includeDefaults = true, booleanFields = {}, stageProfiles = {} } = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return includeDefaults ? buildEmptyPsychologyGroup(fieldConfig, booleanFields) : null;
   const result = includeDefaults ? buildEmptyPsychologyGroup(fieldConfig, booleanFields) : {};
   let changed = false;
@@ -269,7 +301,7 @@ export function normalizePsychologyGroup(value, fieldConfig, { includeDefaults =
     const nextValue = clampPsychValue(rawValue);
     if (nextValue === null) continue;
     result[`${key}_value`] = nextValue;
-    result[`${key}_interpret`] = buildPsychInterpret(fieldConfig[key], nextValue);
+    result[`${key}_interpret`] = buildPsychInterpret(fieldConfig[key], nextValue, stageProfiles?.[key]);
   }
   for (const key of Object.keys(booleanFields || {})) {
     if (value[key] === undefined) continue;

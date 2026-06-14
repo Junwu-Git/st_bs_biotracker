@@ -214,36 +214,61 @@
             </div>
 
             <div class="settings_section">
-              <label for="bs-bt-registry-normal-description">注册默认 normalDescription 规则</label>
-              <textarea id="bs-bt-registry-normal-description" class="text_pole bs-bt-textarea" rows="7"></textarea>
+              <div class="bs-bt-track-tabs" id="bs-bt-register-tabs">
+                <button type="button" class="bs-bt-track-tab is-active" data-register-tab="inference">推演</button>
+                <button type="button" class="bs-bt-track-tab" data-register-tab="registry">注册</button>
+              </div>
             </div>
 
-            <div class="settings_section">
-              <label for="bs-bt-registry-closeup-description">注册默认 closeupDescription 规则</label>
-              <textarea id="bs-bt-registry-closeup-description" class="text_pole bs-bt-textarea" rows="8"></textarea>
+            <div class="bs-bt-register-page is-active" data-register-page="inference">
+              <div class="settings_section bs-bt-action-row">
+                <button id="bs-bt-breeding-inference-run" class="menu_button" type="button">繁育推演</button>
+                <button id="bs-bt-breeding-inference-apply" class="menu_button" type="button">套用到已注册角色</button>
+              </div>
+
+              <hr class="sysHR" />
+
+              <div class="settings_section">
+                <label for="bs-bt-breeding-inference-status">繁育推演</label>
+                <textarea id="bs-bt-breeding-inference-status" class="text_pole bs-bt-textarea bs-bt-status-box"
+                  rows="14">尚未执行繁育推演。若直接注册，会使用默认繁育心理规则。</textarea>
+                <div id="bs-bt-breeding-inference-message" class="bs-bt-inline-status"></div>
+              </div>
             </div>
 
-            <div class="settings_section">
-              <label for="bs-bt-registry-pregnant-description">注册默认 pregnantDescription 规则</label>
-              <textarea id="bs-bt-registry-pregnant-description" class="text_pole bs-bt-textarea" rows="8"></textarea>
-            </div>
+            <div class="bs-bt-register-page" data-register-page="registry" hidden>
+              <div class="settings_section">
+                <label for="bs-bt-registry-normal-description">注册默认 normalDescription 规则</label>
+                <textarea id="bs-bt-registry-normal-description" class="text_pole bs-bt-textarea" rows="7"></textarea>
+              </div>
 
-            <div class="settings_section">
-              <label for="bs-bt-diary-writing-prompt">日记写作规则</label>
-              <textarea id="bs-bt-diary-writing-prompt" class="text_pole bs-bt-textarea" rows="5"
-                placeholder="例如：日记要有事后整理感，至少两段；包含事件、身体感受、自我解释、情绪反刍，不要写成即时心声。"></textarea>
-            </div>
+              <div class="settings_section">
+                <label for="bs-bt-registry-closeup-description">注册默认 closeupDescription 规则</label>
+                <textarea id="bs-bt-registry-closeup-description" class="text_pole bs-bt-textarea" rows="8"></textarea>
+              </div>
 
-            <div class="settings_section bs-bt-action-row">
-              <button id="bs-bt-register-run" class="menu_button" type="button">注册当前角色</button>
-            </div>
+              <div class="settings_section">
+                <label for="bs-bt-registry-pregnant-description">注册默认 pregnantDescription 规则</label>
+                <textarea id="bs-bt-registry-pregnant-description" class="text_pole bs-bt-textarea" rows="8"></textarea>
+              </div>
 
-            <hr class="sysHR" />
+              <div class="settings_section">
+                <label for="bs-bt-diary-writing-prompt">日记写作规则</label>
+                <textarea id="bs-bt-diary-writing-prompt" class="text_pole bs-bt-textarea" rows="5"
+                  placeholder="例如：日记要有事后整理感，至少两段；包含事件、身体感受、自我解释、情绪反刍，不要写成即时心声。"></textarea>
+              </div>
 
-            <div class="settings_section">
-              <div class="bs-bt-status-title">注册状态</div>
-              <pre id="bs-bt-register-status"
-                class="bs-bt-status-box">输入名字与 Description 规则后发送注册请求，完成后可在“完整变量”查看该角色状态变量。</pre>
+              <div class="settings_section bs-bt-action-row">
+                <button id="bs-bt-register-run" class="menu_button" type="button">注册当前角色</button>
+              </div>
+
+              <hr class="sysHR" />
+
+              <div class="settings_section">
+                <div class="bs-bt-status-title">注册状态</div>
+                <pre id="bs-bt-register-status"
+                  class="bs-bt-status-box">输入名字与 Description 规则后发送注册请求，完成后可在“完整变量”查看该角色状态变量。</pre>
+              </div>
             </div>
           </div>
         </section>

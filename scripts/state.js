@@ -2,6 +2,7 @@ import { DEFAULT_DIARY_WRITING_PROMPT, DEFAULT_REGISTRY_DESCRIPTION_GUIDES } fro
 import {
   buildEmptyPsychologyGroup,
   normalizePsychologyGroup,
+  normalizePsychologyStageProfiles,
   PSY_MENS_FIELDS,
   PSY_MENS_BOOL_FIELDS,
   PSY_PREG_FIELDS,
@@ -161,9 +162,11 @@ function pickFirstString(obj, paths) {
 }
 
 function normalizePsychologyState(value) {
+  const stageProfiles = normalizePsychologyStageProfiles(value?.stageProfiles);
   return {
-    mens: normalizePsychologyGroup(value?.mens, PSY_MENS_FIELDS, { booleanFields: PSY_MENS_BOOL_FIELDS }),
-    preg: normalizePsychologyGroup(value?.preg, PSY_PREG_FIELDS, { booleanFields: PSY_PREG_BOOL_FIELDS }),
+    mens: normalizePsychologyGroup(value?.mens, PSY_MENS_FIELDS, { booleanFields: PSY_MENS_BOOL_FIELDS, stageProfiles: stageProfiles.mens }),
+    preg: normalizePsychologyGroup(value?.preg, PSY_PREG_FIELDS, { booleanFields: PSY_PREG_BOOL_FIELDS, stageProfiles: stageProfiles.preg }),
+    stageProfiles,
   };
 }
 
@@ -761,6 +764,7 @@ export function createDefaultFemaleState(name = '') {
       psychology: {
         mens: buildEmptyPsychologyGroup(PSY_MENS_FIELDS, PSY_MENS_BOOL_FIELDS),
         preg: buildEmptyPsychologyGroup(PSY_PREG_FIELDS, PSY_PREG_BOOL_FIELDS),
+        stageProfiles: {},
       },
       children: [],
       diary: [],
@@ -1232,6 +1236,7 @@ function createSnapshotCharacterBaseline(name = '') {
       psychology: {
         mens: buildEmptyPsychologyGroup(PSY_MENS_FIELDS, PSY_MENS_BOOL_FIELDS),
         preg: buildEmptyPsychologyGroup(PSY_PREG_FIELDS, PSY_PREG_BOOL_FIELDS),
+        stageProfiles: {},
       },
       children: [],
       diary: [],
