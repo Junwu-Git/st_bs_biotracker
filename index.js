@@ -1977,7 +1977,7 @@ function renderTrackPregnancy(viewModel) {
       ? '危险期'
       : '安全期';
   const pregnantDaysBadge = data.showPregnantFields
-    ? `妊娠 ${formatOneBasedDay(data.pregnantDays)}d`
+    ? `孕龄 ${formatOneBasedDay(data.pregnantDays)}d`
     : '';
   const amnionDurability = Math.max(0, Math.min(100, Number(data.amnionDurability) || 0));
   const pregnantDescriptionOptions = data.showLaborFields
@@ -2250,7 +2250,7 @@ function renderTrackDebug(viewModel) {
           <input id="bs-bt-debug-genders" class="text_pole" type="text" value="${gendersValue}" placeholder="男/女/双/无，多胎用逗号分隔" />
         </label>
         <label class="bs-bt-track-debug-field">
-          <span class="bs-bt-track-debug-label">怀孕天数(人類等效孕期，0代表刚受精)</span>
+          <span class="bs-bt-track-debug-label">孕龄天数(人類等效产科孕期，0代表刚受精)</span>
           <input id="bs-bt-debug-days" class="text_pole" type="number" min="0" max="300" value="${daysValue}" />
         </label>
         <button type="button" class="menu_button" data-debug-action="inject-pregnancy">执行注入</button>

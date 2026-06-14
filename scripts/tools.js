@@ -337,6 +337,15 @@ function getNaturalOvulationDailyAmount(profile) {
   return Math.max(1, Math.ceil(ovulationAmount / ovulationDays));
 }
 
+function getImplantationDays(profile) {
+  const cycleLength = getMenstrualCycleLength(profile);
+  return Math.max(1, (6 * cycleLength) / 28);
+}
+
+function getObstetricPregnancyOffsetDays(profile) {
+  return Math.max(0, getMenstrualCycleLength(profile) / 2);
+}
+
 function randomNumber(min, max) {
   return Math.random() * (max - min) + min;
 }
@@ -963,7 +972,7 @@ function processSimpleConception(profile, tick, notify, name) {
 
   if (Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0) {
     base.fertilizationDays = clampNumber(base.fertilizationDays, 0, 9999, 0) + deltaDays;
-    if (base.fertilizationDays >= 6) {
+    if (base.fertilizationDays >= getImplantationDays(profile)) {
       const vitality = clampNumber(base.vitality, 0, 200, 100);
       const implantationFailChance = vitality < 100 ? (100 - vitality) / 100 : 0;
       if (Math.random() < implantationFailChance) {
@@ -973,12 +982,14 @@ function processSimpleConception(profile, tick, notify, name) {
         base.fertilizationDays = 0;
         notify.secondly = `${name}因身体虚弱，胚胎著床失败`;
       } else {
+        const obstetricPregnantDays = base.fertilizationDays + getObstetricPregnancyOffsetDays(profile);
+        const gestationSpeed = clampNumber(getGestationEffectiveSpeed(profile), 0, 20, 1);
         applyIdenticalSplit(profile);
         base.stage = '孕早期';
         base.days = 0;
         base.fertilizationDays = 0;
-        pregnant.pregnantDays = 0;
-        pregnant.effectivePregnantDays = 0;
+        pregnant.pregnantDays = obstetricPregnantDays;
+        pregnant.effectivePregnantDays = obstetricPregnantDays * gestationSpeed;
         pregnant.amnionDurability = 100;
         profile.experience = {
           ...(profile.experience || {}),
@@ -2775,8 +2786,8 @@ function maybeTriggerOrgasmOvulation(character) {
 }
 
 function getMenstrualCycleLength(profile) {
-  const ratio = clampNumber(profile?.bio?.menstrualLengthRatio, 0.1, 20, 1);
-  return Math.max(1, Math.round(28 * ratio));
+  const total = MENSTRUAL_STAGES.reduce((sum, stage) => sum + (getStageLimit(profile, stage) || 0), 0);
+  return Math.max(1, total || 28);
 }
 
 function buildTimeTick(character, addedMinutes) {
