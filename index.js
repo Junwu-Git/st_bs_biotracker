@@ -1775,6 +1775,7 @@ function buildTrackCharacterViewModel(character) {
         miscarriage: Boolean(immune.miscarriage),
         realisticLabor: Boolean(immune.realisticLabor),
       },
+      isHere: base.isHere !== false,
       gestationModifier: {
         name: String(bio.gestationModifierName || '').trim(),
         multiplier: gestationModifierMultiplier,
@@ -2090,6 +2091,7 @@ function renderTrackDiary(viewModel) {
 
 function renderTrackDebug(viewModel) {
   const immune = viewModel.debug?.immune || {};
+  const isHere = viewModel.debug?.isHere !== false;
   const counts = viewModel.debug?.counts || {};
   const hasConceptionState = Boolean(viewModel.debug?.hasConceptionState);
   const gestationModifier = viewModel.debug?.gestationModifier || {};
@@ -2163,6 +2165,10 @@ function renderTrackDebug(viewModel) {
         <button type="button" class="bs-bt-track-debug-button${immune.realisticLabor ? ' is-active' : ''}" data-debug-immune="realisticLabor">
           <span class="bs-bt-track-debug-title">真实产程</span>
           <span class="bs-bt-track-debug-state">${immune.realisticLabor ? 'ON' : 'OFF'}</span>
+        </button>
+        <button type="button" class="bs-bt-track-debug-button${isHere ? ' is-active' : ''}" data-debug-action="toggle-presence">
+          <span class="bs-bt-track-debug-title">在场</span>
+          <span class="bs-bt-track-debug-state">${isHere ? 'ON' : 'OFF'}</span>
         </button>
         <button type="button" class="bs-bt-track-debug-button" data-debug-clear="sperms">
           <span class="bs-bt-track-debug-title">淨空精液</span>
@@ -2332,6 +2338,34 @@ function toggleSelectedTrackImmune(ctx, immuneKey) {
   globalThis.toastr?.success?.(
     `[BS BioTracker] ${selectedTrackName} 的 ${immuneKey === 'metabolism' ? '代谢免疫' : immuneKey === 'miscarriage' ? '流产免疫' : '真实产程'}已${nextValue ? '开启' : '关闭'}`,
   );
+}
+
+function toggleSelectedTrackPresence(ctx) {
+  if (!selectedTrackName) return;
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const character = chatState.characters?.[selectedTrackName];
+  if (!character?.profile) return;
+
+  const nextValue = character.profile.base?.isHere === false;
+  const result = applyToolCall(chatState, {
+    name: 'bsSetCharacterPresence',
+    arguments: {
+      female: selectedTrackName,
+      isPresent: nextValue,
+    },
+  });
+  if (!result?.applied) {
+    globalThis.toastr?.warning?.(result?.message || '[BS BioTracker] 在场状态切换失败');
+    return;
+  }
+  recordChatStateSnapshot(ctx, chatState, { reason: 'debug_toggle_presence' });
+  saveSettings(ctx);
+  renderStatusPanel(ctx);
+  renderFullStatePage(ctx);
+  updateMainFlowPrompt(ctx);
+  resetPoller(ctx, trackerDeps);
+  globalThis.toastr?.success?.(`[BS BioTracker] ${selectedTrackName} 已${nextValue ? '标记为在场' : '标记为离场'}`);
 }
 
 function injectSelectedTrackPregnancy(ctx) {
@@ -2633,6 +2667,11 @@ function bindDebugPanelControls(ctx, root, refresh = () => renderFullStatePage(c
   root.querySelectorAll('[data-debug-action="inject-pregnancy"]').forEach((node) =>
     node.addEventListener('click', () => {
       injectSelectedTrackPregnancy(ctx);
+    }),
+  );
+  root.querySelectorAll('[data-debug-action="toggle-presence"]').forEach((node) =>
+    node.addEventListener('click', () => {
+      toggleSelectedTrackPresence(ctx);
     }),
   );
   root.querySelectorAll('[data-debug-action="set-gestation-modifier"]').forEach((node) =>
@@ -3485,20 +3524,22 @@ function applyTheme(settings) {
 function setView(view) {
   const root = document.getElementById(PANEL_ID);
   if (!root) return;
-  const next = ['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'time-lapse', 'race-encyclopedia', 'tracker-preset'].includes(view) ? view : 'home';
+  const normalizedView = view === 'time-lapse' ? 'full-state' : view;
+  const next = ['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'race-encyclopedia', 'tracker-preset'].includes(normalizedView) ? normalizedView : 'home';
   root.dataset.view = next;
   try {
     globalThis.localStorage?.setItem(LAST_VIEW_STORAGE_KEY, next);
   } catch {}
   document.querySelectorAll('#bs-biotracker-settings .bs-bt-view').forEach((node) => node.classList.toggle('is-active', node.dataset.view === next));
   const title = document.getElementById('bs-bt-title');
-  if (title) title.textContent = next === 'theme' ? 'THEME' : next === 'system' ? 'SYSTEM' : next === 'register' ? 'REGISTRY' : next === 'worldbook-filter' ? 'WORLDBOOK' : next === 'track-list' ? 'TRACK LIST' : next === 'track-char' ? 'TRACK CHAR' : next === 'full-state' ? 'FULL STATE' : next === 'time-lapse' ? 'TIME LAPSE' : next === 'race-encyclopedia' ? 'RACE DATA' : next === 'tracker-preset' ? 'PRESET' : 'HOME';
+  if (title) title.textContent = next === 'theme' ? 'THEME' : next === 'system' ? 'SYSTEM' : next === 'register' ? 'REGISTRY' : next === 'worldbook-filter' ? 'WORLDBOOK' : next === 'track-list' ? 'TRACK LIST' : next === 'track-char' ? 'TRACK CHAR' : next === 'full-state' ? 'FULL STATE' : next === 'race-encyclopedia' ? 'RACE DATA' : next === 'tracker-preset' ? 'PRESET' : 'HOME';
 }
 
 function getLastPagerView() {
   try {
     const value = String(globalThis.localStorage?.getItem(LAST_VIEW_STORAGE_KEY) || '').trim();
-    if (['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'time-lapse', 'race-encyclopedia', 'tracker-preset'].includes(value)) {
+    if (value === 'time-lapse') return 'full-state';
+    if (['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'race-encyclopedia', 'tracker-preset'].includes(value)) {
       return value;
     }
   } catch {}

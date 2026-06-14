@@ -47,10 +47,6 @@
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--track" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">追踪</span>
               </button>
-              <button class="bs-bt-home-tile" type="button" data-nav-view="time-lapse">
-                <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--clock" aria-hidden="true"></span>
-                <span class="bs-bt-home-tile__label">时间</span>
-              </button>
               <button class="bs-bt-home-tile" type="button" data-nav-view="race-encyclopedia">
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--dna" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">百科</span>
@@ -378,53 +374,7 @@
         <section id="bs-bt-view-full-state" class="bs-bt-view" data-view="full-state">
           <div class="bs-bt-panel">
             <div class="settings_section">
-              <div class="bs-bt-status-title">完整变量</div>
-              <div id="bs-bt-home-full-state-list" class="bs-bt-theme-list"></div>
-            </div>
-
-            <hr class="sysHR" />
-
-            <div class="settings_section">
-              <div class="bs-bt-track-tabs bs-bt-full-state-tabs" id="bs-bt-full-state-tabs">
-                <button type="button" class="bs-bt-track-tab" data-full-state-tab="variables">变量内容</button>
-                <button type="button" class="bs-bt-track-tab" data-full-state-tab="debug">调试工具</button>
-              </div>
-            </div>
-
-            <div id="bs-bt-full-state-vars-panel" class="settings_section">
-              <div class="bs-bt-status-title">变量内容</div>
-              <textarea id="bs-bt-full-state-output" class="text_pole bs-bt-textarea" rows="18" spellcheck="false">请选择角色查看完整变量。</textarea>
-              <div id="bs-bt-full-state-edit-status" class="bs-bt-inline-status">可直接编辑 JSON，应用前会检查格式与基础结构。</div>
-              <div class="settings_section bs-bt-action-row">
-                <button id="bs-bt-full-state-apply" class="menu_button" type="button" disabled>应用修改</button>
-                <button id="bs-bt-full-state-reset" class="menu_button" type="button" disabled>重置显示</button>
-              </div>
-
-              <div class="settings_section bs-bt-action-row">
-                <button id="bs-bt-full-state-unregister" class="menu_button" type="button" disabled>注销当前角色</button>
-              </div>
-            </div>
-
-            <div id="bs-bt-full-state-debug-section" class="settings_section">
-              <div class="bs-bt-status-title">调试工具</div>
-              <div id="bs-bt-full-state-debug-panel"></div>
-            </div>
-
-            <div id="bs-bt-full-state-confirm" class="settings_section" style="display:none;">
-              <div class="bs-bt-status-title">注销确认</div>
-              <pre id="bs-bt-full-state-confirm-text" class="bs-bt-status-box">请选择角色。</pre>
-              <div class="settings_section bs-bt-action-row">
-                <button id="bs-bt-full-state-confirm-yes" class="menu_button" type="button">确认注销</button>
-                <button id="bs-bt-full-state-confirm-no" class="menu_button" type="button">取消</button>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section id="bs-bt-view-time-lapse" class="bs-bt-view" data-view="time-lapse">
-          <div class="bs-bt-panel">
-            <div class="settings_section">
-              <div class="bs-bt-status-title" style="text-align: center; margin-bottom: 12px;">推进生理时间 (作用于所有角色)</div>
+              <div class="bs-bt-status-title">全角色时间推进</div>
 
               <div style="display: grid; gap: 8px;">
                 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
@@ -464,11 +414,55 @@
               </div>
 
               <div class="settings_section bs-bt-action-row" style="margin-top:12px;">
-                <button id="bs-bt-time-lapse-submit" class="menu_button" type="button">执行流逝</button>
+                <button id="bs-bt-time-lapse-submit" class="menu_button" type="button">推进所有角色</button>
               </div>
 
               <pre id="bs-bt-time-lapse-status" class="bs-bt-status-box"
-                style="margin-top:12px;">准备就绪，选择时间后执行以推进所有角色的状态。</pre>
+                style="margin-top:12px;">准备就绪：这里会推进当前聊天内所有已注册角色的生理时间。</pre>
+            </div>
+
+            <hr class="sysHR" />
+
+            <div class="settings_section">
+              <div class="bs-bt-status-title">完整变量</div>
+              <div id="bs-bt-home-full-state-list" class="bs-bt-theme-list"></div>
+            </div>
+
+            <hr class="sysHR" />
+
+            <div class="settings_section">
+              <div class="bs-bt-track-tabs bs-bt-full-state-tabs" id="bs-bt-full-state-tabs">
+                <button type="button" class="bs-bt-track-tab" data-full-state-tab="variables">变量内容</button>
+                <button type="button" class="bs-bt-track-tab" data-full-state-tab="debug">调试工具</button>
+              </div>
+            </div>
+
+            <div id="bs-bt-full-state-vars-panel" class="settings_section">
+              <div class="bs-bt-status-title">变量内容</div>
+              <textarea id="bs-bt-full-state-output" class="text_pole bs-bt-textarea" rows="18" spellcheck="false">请选择角色查看完整变量。</textarea>
+              <div id="bs-bt-full-state-edit-status" class="bs-bt-inline-status">可直接编辑 JSON，应用前会检查格式与基础结构。</div>
+              <div class="settings_section bs-bt-action-row">
+                <button id="bs-bt-full-state-apply" class="menu_button" type="button" disabled>应用修改</button>
+                <button id="bs-bt-full-state-reset" class="menu_button" type="button" disabled>重置显示</button>
+              </div>
+
+              <div class="settings_section bs-bt-action-row">
+                <button id="bs-bt-full-state-unregister" class="menu_button" type="button" disabled>注销当前角色</button>
+              </div>
+            </div>
+
+            <div id="bs-bt-full-state-debug-section" class="settings_section">
+              <div class="bs-bt-status-title">调试工具</div>
+              <div id="bs-bt-full-state-debug-panel"></div>
+            </div>
+
+            <div id="bs-bt-full-state-confirm" class="settings_section" style="display:none;">
+              <div class="bs-bt-status-title">注销确认</div>
+              <pre id="bs-bt-full-state-confirm-text" class="bs-bt-status-box">请选择角色。</pre>
+              <div class="settings_section bs-bt-action-row">
+                <button id="bs-bt-full-state-confirm-yes" class="menu_button" type="button">确认注销</button>
+                <button id="bs-bt-full-state-confirm-no" class="menu_button" type="button">取消</button>
+              </div>
             </div>
           </div>
         </section>
