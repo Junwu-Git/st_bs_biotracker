@@ -30,6 +30,7 @@ import {
   LABOR_POSTPARTUM_OBSERVATION_HOURS,
   MENSTRUAL_STAGE_DAYS,
   MENSTRUAL_STAGES,
+  PREGNANCY_STAGE_DAYS,
   PREGNANCY_STAGES,
 } from './stage_config.js';
 import {
@@ -96,9 +97,81 @@ export const TOOL_DEFINITIONS = Object.freeze([
     },
   },
   {
+    name: 'bsAddWardrobeItem',
+    description: '向单一角色衣柜添加或更新一件衣物。衣物保存稳定外观 note 与机械数值；note 只写衣物稳定外观与来源：颜色、材质、版型、长短、固定开口、图案、制服/病服/借装来源等。禁止写当前穿着反应、角色感受、近期身体变化、怀孕/胀痛/压胸/勒红/变紧/显怀等动态状态；这些由四维、pregFit 与当轮叙事推导。slot=main 为主件，slot=accessory 为配件。主件通常使用 0-10；配件只是补正，单项只能 -3 到 3，通常只影响 1-2 个维度，其他维度填 0。四维：masking 掩盖身体曲线/孕肚变化、support 对胸腹腰与重心的承托、capacity 容许孕肚/胸腹/骨盆/水肿等体型变化、convenience 行动/穿脱/如厕/哺乳或排解需求的方便程度。皮肤暴露与稳定外观写入 note，不作为机械数值。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        female: { type: 'string' },
+        item: {
+          type: 'object',
+          properties: {
+            id: { type: 'integer', minimum: 0 },
+            name: { type: 'string' },
+            note: { type: 'string' },
+            slot: { type: 'string', enum: ['main', 'accessory'] },
+            masking: { type: 'number' },
+            support: { type: 'number' },
+            capacity: { type: 'number' },
+            convenience: { type: 'number' },
+          },
+          required: ['id', 'name', 'note', 'slot', 'masking', 'support', 'capacity', 'convenience'],
+          additionalProperties: false,
+        },
+      },
+      required: ['female', 'item'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'bsRemoveWardrobeItem',
+    description: '从单一角色衣柜删除一件衣物。不能删除默认主件 id=0。若删除当前主件，穿着会回到 id=0；若删除当前配件，会从当前配件列表移除，并重算 pregFit。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        female: { type: 'string' },
+        itemId: { type: 'integer', minimum: 0 },
+      },
+      required: ['female', 'itemId'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'bsChangeOutfit',
+    description: '更换单一角色当前穿着。mainItemId 指定主件；accessoryItemIds 指定当前全部配件，空数组表示脱掉所有配件。temporaryItems 可放病服、借装等临时衣物，只保存于当前 outfit，不写入 wardrobe；换回衣柜服装时可传 temporaryItems: [] 清除临时衣物。临时衣物也要写稳定外观 note，且 note 只写衣物稳定外观与来源：颜色、材质、版型、长短、固定开口、图案、制服/病服/借装来源等。禁止写当前穿着反应、角色感受、近期身体变化、怀孕/胀痛/压胸/勒红/变紧/显怀等动态状态；这些由四维、pregFit 与当轮叙事推导。全裸也是主件 id=0。角色处于真实妊娠/产兆前驱/产程时会重算 outfit.pregFit；非妊娠时 pregFit 为 null。衣着状态变化的叙事文字由当轮叙事自行处理，不写回 wardrobe/outfit。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        female: { type: 'string' },
+        mainItemId: { type: 'integer', minimum: 0 },
+        accessoryItemIds: { type: 'array', items: { type: 'integer', minimum: 0 } },
+        temporaryItems: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'integer', minimum: 0 },
+              name: { type: 'string' },
+              note: { type: 'string' },
+              slot: { type: 'string', enum: ['main', 'accessory'] },
+              masking: { type: 'number' },
+              support: { type: 'number' },
+              capacity: { type: 'number' },
+              convenience: { type: 'number' },
+            },
+            required: ['id', 'name', 'note', 'slot', 'masking', 'support', 'capacity', 'convenience'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['female'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'bsSetDescription',
     description:
-      '只更新单一角色的描述字段，可单独更新 normalDescription / closeupDescription / pregnantDescription，也可只传其中几个既有子字段，例如 行动|描述内容;;表情|描述内容;;。未传入的子字段会保留旧值；不能新增角色原本没有的子字段。描述内容必须使用格式：字段名|描述内容;;字段名|描述内容;;...字段名|描述内容;;，不可改成自然段或换行文本。',
+      '只更新单一角色的描述字段，可单独更新 normalDescription / pregnantDescription，也可只传其中几个既有子字段，例如 行动|描述内容;;表情|描述内容;;。未传入的子字段会保留旧值；不能新增角色原本没有的子字段。描述内容必须使用格式：字段名|描述内容;;字段名|描述内容;;...字段名|描述内容;;，不可改成自然段或换行文本。',
     input_schema: {
       type: 'object',
       properties: {
@@ -107,7 +180,6 @@ export const TOOL_DEFINITIONS = Object.freeze([
           type: 'object',
           properties: {
             normalDescription: { type: 'string' },
-            closeupDescription: { type: 'string' },
             pregnantDescription: { type: 'string' },
           },
           additionalProperties: false,
@@ -330,6 +402,186 @@ function clampNumber(value, min, max, fallback = 0) {
   return Math.max(min, Math.min(max, next));
 }
 
+const WARDROBE_DIMENSIONS = Object.freeze(['masking', 'support', 'capacity', 'convenience']);
+const DEFAULT_WARDROBE_ITEM = Object.freeze({
+  id: 0,
+  name: '全裸',
+  note: '未着衣物。',
+  slot: 'main',
+  masking: 0,
+  support: 0,
+  capacity: 10,
+  convenience: 10,
+});
+
+function normalizeWardrobeItemId(value, fallback = null) {
+  if (value === 'nude') return 0;
+  const numeric = Number(value);
+  if (Number.isInteger(numeric) && numeric >= 0) return numeric;
+  const text = String(value ?? '').trim();
+  if (!text) return fallback;
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return 100000 + (hash % 900000);
+}
+
+function limitAccessoryWardrobeScores(item) {
+  if (!item || item.slot !== 'accessory') return item;
+  const ranked = WARDROBE_DIMENSIONS
+    .map((key, index) => ({ key, index, value: clampNumber(item[key], -3, 3, 0) }))
+    .filter((entry) => entry.value !== 0)
+    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value) || a.index - b.index);
+  const kept = new Set(ranked.slice(0, 2).map((entry) => entry.key));
+  for (const key of WARDROBE_DIMENSIONS) {
+    item[key] = kept.has(key) ? clampNumber(item[key], -3, 3, 0) : 0;
+  }
+  return item;
+}
+
+function normalizeWardrobeItemForTool(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const id = normalizeWardrobeItemId(value.id);
+  const name = String(value.name || '').trim();
+  const slot = String(value.slot || '').trim() === 'accessory' ? 'accessory' : 'main';
+  const note = String(value.note || '').trim();
+  if (id === null || !name) return null;
+  const item = { id, name, note, slot };
+  item.masking = clampNumber(
+    value.masking !== undefined ? value.masking : 10 - clampNumber(value.contour, -10, 10, 10),
+    -10,
+    10,
+    0,
+  );
+  item.support = clampNumber(
+    value.support !== undefined ? value.support : 10 - clampNumber(value.unsupported, -10, 10, 10),
+    -10,
+    10,
+    0,
+  );
+  item.capacity = clampNumber(value.capacity, -10, 10, 0);
+  item.convenience = clampNumber(value.convenience, -10, 10, 0);
+  return limitAccessoryWardrobeScores(item);
+}
+
+function ensureWardrobeState(profile) {
+  if (!profile.wardrobe || typeof profile.wardrobe !== 'object' || Array.isArray(profile.wardrobe)) profile.wardrobe = {};
+  profile.wardrobe.enabled = true;
+  const sourceItems = Array.isArray(profile.wardrobe.items) ? profile.wardrobe.items : [];
+  const items = [];
+  for (const source of sourceItems) {
+    const item = normalizeWardrobeItemForTool(source);
+    if (!item || items.some((existing) => existing.id === item.id)) continue;
+    items.push(item);
+  }
+  if (!items.some((item) => item.id === DEFAULT_WARDROBE_ITEM.id)) items.unshift({ ...DEFAULT_WARDROBE_ITEM });
+  profile.wardrobe.items = items;
+  return profile.wardrobe;
+}
+
+function findWardrobeItem(profile, itemId, slot = '') {
+  const id = normalizeWardrobeItemId(itemId);
+  if (id === null) return null;
+  const wardrobe = ensureWardrobeState(profile);
+  return wardrobe.items.find((item) => item.id === id && (!slot || item.slot === slot)) || null;
+}
+
+function normalizeTemporaryOutfitItems(value) {
+  if (!Array.isArray(value)) return [];
+  const items = [];
+  for (const source of value) {
+    const item = normalizeWardrobeItemForTool(source);
+    if (!item || item.id === DEFAULT_WARDROBE_ITEM.id || items.some((existing) => existing.id === item.id)) continue;
+    items.push({ ...item, source: 'temporary' });
+  }
+  return items;
+}
+
+function getAvailableOutfitItems(profile) {
+  const wardrobe = ensureWardrobeState(profile);
+  const temporaryItems = Array.isArray(profile?.outfit?.temporaryItems)
+    ? profile.outfit.temporaryItems.map(normalizeWardrobeItemForTool).filter(Boolean).map((item) => ({ ...item, source: 'temporary' }))
+    : [];
+  return [...wardrobe.items, ...temporaryItems.filter((item) => item.id !== DEFAULT_WARDROBE_ITEM.id)];
+}
+
+function findOutfitItem(profile, itemId, slot = '') {
+  const id = normalizeWardrobeItemId(itemId);
+  if (id === null) return null;
+  return getAvailableOutfitItems(profile).find((item) => item.id === id && (!slot || item.slot === slot)) || null;
+}
+
+function ensureOutfitState(profile) {
+  ensureWardrobeState(profile);
+  if (!profile.outfit || typeof profile.outfit !== 'object' || Array.isArray(profile.outfit)) profile.outfit = {};
+  profile.outfit.temporaryItems = normalizeTemporaryOutfitItems(profile.outfit.temporaryItems);
+  const requestedMainId = normalizeWardrobeItemId(profile.outfit.mainItemId, DEFAULT_WARDROBE_ITEM.id);
+  const mainItemId = findOutfitItem(profile, requestedMainId, 'main') ? requestedMainId : DEFAULT_WARDROBE_ITEM.id;
+  const accessoryItemIds = Array.isArray(profile.outfit.accessoryItemIds)
+    ? profile.outfit.accessoryItemIds
+      .map((item) => normalizeWardrobeItemId(item))
+      .filter((id, index, list) => id !== null && list.indexOf(id) === index && getAvailableOutfitItems(profile).some((entry) => entry.id === id && entry.slot === 'accessory'))
+    : [];
+  profile.outfit.mainItemId = mainItemId;
+  profile.outfit.accessoryItemIds = accessoryItemIds;
+  if (!('pregFit' in profile.outfit)) profile.outfit.pregFit = null;
+  return profile.outfit;
+}
+
+function getOutfitItems(profile) {
+  const outfit = ensureOutfitState(profile);
+  const main = findOutfitItem(profile, outfit.mainItemId, 'main') || { ...DEFAULT_WARDROBE_ITEM };
+  const accessories = outfit.accessoryItemIds
+    .map((id) => findOutfitItem(profile, id, 'accessory'))
+    .filter(Boolean);
+  return [main, ...accessories];
+}
+
+function getOutfitDimensionTotals(profile) {
+  const totals = Object.fromEntries(WARDROBE_DIMENSIONS.map((key) => [key, 0]));
+  for (const item of getOutfitItems(profile)) {
+    for (const key of WARDROBE_DIMENSIONS) totals[key] += clampNumber(item[key], -10, 10, 0);
+  }
+  for (const key of WARDROBE_DIMENSIONS) totals[key] = clampNumber(totals[key], 0, 10, 0);
+  return totals;
+}
+
+function calculatePregWearPressure(profile) {
+  const pregnant = profile?.pregnant || {};
+  const effectiveDays = clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0);
+  if (effectiveDays <= 0) return 0;
+  const fetalEnergyDrain = clampNumber(pregnant.fetalEnergyDrain, 0, 9999, 0);
+  const fullPregnancyDays = Object.values(PREGNANCY_STAGE_DAYS).reduce((sum, value) => sum + (Number(value) || 0), 0) || 280;
+  const progress = Math.min(1.25, effectiveDays / fullPregnancyDays);
+  const basePressure = 0.5;
+  const progressPressure = Math.pow(progress, 1.35) * 6;
+  const fetalPressure = Math.max(0, fetalEnergyDrain - 0.1) * 1.5;
+  return clampNumber(basePressure + progressPressure + fetalPressure, 0, 10, 0);
+}
+
+function refreshOutfitPregFit(profile) {
+  if (!profile?.wardrobe?.enabled) return null;
+  const outfit = ensureOutfitState(profile);
+  const stage = String(profile?.base?.stage || '');
+  if (!isTruePregnancyStage(stage) && stage !== '产兆前驱' && !LABOR_STAGES.includes(stage)) {
+    outfit.pregFit = null;
+    return outfit;
+  }
+  const totals = getOutfitDimensionTotals(profile);
+  const pregWearPressure = calculatePregWearPressure(profile);
+  outfit.pregFit = {
+    pregWearPressure,
+    gap: {
+      masking: clampNumber(totals.masking - pregWearPressure, -20, 20, 0),
+      support: clampNumber(totals.support - pregWearPressure, -20, 20, 0),
+      capacity: clampNumber(totals.capacity - pregWearPressure, -20, 20, 0),
+      convenience: clampNumber(totals.convenience - pregWearPressure, -20, 20, 0),
+    },
+  };
+  return outfit;
+}
 function getNaturalOvulationDailyAmount(profile) {
   const ovulationAmount = clampNumber(profile?.bio?.orgasmOvulationAmount, 0, 100, 1);
   const menstrualRatio = clampNumber(profile?.bio?.menstrualLengthRatio, 0.1, 20, 1);
@@ -3062,6 +3314,7 @@ function applyTimeToCharacter(character, tick) {
   };
   refreshPregnancySymptoms(profile, tick);
   applyMetabolismCapacityLimits(profile);
+  refreshOutfitPregFit(profile);
   profile.pregnant = {
     ...pregnant,
     blockage: profile.pregnant?.blockage ?? null,
@@ -3187,7 +3440,7 @@ function applyCharacterStatus(chatState, args) {
   return { applied: true, message: `bsUpdateCharacterStatus applied to ${female}.` };
 }
 
-const DESCRIPTION_FIELD_NAMES = ['normalDescription', 'closeupDescription', 'pregnantDescription'];
+const DESCRIPTION_FIELD_NAMES = ['normalDescription', 'pregnantDescription'];
 
 function parseDescriptionText(text) {
   const rawText = String(text || '').trim();
@@ -3237,6 +3490,79 @@ function mergeDescriptionText(currentText, patchText) {
   };
 }
 
+function applyAddWardrobeItem(chatState, args) {
+  const female = String(args?.female || '').trim();
+  const character = chatState.characters?.[female];
+  if (!female || !character) return { applied: false, message: `bsAddWardrobeItem skipped: unknown character ${female || '(empty)'}.` };
+  const item = normalizeWardrobeItemForTool(args?.item);
+  if (!item) return { applied: false, message: `bsAddWardrobeItem skipped for ${female}: invalid item.` };
+  if (item.id === DEFAULT_WARDROBE_ITEM.id) return { applied: false, message: `bsAddWardrobeItem skipped for ${female}: id=0 is reserved.` };
+  const next = cloneValue(character);
+  const profile = next.profile || {};
+  const wardrobe = ensureWardrobeState(profile);
+  const existingIndex = wardrobe.items.findIndex((entry) => entry.id === item.id);
+  if (existingIndex >= 0) wardrobe.items[existingIndex] = item;
+  else wardrobe.items.push(item);
+  refreshOutfitPregFit(profile);
+  next.profile = profile;
+  chatState.characters[female] = syncCharacterStageFromProfile(next);
+  return { applied: true, message: `bsAddWardrobeItem applied to ${female}: ${item.name}.` };
+}
+
+function applyRemoveWardrobeItem(chatState, args) {
+  const female = String(args?.female || '').trim();
+  const itemId = normalizeWardrobeItemId(args?.itemId);
+  const character = chatState.characters?.[female];
+  if (!female || !character) return { applied: false, message: `bsRemoveWardrobeItem skipped: unknown character ${female || '(empty)'}.` };
+  if (itemId === null) return { applied: false, message: `bsRemoveWardrobeItem skipped for ${female}: empty itemId.` };
+  if (itemId === DEFAULT_WARDROBE_ITEM.id) return { applied: false, message: `bsRemoveWardrobeItem skipped for ${female}: id=0 cannot be removed.` };
+  const next = cloneValue(character);
+  const profile = next.profile || {};
+  const wardrobe = ensureWardrobeState(profile);
+  const before = wardrobe.items.length;
+  wardrobe.items = wardrobe.items.filter((item) => item.id !== itemId);
+  if (wardrobe.items.length === before) return { applied: false, message: `bsRemoveWardrobeItem skipped for ${female}: item not found.` };
+  const outfit = ensureOutfitState(profile);
+  if (outfit.mainItemId === itemId) outfit.mainItemId = DEFAULT_WARDROBE_ITEM.id;
+  outfit.accessoryItemIds = outfit.accessoryItemIds.filter((id) => id !== itemId);
+  refreshOutfitPregFit(profile);
+  next.profile = profile;
+  chatState.characters[female] = syncCharacterStageFromProfile(next);
+  return { applied: true, message: `bsRemoveWardrobeItem applied to ${female}: ${itemId}.` };
+}
+
+function applyChangeOutfit(chatState, args) {
+  const female = String(args?.female || '').trim();
+  const character = chatState.characters?.[female];
+  if (!female || !character) return { applied: false, message: `bsChangeOutfit skipped: unknown character ${female || '(empty)'}.` };
+  const next = cloneValue(character);
+  const profile = next.profile || {};
+  const outfit = ensureOutfitState(profile);
+  if (args?.temporaryItems !== undefined) {
+    if (!Array.isArray(args.temporaryItems)) return { applied: false, message: `bsChangeOutfit skipped for ${female}: temporaryItems must be an array.` };
+    outfit.temporaryItems = normalizeTemporaryOutfitItems(args.temporaryItems);
+  }
+  if (args?.mainItemId !== undefined) {
+    const mainItemId = normalizeWardrobeItemId(args.mainItemId);
+    if (mainItemId === null || !findOutfitItem(profile, mainItemId, 'main')) return { applied: false, message: `bsChangeOutfit skipped for ${female}: unknown main item ${mainItemId ?? '(empty)'}.` };
+    outfit.mainItemId = mainItemId;
+  }
+  if (args?.accessoryItemIds !== undefined) {
+    if (!Array.isArray(args.accessoryItemIds)) return { applied: false, message: `bsChangeOutfit skipped for ${female}: accessoryItemIds must be an array.` };
+    const nextAccessoryIds = [];
+    for (const rawId of args.accessoryItemIds) {
+      const id = normalizeWardrobeItemId(rawId);
+      if (id === null || nextAccessoryIds.includes(id)) continue;
+      if (!findOutfitItem(profile, id, 'accessory')) return { applied: false, message: `bsChangeOutfit skipped for ${female}: unknown accessory item ${id}.` };
+      nextAccessoryIds.push(id);
+    }
+    outfit.accessoryItemIds = nextAccessoryIds;
+  }
+  refreshOutfitPregFit(profile);
+  next.profile = profile;
+  chatState.characters[female] = syncCharacterStageFromProfile(next);
+  return { applied: true, message: `bsChangeOutfit applied to ${female}.` };
+}
 function applyDescription(chatState, args) {
   const female = String(args?.female || '').trim();
   const options = args?.options && typeof args.options === 'object' ? args.options : {};
@@ -3896,6 +4222,9 @@ export function applyToolCall(chatState, call) {
   if (name === 'bsPassedTime') return applyPassedTime(chatState, args);
   if (name === 'bsWriteDiary') return applyWriteDiary(chatState, args);
   if (name === 'bsUpdateCharacterStatus') return applyCharacterStatus(chatState, args);
+  if (name === 'bsAddWardrobeItem') return applyAddWardrobeItem(chatState, args);
+  if (name === 'bsRemoveWardrobeItem') return applyRemoveWardrobeItem(chatState, args);
+  if (name === 'bsChangeOutfit') return applyChangeOutfit(chatState, args);
   if (name === 'bsSetDescription') return applyDescription(chatState, args);
   if (name === 'bsSetCharacterPresence') return applySetCharacterPresence(chatState, args);
   if (name === 'bsUpdateExperience') return applyUpdateExperience(chatState, args);

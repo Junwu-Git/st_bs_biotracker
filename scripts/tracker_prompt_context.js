@@ -152,9 +152,18 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '- fluxPositive / fluxNegative 的阻塞、快积与扩容需按该衍生种族的正负极需求解释；解放 flux 时传 options.flux。',
   '- 对 derivedType 角色来说，被衍生代谢抵免的需求不会出现在 metabolism 中；未出现的需求不要主动提醒或要求处理。',
   '',
+  '[wardrobe / outfit]',
+  '- wardrobe 是角色衣柜，包含 items；outfit 是当前穿着。主流敘事通常只需要关注在场角色的 outfit。',
+  '- 衣物 item 字段：id/name/note/slot/masking/support/capacity/convenience。id 使用整数；默认主件 id=0 表示全裸，不要加入 wardrobe.items。note 只写衣物稳定外观与来源：颜色、材质、版型、长短、固定开口、图案、制服/病服/借装来源等；皮肤暴露、开衩、透肤、深领等稳定外观写在 note。禁止写当前穿着反应、角色感受、近期身体变化、怀孕/胀痛/压胸/勒红/变紧/显怀等动态状态；这些由四维、pregFit 与当轮叙事推导。 slot=main 为主件且只能穿一件；slot=accessory 为配件补正，可叠加。配件单项只能 -3 到 3，通常只影响 1-2 个最相关维度，其他维度填 0。',
+  '- 四维含义：masking=掩盖身体曲线、孕肚、胸腹变化的程度，不等于皮肤裸露程度，露肤、开衩、透肤等稳定外观由 note 描述；support=对胸、腹、腰、重心的承托程度；capacity=容许体型变化的程度；convenience=行动、穿脱、如厕、哺乳或排解需求的方便程度。',
+  '- 可用 bsAddWardrobeItem 添加/更新长期衣柜衣物，bsRemoveWardrobeItem 删除长期衣柜衣物，bsChangeOutfit 更换当前主件和配件列表。bsChangeOutfit 是覆盖式换装：mainItemId 是换装后的唯一主件；accessoryItemIds 是换装后仍穿戴的完整配件列表。要脱掉某配件，就传不包含该 id 的新列表；脱掉所有配件传 accessoryItemIds: []；全裸传 mainItemId: 0 且 accessoryItemIds: []。',
+  '- 临时衣物（如病服、借来的外套、旅馆睡衣）不要加入 wardrobe；在 bsChangeOutfit 传 temporaryItems，并让 mainItemId/accessoryItemIds 指向其中 id。换回衣柜服装时传 temporaryItems: [] 清除临时衣物。',
+  '- outfit.pregFit 只在真实妊娠、产兆前驱或产程中存在；非妊娠时为 null。pregFit.pregWearPressure 为孕期衣着压力，gap 为四维余裕：masking/support/capacity/convenience。gap 低于 0 表示该维度已被孕期变化压过。',
+  '- gap 表示衣物该维度扣除孕期压力后的余裕。一般 gap 约 3 以上表示仍有余裕；0 到 2 表示开始吃紧；-1 到 -3 表示明显冲突；-4 以下表示该维度严重失效。按具体维度叙述：masking 失效是轮廓、孕肚或胸腹变化难藏；support 失效是承托不足、下坠、晃动或重心负担外溢；capacity 失效是版型固定、尺寸死、腰腹胸臀被迫撑紧或扣合困难；convenience 失效是行动、穿脱、如厕或排解需求明显受阻。不要把 gap 数值直接写进叙事，除非是调试说明。',
+  '',
   '[descriptions]',
-  '- normalDescription / closeupDescription / pregnantDescription 为文字描述栏位。',
-  '- 三者格式固定为：字段名|描述内容;;字段名|描述内容;;...字段名|描述内容;;',
+  '- normalDescription / pregnantDescription 为文字描述栏位。',
+  '- 两者格式固定为：字段名|描述内容;;字段名|描述内容;;...字段名|描述内容;;',
   '- 使用 bsSetDescription 时，可以只传需要变化的既有子字段；未传入的子字段会保留旧值，需要因故事變化而實時更新子字段。',
   '- 不要新增角色原本没有的描述子字段；只能更新 existing_state 中该角色该 descriptions 已存在的字段名。',
   '- 不要改写成自然段，不要省略字段名，不要把 ;; 或 | 换成别的分隔方式。',
@@ -180,9 +189,13 @@ const TRACKER_DIARY_SECTION = [
 function buildTrackerMetabolismGuide(payload = null) {
   const fluxNames = collectRelevantFluxNames(payload || {});
   const diaryEnabled = payload?.diary_enabled !== false;
-  const baseGuide = diaryEnabled
+  const wardrobeEnabled = payload?.wardrobe_enabled === true;
+  let baseGuide = diaryEnabled
     ? TRACKER_VARIABLE_GUIDE_PROMPT
     : TRACKER_VARIABLE_GUIDE_PROMPT.replace(`${TRACKER_DIARY_SECTION}\n`, '');
+  if (!wardrobeEnabled) {
+    baseGuide = baseGuide.replace(/\n?\[wardrobe \/ outfit\][\s\S]*?\n\[descriptions\]/, '\n[descriptions]');
+  }
   return fluxNames.length > 0
     ? baseGuide.replace(
       '- 若角色具有 derivedType，则 metabolism 一定包含 flux，并只保留该衍生类型未抵免的普通需求。flux 通常是 -150 到 150 的单一极性需求值；被 pregnant.expansion 命中的方向可扩至 -200 或 200。正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。',
@@ -223,15 +236,12 @@ export function buildTrackerSystemPrompt(basePrompt = '', descriptionGuides = nu
   if (descriptionGuides) {
     parts.push([
       '[descriptions 填写规范]',
-      '- normalDescription 与 closeupDescription 默认必须填写。',
+      '- normalDescription 默认必须填写。',
       '- pregnantDescription 只有当角色处于妊娠相关阶段或假孕时才需要填写，否则必须留空或不返回。',
       '- 请务必按照预设的字段名与 |、;; 分隔符进行填写（参考下方规范），不可擅自使用自然段或缺少字段名。',
       '',
       '【normalDescription 规范】',
       String(descriptionGuides.normalDescription || '').trim(),
-      '',
-      '【closeupDescription 规范】',
-      String(descriptionGuides.closeupDescription || '').trim(),
       '',
       '【pregnantDescription 规范 (仅妊娠/假孕时填写)】',
       String(descriptionGuides.pregnantDescription || '').trim(),

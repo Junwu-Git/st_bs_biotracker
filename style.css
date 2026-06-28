@@ -977,6 +977,16 @@
   transform: scale(0.97);
 }
 
+#bs-biotracker-settings .bs-bt-home-tile--empty,
+#bs-biotracker-settings .bs-bt-home-tile--empty:hover,
+#bs-biotracker-settings .bs-bt-home-tile--empty:focus-visible,
+#bs-biotracker-settings .bs-bt-home-tile--empty:active {
+  pointer-events: none;
+  visibility: hidden;
+  transform: none;
+  filter: none;
+}
+
 #bs-biotracker-settings .bs-bt-home-tile__icon {
   width: 30px;
   height: 30px;
@@ -1030,6 +1040,11 @@
 #bs-biotracker-settings .bs-bt-home-tile__icon--preset {
   mask-image: url('./assets/icons/book-sparkles-svgrepo-com.svg');
   -webkit-mask-image: url('./assets/icons/book-sparkles-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon--wardrobe {
+  mask-image: url('./assets/icons/hanger-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/hanger-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-home-tile__label {
@@ -1192,6 +1207,10 @@
   background: rgba(255, 255, 255, 0.1);
   box-sizing: border-box;
   overflow: hidden;
+}
+
+#bs-biotracker-settings #bs-bt-register-tabs {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 #bs-biotracker-settings .bs-bt-full-state-tabs {
@@ -3126,4 +3145,205 @@
 #bs-biotracker-settings #bs-bt-view-track select,
 #bs-biotracker-settings #bs-bt-view-track input {
   max-width: 100%;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-list {
+  display: grid;
+  gap: 10px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-character-card,
+#bs-biotracker-settings .bs-bt-wardrobe-row {
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--bsbt-lcd-text) 18%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bsbt-lcd-bg) 76%, transparent);
+  color: var(--bsbt-lcd-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-character-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-character-card:hover,
+#bs-biotracker-settings .bs-bt-wardrobe-row:hover {
+  border-color: color-mix(in srgb, var(--bsbt-lcd-text) 36%, transparent);
+  background: color-mix(in srgb, var(--bsbt-lcd-text) 7%, var(--bsbt-lcd-bg));
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-row.is-current {
+  border-color: color-mix(in srgb, var(--bsbt-lcd-text) 34%, transparent);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--bsbt-lcd-text) 62%, transparent);
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-character-head,
+#bs-biotracker-settings .bs-bt-wardrobe-character-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-character {
+  display: grid;
+  gap: 10px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-page-title {
+  font-size: 1.15em;
+  font-weight: 800;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-current,
+#bs-biotracker-settings .bs-bt-wardrobe-group {
+  border-top: 1px solid color-mix(in srgb, var(--bsbt-lcd-text) 18%, transparent);
+  padding-top: 10px;
+  display: grid;
+  gap: 7px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-group-title {
+  font-weight: 800;
+  color: color-mix(in srgb, var(--bsbt-lcd-text) 88%, transparent);
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-current-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-pressure-tag {
+  border: 1px solid color-mix(in srgb, var(--bsbt-lcd-text) 24%, transparent);
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 0.78em;
+  color: color-mix(in srgb, var(--bsbt-lcd-text) 78%, transparent);
+  white-space: nowrap;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-summary {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-summary b {
+  flex: 0 0 auto;
+  min-width: 3em;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-row {
+  display: block;
+  padding: 8px 9px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-row-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-row-title {
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-row-note {
+  color: color-mix(in srgb, var(--bsbt-lcd-text) 70%, transparent);
+  font-size: 0.86em;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-metrics,
+.bs-bt-wardrobe-detail-bubble .bs-bt-wardrobe-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  font-size: 0.9em;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-metric,
+.bs-bt-wardrobe-detail-bubble .bs-bt-wardrobe-metric {
+  border: 1px solid color-mix(in srgb, var(--bsbt-lcd-text) 14%, transparent);
+  border-radius: 6px;
+  padding: 4px 5px;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.bs-bt-wardrobe-detail-bubble {
+  position: fixed;
+  z-index: 10050;
+  width: min(320px, calc(100vw - 20px));
+  max-height: min(420px, calc(100vh - 20px));
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--bsbt-lcd-text) 28%, transparent);
+  border-radius: 8px;
+  background: var(--bsbt-lcd-bg);
+  color: var(--bsbt-lcd-text);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.bs-bt-wardrobe-detail-title {
+  font-weight: 850;
+  font-size: 1.02em;
+}
+
+.bs-bt-wardrobe-detail-subtitle,
+.bs-bt-wardrobe-detail-note,
+.bs-bt-wardrobe-detail-hint {
+  color: color-mix(in srgb, var(--bsbt-lcd-text) 72%, transparent);
+  line-height: 1.45;
+}
+
+.bs-bt-wardrobe-detail-hint {
+  font-size: 0.86em;
+}
+#bs-biotracker-settings .bs-bt-inline-grid {
+  display: grid;
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-inline-grid--two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+#bs-biotracker-settings .bs-bt-mini-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-mini-field span {
+  font-size: 0.88em;
+  color: color-mix(in srgb, var(--bsbt-lcd-text) 78%, transparent);
+}
+
+
+#bs-biotracker-settings .bs-bt-track-description-list--wardrobe {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+
+#bs-biotracker-settings .bs-bt-track-section--wardrobe-description .bs-bt-track-meta-label {
+  font-weight: 700;
 }

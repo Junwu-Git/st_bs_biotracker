@@ -85,10 +85,21 @@ function getDiaryRecentLimit(settings, characterCount) {
   return characterCount > 1 ? Math.max(1, Math.floor(singleLimit / 2)) : singleLimit;
 }
 
-function getTrackerToolDefinitions(settings) {
+function hasPreparedWardrobe(existingState = {}) {
+  return Object.values(existingState || {}).some((item) => item?.profile?.wardrobe?.enabled === true);
+}
+
+function getTrackerToolDefinitions(settings, existingState = {}) {
   const diaryEnabled = Math.max(0, Math.min(20, Math.floor(Number(settings?.diaryRecentLimit) || 0))) > 0;
-  if (diaryEnabled) return TOOL_DEFINITIONS;
-  return TOOL_DEFINITIONS.filter((tool) => tool?.name !== 'bsWriteDiary');
+  const wardrobeEnabled = hasPreparedWardrobe(existingState);
+  const hiddenTools = new Set();
+  if (!diaryEnabled) hiddenTools.add('bsWriteDiary');
+  if (!wardrobeEnabled) {
+    hiddenTools.add('bsAddWardrobeItem');
+    hiddenTools.add('bsRemoveWardrobeItem');
+    hiddenTools.add('bsChangeOutfit');
+  }
+  return TOOL_DEFINITIONS.filter((tool) => !hiddenTools.has(tool?.name));
 }
 
 function getRecentDiaryEntries(profile, limit) {
@@ -465,8 +476,9 @@ export function buildTrackerPayload(ctx, settings, reason = 'manual', endIndexEx
     mainflow_context_snapshot: mainflowContextSnapshot,
     tracked_females: getRegisteredTargetNames(ctx, settings, chatState),
     existing_state: buildTrackerStateView(existingState, settings),
-    available_tools: getTrackerToolDefinitions(settings),
+    available_tools: getTrackerToolDefinitions(settings, existingState),
     diary_enabled: diaryEnabled,
+    wardrobe_enabled: hasPreparedWardrobe(existingState),
     recent_messages: recentMessages,
   };
 }

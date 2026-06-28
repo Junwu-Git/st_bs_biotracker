@@ -47,6 +47,10 @@
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--track" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">追踪</span>
               </button>
+              <button class="bs-bt-home-tile" type="button" data-nav-view="wardrobe">
+                <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--wardrobe" aria-hidden="true"></span>
+                <span class="bs-bt-home-tile__label">衣柜</span>
+              </button>
               <button class="bs-bt-home-tile" type="button" data-nav-view="race-encyclopedia">
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--dna" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">百科</span>
@@ -55,6 +59,7 @@
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--theme" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">主题</span>
               </button>
+              <div class="bs-bt-home-tile bs-bt-home-tile--empty" aria-hidden="true"></div>
             </div>
           </div>
         </section>
@@ -204,22 +209,28 @@
             </div>
 
             <div class="settings_section">
-              <label for="bs-bt-register-custom-notes">注册自订补充设定</label>
+              <label for="bs-bt-register-custom-notes">角色补充设定</label>
               <textarea id="bs-bt-register-custom-notes" class="text_pole bs-bt-textarea" rows="3"
-                placeholder="例如：羊膜绒毛膜为 MCMA、时常泌乳体质、特殊繁殖设定等"></textarea>
+                placeholder="推演、注册、备装都会参考。例如：羊膜绒毛膜为 MCMA、时常泌乳体质、特殊繁殖设定、职业衣着偏好等"></textarea>
             </div>
 
             <div class="settings_section">
               <div class="bs-bt-track-tabs" id="bs-bt-register-tabs">
                 <button type="button" class="bs-bt-track-tab is-active" data-register-tab="inference">推演</button>
                 <button type="button" class="bs-bt-track-tab" data-register-tab="registry">注册</button>
+                <button type="button" class="bs-bt-track-tab" data-register-tab="wardrobe">备装</button>
               </div>
             </div>
 
             <div class="bs-bt-register-page is-active" data-register-page="inference">
+              <div class="settings_section">
+                <label for="bs-bt-breeding-inference-prompt">额外推演提示</label>
+                <textarea id="bs-bt-breeding-inference-prompt" class="text_pole bs-bt-textarea" rows="4" placeholder="只影响本次繁育推演。可写特别关注的心理方向、过往经历、关系解释、当前是否应偏向月经期或孕期心理等。"></textarea>
+              </div>
+
               <div class="settings_section bs-bt-action-row">
                 <button id="bs-bt-breeding-inference-run" class="menu_button" type="button">繁育推演</button>
-                <button id="bs-bt-breeding-inference-apply" class="menu_button" type="button">套用到已注册角色</button>
+                <button id="bs-bt-breeding-inference-apply" class="menu_button" type="button">套用推演</button>
               </div>
 
               <hr class="sysHR" />
@@ -238,10 +249,6 @@
                 <textarea id="bs-bt-registry-normal-description" class="text_pole bs-bt-textarea" rows="7"></textarea>
               </div>
 
-              <div class="settings_section">
-                <label for="bs-bt-registry-closeup-description">注册默认 closeupDescription 规则</label>
-                <textarea id="bs-bt-registry-closeup-description" class="text_pole bs-bt-textarea" rows="8"></textarea>
-              </div>
 
               <div class="settings_section">
                 <label for="bs-bt-registry-pregnant-description">注册默认 pregnantDescription 规则</label>
@@ -264,6 +271,41 @@
                 <div class="bs-bt-status-title">注册状态</div>
                 <pre id="bs-bt-register-status"
                   class="bs-bt-status-box">输入名字与 Description 规则后发送注册请求，完成后可在“完整变量”查看该角色状态变量。</pre>
+              </div>
+            </div>
+            <div class="bs-bt-register-page" data-register-page="wardrobe" hidden>
+              <div class="settings_section">
+                <label>备装数量</label>
+                <div class="bs-bt-inline-grid bs-bt-inline-grid--two">
+                  <label class="bs-bt-mini-field" for="bs-bt-wardrobe-prep-main-count">
+                    <span>主件 main</span>
+                    <input id="bs-bt-wardrobe-prep-main-count" class="text_pole" type="number" min="1" max="12" step="1" />
+                  </label>
+                  <label class="bs-bt-mini-field" for="bs-bt-wardrobe-prep-accessory-count">
+                    <span>配件 accessory</span>
+                    <input id="bs-bt-wardrobe-prep-accessory-count" class="text_pole" type="number" min="0" max="12" step="1" />
+                  </label>
+                </div>
+              </div>
+
+              <div class="settings_section">
+                <label for="bs-bt-wardrobe-prep-prompt">额外备装提示</label>
+                <textarea id="bs-bt-wardrobe-prep-prompt" class="text_pole bs-bt-textarea" rows="5" placeholder="可写角色偏好、禁忌、职业/场景、常穿颜色、是否需要孕期可扩容衣物等。"></textarea>
+              </div>
+
+              <div class="settings_section bs-bt-action-row">
+                <button id="bs-bt-wardrobe-prep-run" class="menu_button" type="button">生成备装</button>
+                <button id="bs-bt-wardrobe-prep-apply" class="menu_button" type="button">套用备装</button>
+              </div>
+
+              <div class="settings_section">
+                <label for="bs-bt-wardrobe-prep-json">备装 JSON</label>
+                <textarea id="bs-bt-wardrobe-prep-json" class="text_pole bs-bt-textarea" rows="16" placeholder="先输入已注册角色名，再让 AI 生成备装；生成后可在这里手动微调 JSON，再套用。"></textarea>
+              </div>
+
+              <div class="settings_section">
+                <div class="bs-bt-status-title">备装状态</div>
+                <pre id="bs-bt-wardrobe-prep-status" class="bs-bt-status-box">角色必须已注册，才能准备衣柜与当前穿着。</pre>
               </div>
             </div>
           </div>
@@ -294,6 +336,14 @@
             <div class="settings_section" hidden>
               <label for="bs-bt-system-prompt">角色提示词 / 异步分析系统提示词</label>
               <textarea id="bs-bt-system-prompt" class="text_pole bs-bt-textarea" rows="10"></textarea>
+            </div>
+          </div>
+        </section>
+
+        <section id="bs-bt-view-wardrobe" class="bs-bt-view" data-view="wardrobe">
+          <div class="bs-bt-panel">
+            <div class="settings_section">
+              <div id="bs-bt-wardrobe-list" class="bs-bt-wardrobe-list"></div>
             </div>
           </div>
         </section>

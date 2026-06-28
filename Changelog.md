@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.8.0
+
+這版新增妊娠服裝系統，讓角色的衣櫃、當前穿著與孕期體型變化能一起參與追蹤與敘事。
+
+### 新增
+
+- 新增角色專屬 `wardrobe` 與 `outfit` 變量組；角色完成備裝後，才會啟用服裝相關 prompt 與 tool。
+- 手機首頁新增「衣櫃」入口，可查看已備裝角色的衣櫃、當前主件與配件。
+- 註冊頁新增「備裝」分頁，可讓 AI 根據角色卡、世界書、最近對話與已註冊狀態生成衣櫃 JSON，並可手動微調後套用。
+- 新增衣物四維：`masking`、`support`、`capacity`、`convenience`，分別描述遮掩輪廓、承托、容身與行動／穿脫便捷性。
+- 新增 `outfit.pregFit`，在真妊娠、產兆前驅與產程中依孕期進展與胎兒負荷計算 `pregWearPressure`，並生成四維 `gap` 供敘事判斷衣物是否吃緊。
+- 備裝結果新增 `outfitDescription` 與 `outfitSelfView`，會分別寫入 `normalDescription` 的「衣着动态」與「衣着自评」欄位。
+- 新增 `bsAddWardrobeItem`、`bsRemoveWardrobeItem`、`bsChangeOutfit` 三個工具，支援新增衣物、刪除衣物與更換當前穿著。
+
 ## v0.7.2
 
 這版是小幅介面整理，讓完整變量頁承接全角色時間推進，也補上角色在場狀態的調試切換。

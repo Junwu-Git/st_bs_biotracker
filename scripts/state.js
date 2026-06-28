@@ -38,6 +38,22 @@ export const THEME_CONFIG = {
   constructivism: {},
 };
 
+export const DEFAULT_WARDROBE_PREP_PROMPT = [
+  '请根据角色卡、世界书、最近对话、已注册状态与当前服装描述，为指定角色准备衣柜 JSON。',
+  '默认生成 3 件 main 主件、3 件 accessory 配件；若用户在本提示中指定数量、风格、场景或禁忌，请优先遵守。',
+  '主件应覆盖角色常用日常服、较正式/外出服、睡衣或居家服等；配件可包含外套、托腹带、鞋履、披肩、制服配件等。',
+  'note 只写衣物稳定外观与来源：颜色、材质、版型、长短、固定开口、图案、制服/病服/借装来源等。皮肤暴露、开衩、透肤、深领等稳定外观写在 note。禁止写当前穿着反应、角色感受、近期身体变化、怀孕/胀痛/压胸/勒红/变紧/显怀等动态状态；这些由四维、pregFit 与当轮叙事推导。',
+  '每件衣物字段必须为 id/name/note/slot/masking/support/capacity/convenience。',
+  'slot 只能是 main 或 accessory；main 是主件，只能穿一件；accessory 可叠加，但只是补正。',
+  '四维均为 -10 到 10；主件通常使用 0 到 10。配件单项只能 -3 到 3，通常只影响 1-2 个维度，其他维度必须填 0。旧的 contour/unsupported 若出现在资料中，会被视为 masking/support 的反向旧字段。',
+  'masking=掩盖身体曲线、孕肚、胸腹变化的程度；support=对胸、腹、腰、重心的承托程度，高表示托得住但可能偏束，低表示松散；capacity=容许体型变化的程度；convenience=行动、穿脱、如厕、哺乳或排解需求的方便程度。',
+  'id 必须使用整数；0 是系统保留默认主件，表示全裸，不要放入 wardrobe.items。长期衣柜 id 从 1 开始递增。',
+  'outfit.mainItemId 请选择一件最符合当前叙事/注册描述的主件；outfit.accessoryItemIds 选择当前已穿戴配件，未知则空数组。',
+  'temporaryItems 只用于病服、借装、旅馆睡衣等临时衣物；备装长期衣柜时通常输出空数组。',
+  '同时输出 outfitDescription 与 outfitSelfView。outfitDescription 格式为：衣着动态|当前穿着动态描述;;，写当前衣物在角色身上的客观/半客观状态；outfitSelfView 格式为：衣着自评|角色对当前穿着与遮掩效果的主观看法;;，自评更新频率较慢。衣柜 note 仍只保存稳定客观外观。',
+].join('\n');
+
+
 export const DEFAULT_SYSTEM_PROMPT = [
   '你是 AIRP 女性角色生理状态追踪器的工具调度器。',
   '你要根据角色卡、最近对话、已有状态，决定这次应调用哪些工具更新状态。',
@@ -83,6 +99,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   contextSize: 12,
   diaryRecentLimit: 5,
   diaryWritingPrompt: DEFAULT_DIARY_WRITING_PROMPT,
+  wardrobePrepPrompt: '',
+  wardrobePrepMainCount: 3,
+  wardrobePrepAccessoryCount: 3,
   targetNames: '',
   trackerWorldbookMode: 'exclude',
   trackerWorldbookExcludeNames: '',
@@ -170,10 +189,140 @@ function normalizePsychologyState(value) {
   };
 }
 
+function normalizeWardrobeItemId(value, fallback = null) {
+  if (value === 'nude') return 0;
+  const numeric = Number(value);
+  if (Number.isInteger(numeric) && numeric >= 0) return numeric;
+  const text = String(value ?? '').trim();
+  if (!text) return fallback;
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return 100000 + (hash % 900000);
+}
+
+function createDefaultWardrobeItem() {
+  return {
+    id: 0,
+    name: '全裸',
+    note: '未着衣物。',
+    slot: 'main',
+    masking: 0,
+    support: 0,
+    capacity: 10,
+    convenience: 10,
+  };
+}
+
+const WARDROBE_DIMENSIONS = Object.freeze(['masking', 'support', 'capacity', 'convenience']);
+
+function limitAccessoryWardrobeScores(item, normalizeScore) {
+  if (!item || item.slot !== 'accessory') return item;
+  const ranked = WARDROBE_DIMENSIONS
+    .map((key, index) => ({ key, index, value: normalizeScore(item[key], 0, -3, 3) }))
+    .filter((entry) => entry.value !== 0)
+    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value) || a.index - b.index);
+  const kept = new Set(ranked.slice(0, 2).map((entry) => entry.key));
+  for (const key of WARDROBE_DIMENSIONS) {
+    item[key] = kept.has(key) ? normalizeScore(item[key], 0, -3, 3) : 0;
+  }
+  return item;
+}
+
+function normalizeWardrobeItem(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const id = normalizeWardrobeItemId(value.id);
+  const name = String(value.name || '').trim();
+  const slot = String(value.slot || '').trim() === 'accessory' ? 'accessory' : 'main';
+  const note = String(value.note || '').trim();
+  if (id === null || !name) return null;
+  const normalizeScore = (score, fallback = 0, min = -10, max = 10) => {
+    const next = Number(score);
+    if (!Number.isFinite(next)) return fallback;
+    return Math.max(min, Math.min(max, next));
+  };
+  const item = {
+    id,
+    name,
+    note,
+    slot,
+    masking: normalizeScore(value.masking !== undefined ? value.masking : 10 - normalizeScore(value.contour, 10)),
+    support: normalizeScore(value.support !== undefined ? value.support : 10 - normalizeScore(value.unsupported, 10)),
+    capacity: normalizeScore(value.capacity),
+    convenience: normalizeScore(value.convenience),
+  };
+  return limitAccessoryWardrobeScores(item, normalizeScore);
+}
+
+function normalizeWardrobeState(value) {
+  const items = Array.isArray(value?.items) ? value.items.map(normalizeWardrobeItem).filter(Boolean) : [];
+  if (!items.some((item) => item.id === 0)) items.unshift(createDefaultWardrobeItem());
+  return { enabled: Boolean(value?.enabled), items };
+}
+
+function normalizeTemporaryOutfitItems(value) {
+  if (!Array.isArray(value)) return [];
+  const items = [];
+  for (const source of value) {
+    const item = normalizeWardrobeItem(source);
+    if (!item || item.id === 0 || items.some((existing) => existing.id === item.id)) continue;
+    items.push({ ...item, source: 'temporary' });
+  }
+  return items;
+}
+
+function normalizePregFitState(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const normalizeGap = (gapValue) => {
+    const next = Number(gapValue);
+    if (!Number.isFinite(next)) return 0;
+    return Math.max(-20, Math.min(20, next));
+  };
+  const gapSource = value.gap && typeof value.gap === 'object' ? value.gap : {};
+  return {
+    pregWearPressure: Math.max(0, Math.min(10, Number(value.pregWearPressure) || 0)),
+    gap: {
+      masking: normalizeGap(gapSource.masking ?? gapSource.covering),
+      support: normalizeGap(gapSource.support),
+      capacity: normalizeGap(gapSource.capacity),
+      convenience: normalizeGap(gapSource.convenience),
+    },
+  };
+}
+
+function normalizeOutfitState(value, wardrobe) {
+  const wardrobeItems = Array.isArray(wardrobe?.items) ? wardrobe.items : [];
+  const temporaryItems = normalizeTemporaryOutfitItems(value?.temporaryItems);
+  const availableItems = [...wardrobeItems, ...temporaryItems];
+  const hasItem = (id, slot = '') => availableItems.some((item) => item.id === id && (!slot || item.slot === slot));
+  const requestedMainId = normalizeWardrobeItemId(value?.mainItemId, 0);
+  const mainItemId = hasItem(requestedMainId, 'main') ? requestedMainId : 0;
+  const accessoryItemIds = Array.isArray(value?.accessoryItemIds)
+    ? value.accessoryItemIds
+      .map((item) => normalizeWardrobeItemId(item))
+      .filter((id, index, list) => id !== null && list.indexOf(id) === index && hasItem(id, 'accessory'))
+    : [];
+  return {
+    mainItemId,
+    accessoryItemIds,
+    temporaryItems,
+    pregFit: normalizePregFitState(value?.pregFit),
+  };
+}
+
 export function normalizeCharacterPsychologyState(characterState) {
   if (!characterState || typeof characterState !== 'object') return characterState;
   if (!characterState.profile || typeof characterState.profile !== 'object') return characterState;
   characterState.profile.psychology = normalizePsychologyState(characterState.profile.psychology);
+  if (characterState.profile.wardrobe?.enabled) {
+    characterState.profile.wardrobe = normalizeWardrobeState(characterState.profile.wardrobe);
+    characterState.profile.outfit = normalizeOutfitState(characterState.profile.outfit, characterState.profile.wardrobe);
+  } else {
+    delete characterState.profile.wardrobe;
+    delete characterState.profile.outfit;
+  }
   const metabolism = characterState.profile.metabolism;
   if (metabolism && typeof metabolism === 'object' && !Array.isArray(metabolism)) {
     if (metabolism.excretion === undefined && (metabolism.urine !== undefined || metabolism.stool !== undefined)) {
@@ -650,9 +799,8 @@ function sanitizeProfilePatch(profilePatch) {
     odor: (value) => sanitizeInteger(value, { min: 0, max: 200 }),
     companionship: (value) => sanitizeInteger(value, { min: 0, max: 200 }),
   });
-  const descriptions = sanitizeObjectPatch(profilePatch.descriptions, ['normalDescription', 'closeupDescription', 'pregnantDescription'], {
+  const descriptions = sanitizeObjectPatch(profilePatch.descriptions, ['normalDescription', 'pregnantDescription'], {
     normalDescription: sanitizeString,
-    closeupDescription: sanitizeString,
     pregnantDescription: sanitizeString,
   });
   const notify = sanitizeObjectPatch(profilePatch.notify, ['firstly', 'secondly', 'thirdly'], {
@@ -679,6 +827,10 @@ function sanitizeProfilePatch(profilePatch) {
   if (mens) result.psychology.mens = mens;
   if (pregPsy) result.psychology.preg = pregPsy;
   if (metabolism) result.metabolism = metabolism;
+  if (profilePatch.wardrobe) result.wardrobe = normalizeWardrobeState(profilePatch.wardrobe);
+  if (profilePatch.outfit && (result.wardrobe?.enabled || profilePatch.wardrobe?.enabled)) {
+    result.outfit = normalizeOutfitState(profilePatch.outfit, result.wardrobe || profilePatch.wardrobe);
+  }
   if (descriptions) result.descriptions = descriptions;
   if (notify) result.notify = notify;
   if (immune) result.immune = immune;
@@ -793,7 +945,6 @@ export function createDefaultFemaleState(name = '') {
       },
       descriptions: {
         normalDescription: '',
-        closeupDescription: '',
         pregnantDescription: '',
       },
       notify: {
@@ -834,6 +985,18 @@ export function getSettings(ctx) {
     settings.diaryWritingPrompt = DEFAULT_DIARY_WRITING_PROMPT;
     shouldSave = true;
   }
+  const rawWardrobePrepMainCount = Number(settings.wardrobePrepMainCount);
+  const wardrobePrepMainCount = Math.max(1, Math.min(12, Math.floor(Number.isFinite(rawWardrobePrepMainCount) ? rawWardrobePrepMainCount : DEFAULT_SETTINGS.wardrobePrepMainCount)));
+  if (settings.wardrobePrepMainCount !== wardrobePrepMainCount) {
+    settings.wardrobePrepMainCount = wardrobePrepMainCount;
+    shouldSave = true;
+  }
+  const rawWardrobePrepAccessoryCount = Number(settings.wardrobePrepAccessoryCount);
+  const wardrobePrepAccessoryCount = Math.max(0, Math.min(12, Math.floor(Number.isFinite(rawWardrobePrepAccessoryCount) ? rawWardrobePrepAccessoryCount : DEFAULT_SETTINGS.wardrobePrepAccessoryCount)));
+  if (settings.wardrobePrepAccessoryCount !== wardrobePrepAccessoryCount) {
+    settings.wardrobePrepAccessoryCount = wardrobePrepAccessoryCount;
+    shouldSave = true;
+  }
   const rawDiaryRecentLimit = Number(settings.diaryRecentLimit);
   const diaryRecentLimit = Math.max(0, Math.min(20, Math.floor(Number.isFinite(rawDiaryRecentLimit) ? rawDiaryRecentLimit : DEFAULT_SETTINGS.diaryRecentLimit)));
   if (settings.diaryRecentLimit !== diaryRecentLimit) {
@@ -844,9 +1007,11 @@ export function getSettings(ctx) {
     settings.registryDescriptionGuides = cloneValue(DEFAULT_REGISTRY_DESCRIPTION_GUIDES);
     shouldSave = true;
   } else {
+    const existingGuides = { ...settings.registryDescriptionGuides };
+    delete existingGuides['close' + 'upDescription'];
     const mergedGuides = {
       ...cloneValue(DEFAULT_REGISTRY_DESCRIPTION_GUIDES),
-      ...settings.registryDescriptionGuides,
+      ...existingGuides,
     };
     if (JSON.stringify(mergedGuides) !== JSON.stringify(settings.registryDescriptionGuides)) shouldSave = true;
     settings.registryDescriptionGuides = mergedGuides;
@@ -1265,7 +1430,6 @@ function createSnapshotCharacterBaseline(name = '') {
       },
       descriptions: {
         normalDescription: '',
-        closeupDescription: '',
         pregnantDescription: '',
       },
       notify: {

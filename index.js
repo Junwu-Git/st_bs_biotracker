@@ -1,5 +1,5 @@
 import { fetchModelList } from './scripts/api.js';
-import { applyRegistryBreedingInference, runRegistry, runRegistryBreedingInference } from './scripts/registry.js';
+import { applyRegistryBreedingInference, runRegistry, runRegistryBreedingInference, runRegistryWardrobeInference } from './scripts/registry.js';
 import {
   AMORPHOUS_RACES,
   DERIVED_TYPE_RACES,
@@ -60,6 +60,8 @@ const MENU_API_ID = 'bs-biotracker-menu-api';
 const MAINFLOW_PROMPT_KEY = `${MODULE_NAME}_mainflow`;
 const LAST_VIEW_STORAGE_KEY = `${MODULE_NAME}_last_view`;
 const TRACK_SUBPAGES = ['overview', 'description', 'pregnancy', 'experience', 'diary'];
+const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
+const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
@@ -89,6 +91,7 @@ let selectedFullStateSubpage = 'variables';
 let selectedTrackName = '';
 let selectedTrackSubpage = 'overview';
 let selectedTrackCardIndexes = {};
+let selectedWardrobeName = '';
 let selectedRaceEncyclopedia = '';
 let selectedDerivedEncyclopedia = '';
 let racePhysiologyEditorOpen = false;
@@ -182,7 +185,8 @@ function setRegisterStatus(message, isError = false) {
 }
 
 function setRegisterTab(tab) {
-  const next = String(tab || 'inference') === 'registry' ? 'registry' : 'inference';
+  const requested = String(tab || 'inference');
+  const next = ['inference', 'registry', 'wardrobe'].includes(requested) ? requested : 'inference';
   document.querySelectorAll('#bs-bt-register-tabs [data-register-tab]').forEach((node) => {
     node.classList.toggle('is-active', String(node.getAttribute('data-register-tab') || '') === next);
   });
@@ -193,11 +197,148 @@ function setRegisterTab(tab) {
   });
 }
 
+
+function setWardrobePrepStatus(message, isError = false) {
+  const el = document.getElementById('bs-bt-wardrobe-prep-status');
+  if (!el) return;
+  el.textContent = message;
+  el.dataset.state = isError ? 'error' : 'normal';
+}
+
+async function runWardrobePrepInference(ctx, button = null) {
+  const values = getRegisterFormValues();
+  if (!values.targetName) {
+    setWardrobePrepStatus('请先输入要备装的已注册角色名。', true);
+    globalThis.toastr?.warning?.('[BS BioTracker] 请先输入角色名');
+    return;
+  }
+  readSettingsFromForm(ctx);
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  if (!chatState.characters?.[values.targetName]) {
+    setWardrobePrepStatus(`尚未找到已注册角色：${values.targetName}。请先完成注册，再备装。`, true);
+    globalThis.toastr?.warning?.('[BS BioTracker] 备装需要已注册角色');
+    return;
+  }
+  const wardrobePrepPrompt = String(document.getElementById('bs-bt-wardrobe-prep-prompt')?.value || settings.wardrobePrepPrompt || '').trim();
+  const wardrobePrepMainCount = Math.max(1, Math.min(12, Math.floor(Number(document.getElementById('bs-bt-wardrobe-prep-main-count')?.value || settings.wardrobePrepMainCount || 3))));
+  const wardrobePrepAccessoryCount = Math.max(0, Math.min(12, Math.floor(Number(document.getElementById('bs-bt-wardrobe-prep-accessory-count')?.value || settings.wardrobePrepAccessoryCount || 3))));
+  const originalText = button?.textContent;
+  if (button) {
+    button.disabled = true;
+    button.textContent = '生成中...';
+  }
+  setWardrobePrepStatus(`正在为 ${values.targetName} 生成衣柜 JSON...`);
+  try {
+    const result = await runRegistryWardrobeInference(ctx, { ...values, wardrobePrepPrompt, wardrobePrepMainCount, wardrobePrepAccessoryCount });
+    const editor = document.getElementById('bs-bt-wardrobe-prep-json');
+    if (editor) editor.value = JSON.stringify(result, null, 2);
+    setWardrobePrepStatus('备装生成完成。可以手动微调 JSON，再套用备装。');
+    globalThis.toastr?.success?.(`[BS BioTracker] 已生成 ${values.targetName} 的备装 JSON`);
+  } catch (error) {
+    console.error('[BS BioTracker] runRegistryWardrobeInference failed', error);
+    const message = String(error?.message || error);
+    setWardrobePrepStatus(message, true);
+    globalThis.toastr?.error?.(message, '[BS BioTracker]');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText || '生成备装';
+    }
+  }
+}
+
+function applyWardrobePrep(ctx) {
+  const values = getRegisterFormValues();
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const character = chatState.characters?.[values.targetName];
+  if (!values.targetName || !character) {
+    setWardrobePrepStatus('请先在注册角色名输入一个已注册角色。', true);
+    globalThis.toastr?.warning?.('[BS BioTracker] 备装需要已注册角色');
+    return;
+  }
+  const raw = String(document.getElementById('bs-bt-wardrobe-prep-json')?.value || '').trim();
+  if (!raw) {
+    setWardrobePrepStatus('备装 JSON 为空。', true);
+    return;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    setWardrobePrepStatus(`备装 JSON 无法解析：${String(error?.message || error)}`, true);
+    return;
+  }
+  const items = Array.isArray(parsed?.wardrobe?.items) ? parsed.wardrobe.items : Array.isArray(parsed?.items) ? parsed.items : [];
+  if (items.length === 0) {
+    setWardrobePrepStatus('备装 JSON 需要 wardrobe.items。', true);
+    return;
+  }
+  const outfit = parsed?.outfit && typeof parsed.outfit === 'object' ? parsed.outfit : {};
+  const outfitDescription = getWardrobePrepOutfitDescription(parsed);
+  const outfitSelfView = getWardrobePrepOutfitSelfView(parsed);
+  const workingState = cloneJsonValue(chatState);
+  const workingCharacter = workingState.characters?.[values.targetName];
+  if (!workingCharacter?.profile) {
+    setWardrobePrepStatus('备装目标状态异常。', true);
+    return;
+  }
+  workingCharacter.profile.wardrobe = {
+    enabled: true,
+    items: [{ id: 0, name: '全裸', note: '未着衣物。', slot: 'main', masking: 0, support: 0, capacity: 10, convenience: 10 }],
+  };
+  workingCharacter.profile.outfit = { mainItemId: 0, accessoryItemIds: [], temporaryItems: [], pregFit: null };
+  const logs = [];
+  for (const item of items) {
+    if (Number(item?.id) === 0 || String(item?.id || '').trim() === 'nude') continue;
+    logs.push(applyToolCall(workingState, { name: 'bsAddWardrobeItem', arguments: { female: values.targetName, item } }));
+  }
+  logs.push(applyToolCall(workingState, {
+    name: 'bsChangeOutfit',
+    arguments: {
+      female: values.targetName,
+      mainItemId: Number.isInteger(Number(outfit.mainItemId)) ? Number(outfit.mainItemId) : 0,
+      accessoryItemIds: Array.isArray(outfit.accessoryItemIds) ? outfit.accessoryItemIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id >= 0) : [],
+      temporaryItems: Array.isArray(outfit.temporaryItems) ? outfit.temporaryItems : [],
+    },
+  }));
+  const failed = logs.find((item) => item && item.applied === false);
+  if (failed) {
+    setWardrobePrepStatus(failed.message || '备装失败。', true);
+    return;
+  }
+  if (!outfitDescription || !outfitSelfView) {
+    setWardrobePrepStatus('备装 JSON 需要 outfitDescription 与 outfitSelfView。请重新生成或手动补上。', true);
+    return;
+  }
+  const preparedCharacter = workingState.characters?.[values.targetName];
+  if (!preparedCharacter?.profile) {
+    setWardrobePrepStatus('备装目标状态异常。', true);
+    return;
+  }
+  let normalDescription = preparedCharacter.profile.descriptions?.normalDescription || '';
+  normalDescription = upsertDescriptionField(normalDescription, '衣着动态', outfitDescription, ['衣着動態', '衣著动态', '衣著動態', '衣着', '衣著', '当前衣着', '當前衣著']);
+  normalDescription = upsertDescriptionField(normalDescription, '衣着自评', outfitSelfView, ['衣著自評', '衣着自評', '衣著自评', '服装自评', '服裝自評']);
+  preparedCharacter.profile.descriptions = {
+    ...(preparedCharacter.profile.descriptions || {}),
+    normalDescription,
+  };
+  chatState.characters[values.targetName] = preparedCharacter;
+  recordChatStateSnapshot(ctx, chatState, { reason: 'wardrobe_prep' });
+  saveSettings(ctx);
+  resetPoller(ctx, trackerDeps);
+  renderStatusPanel(ctx);
+  renderWardrobePage(ctx);
+  setWardrobePrepStatus(`已为 ${values.targetName} 重新套用备装；旧衣柜已由本次 JSON 覆盖。`);
+  globalThis.toastr?.success?.(`[BS BioTracker] 已备装 ${values.targetName}`);
+}
 function getRegisterFormValues() {
   return {
     targetName: String(document.getElementById('bs-bt-register-name')?.value || '').trim(),
     declaredRace: String(document.getElementById('bs-bt-register-race')?.value || '').trim(),
     customNotes: String(document.getElementById('bs-bt-register-custom-notes')?.value || '').trim(),
+    breedingInferencePrompt: String(document.getElementById('bs-bt-breeding-inference-prompt')?.value || '').trim(),
   };
 }
 
@@ -227,6 +368,7 @@ function getApplicableBreedingInferenceDraft(values) {
   if (draft.targetName !== values.targetName) return null;
   if (draft.declaredRace !== values.declaredRace) return null;
   if (draft.customNotes !== values.customNotes) return null;
+  if (draft.breedingInferencePrompt !== values.breedingInferencePrompt) return null;
   const editor = document.getElementById('bs-bt-breeding-inference-status');
   const raw = String((editor && 'value' in editor ? editor.value : editor?.textContent) || '').trim();
   if (!raw || raw === '尚未执行繁育推演。若直接注册，会使用默认繁育心理规则。') return draft.result;
@@ -1581,6 +1723,68 @@ function parseDescriptionBlocks(text) {
     .filter((item) => item !== null);
 }
 
+function getDescriptionFieldContent(text, preferredNames = [], options = {}) {
+  const preferred = new Set(preferredNames.map((name) => String(name || '').trim()).filter(Boolean));
+  const blocks = parseDescriptionBlocks(text);
+  if (preferred.size > 0) {
+    const matched = blocks.find((block) => preferred.has(block.title));
+    if (matched) return matched.content;
+    if (options.fallback === false) return '';
+  }
+  return blocks.length > 0 ? blocks[0].content : String(text || '').trim();
+}
+
+function upsertDescriptionField(text, fieldName, content, aliases = []) {
+  const nextContent = String(content || '').replace(/\s+/g, ' ').trim();
+  if (!nextContent) return String(text || '').trim();
+  const targetName = String(fieldName || '').trim();
+  const aliasSet = new Set([targetName, ...aliases].map((name) => String(name || '').trim()).filter(Boolean));
+  const blocks = parseDescriptionBlocks(text);
+  if (blocks.length === 0) return targetName + '|' + nextContent + ';;';
+  let replaced = false;
+  const nextBlocks = blocks.map((block) => {
+    if (aliasSet.has(block.title)) {
+      replaced = true;
+      return { title: targetName, content: nextContent };
+    }
+    return block;
+  });
+  if (!replaced) nextBlocks.push({ title: targetName, content: nextContent });
+  return nextBlocks.map((block) => block.title + '|' + block.content + ';;').join('');
+}
+
+function getWardrobePrepOutfitDescription(parsed = {}) {
+  const sources = [
+    parsed?.outfitDescription,
+    parsed?.wearDescription,
+    parsed?.descriptions?.normalDescription,
+    parsed?.normalDescription,
+  ];
+  for (const source of sources) {
+    const text = String(source || '').trim();
+    if (!text) continue;
+    return getDescriptionFieldContent(text, ['衣着动态', '衣着動態', '衣著动态', '衣著動態', '衣着', '衣著', '当前衣着', '當前衣著']);
+  }
+  return '';
+}
+
+function getWardrobePrepOutfitSelfView(parsed = {}) {
+  const directSources = [parsed?.outfitSelfView, parsed?.wearSelfView, parsed?.selfView];
+  for (const source of directSources) {
+    const text = String(source || '').trim();
+    if (!text) continue;
+    return getDescriptionFieldContent(text, ['衣着自评', '衣著自評', '衣着自評', '衣著自评', '服装自评', '服裝自評']);
+  }
+  const descriptionSources = [parsed?.descriptions?.normalDescription, parsed?.normalDescription];
+  for (const source of descriptionSources) {
+    const text = String(source || '').trim();
+    if (!text) continue;
+    const matched = getDescriptionFieldContent(text, ['衣着自评', '衣著自評', '衣着自評', '衣著自评', '服装自评', '服裝自評'], { fallback: false });
+    if (matched) return matched;
+  }
+  return '';
+}
+
 function getPsychologyView(profile = {}) {
   const preg = profile?.psychology?.preg || {};
   const mens = profile?.psychology?.mens || {};
@@ -1677,6 +1881,232 @@ function renderPsychologyPrompts(items) {
   `;
 }
 
+function getWardrobeItems(profile = {}) {
+  return Array.isArray(profile?.wardrobe?.items) ? profile.wardrobe.items : [];
+}
+
+function getTemporaryOutfitItems(profile = {}) {
+  return Array.isArray(profile?.outfit?.temporaryItems) ? profile.outfit.temporaryItems : [];
+}
+
+function getOutfitViewItems(profile = {}) {
+  return [...getWardrobeItems(profile), ...getTemporaryOutfitItems(profile).map((item) => ({ ...item, source: 'temporary' }))];
+}
+
+function findWardrobeViewItem(profile = {}, itemId = '', slot = '') {
+  const id = Number(itemId);
+  if (!Number.isInteger(id) || id < 0) return null;
+  return getWardrobeItems(profile).find((item) => Number(item?.id) === id && (!slot || item?.slot === slot)) || null;
+}
+
+function findOutfitViewItem(profile = {}, itemId = '', slot = '') {
+  const id = Number(itemId);
+  if (!Number.isInteger(id) || id < 0) return null;
+  return getOutfitViewItems(profile).find((item) => Number(item?.id) === id && (!slot || item?.slot === slot)) || null;
+}
+
+function formatWardrobeMetricValue(value, signed = false) {
+  const number = Number.isFinite(Number(value)) ? Number(value) : 0;
+  const text = formatIntegerDisplay(number);
+  return signed && number > 0 ? '+' + text : text;
+}
+
+function renderWardrobeMetricMap(values = {}, labels = WARDROBE_DIMENSION_LABELS, options = {}) {
+  return '<div class="bs-bt-wardrobe-metrics">' + Object.entries(labels).map(([key, label]) => {
+    const value = Number.isFinite(Number(values?.[key])) ? Number(values[key]) : 0;
+    return '<div class="bs-bt-wardrobe-metric"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(formatWardrobeMetricValue(value, options.signed)) + '</strong></div>';
+  }).join('') + '</div>';
+}
+
+function getWardrobeItemKind(item = {}) {
+  return item.slot === 'accessory' ? '配件' : '主件';
+}
+
+function renderWardrobeItemRow(item = {}, options = {}) {
+  return `
+    <button class="bs-bt-wardrobe-row${options.current ? ' is-current' : ''}" type="button" data-wardrobe-item-id="${escapeHtml(item.id)}">
+      <span class="bs-bt-wardrobe-row-main">
+        <span class="bs-bt-wardrobe-row-title">${escapeHtml(item.name || item.id || '未命名')}</span>
+        ${item.note ? `<span class="bs-bt-wardrobe-row-note">${escapeHtml(item.note)}</span>` : ''}
+      </span>
+    </button>
+  `;
+}
+
+function buildOutfitView(profile = {}) {
+  if (profile?.wardrobe?.enabled !== true) return { enabled: false, main: null, accessories: [], pregFit: null };
+  const outfit = profile?.outfit && typeof profile.outfit === 'object' ? profile.outfit : {};
+  const main = findOutfitViewItem(profile, outfit.mainItemId, 'main') || findWardrobeViewItem(profile, 0, 'main') || { id: 0, name: '全裸', note: '未着衣物。', slot: 'main' };
+  const accessories = Array.isArray(outfit.accessoryItemIds)
+    ? outfit.accessoryItemIds.map((id) => findOutfitViewItem(profile, id, 'accessory')).filter(Boolean)
+    : [];
+  return { enabled: true, main, accessories, pregFit: outfit.pregFit || null };
+}
+
+function getOutfitSummary(outfit = {}) {
+  if (!outfit.enabled) return '尚未备装';
+  const names = [outfit.main?.name || '全裸', ...(outfit.accessories || []).map((item) => item.name || item.id)].filter(Boolean);
+  return names.length > 0 ? names.join(' + ') : '无';
+}
+
+function getDescriptionBlockByNames(blocks = [], names = []) {
+  const nameSet = new Set(names.map((name) => String(name || '').trim()).filter(Boolean));
+  return (Array.isArray(blocks) ? blocks : []).find((block) => nameSet.has(String(block?.title || '').trim())) || null;
+}
+
+function isWardrobeDescriptionBlock(block = {}) {
+  return new Set([
+    '衣着动态', '衣着動態', '衣著动态', '衣著動態',
+    '衣着自评', '衣著自評', '衣着自評', '衣著自评',
+    '衣着', '衣著', '当前衣着', '當前衣著', '服装自评', '服裝自評',
+  ]).has(String(block?.title || '').trim());
+}
+
+function renderWardrobeDescriptionSection(viewModel = {}) {
+  const outfitView = viewModel.outfit || {};
+  const blocks = viewModel.description?.normalBlocks || [];
+  const dynamicBlock = getDescriptionBlockByNames(blocks, ['衣着动态', '衣着動態', '衣著动态', '衣著動態', '衣着', '衣著', '当前衣着', '當前衣著']);
+  const selfViewBlock = getDescriptionBlockByNames(blocks, ['衣着自评', '衣著自評', '衣着自評', '衣著自评', '服装自评', '服裝自評']);
+  if (!outfitView.enabled && !dynamicBlock && !selfViewBlock) return '';
+  const accessories = Array.isArray(outfitView.accessories) ? outfitView.accessories : [];
+  const currentHtml = outfitView.enabled
+    ? '<div class="bs-bt-track-meta">'
+      + '<div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">主件</span><span class="bs-bt-track-meta-value">' + escapeHtml(outfitView.main?.name || '全裸') + '</span></div>'
+      + '<div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">配件</span><span class="bs-bt-track-meta-value">' + (accessories.length > 0 ? escapeHtml(accessories.map((item) => item.name || item.id).join('、')) : '无') + '</span></div>'
+      + '</div>'
+    : '<div class="bs-bt-track-description-empty">尚未备装</div>';
+  const descriptionItems = [
+    dynamicBlock ? { title: '动态', content: dynamicBlock.content } : null,
+    selfViewBlock ? { title: '自评', content: selfViewBlock.content } : null,
+  ].filter(Boolean);
+  const detailHtml = descriptionItems.length > 0
+    ? '<div class="bs-bt-track-description-list bs-bt-track-description-list--wardrobe">' + descriptionItems.map((item) => '<div class="bs-bt-track-description-item"><div class="bs-bt-track-description-title">' + escapeHtml(item.title) + '</div><div>' + escapeHtml(item.content || '') + '</div></div>').join('') + '</div>'
+    : '';
+  return '<div class="bs-bt-track-section bs-bt-track-section--wardrobe-description"><div class="bs-bt-track-section-title">衣着</div>' + currentHtml + detailHtml + '</div>';
+}
+
+function renderCurrentOutfitSection(outfitView = {}) {
+  if (!outfitView.enabled) return '';
+  const accessories = Array.isArray(outfitView.accessories) ? outfitView.accessories : [];
+  return `
+    <div class="bs-bt-track-section">
+      <div class="bs-bt-track-section-title">当前穿着</div>
+      <div class="bs-bt-track-meta">
+        <div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">主件</span><span class="bs-bt-track-meta-value">${escapeHtml(outfitView.main?.name || '全裸')}</span></div>
+        <div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">配件</span><span class="bs-bt-track-meta-value">${accessories.length > 0 ? escapeHtml(accessories.map((item) => item.name || item.id).join('、')) : '无'}</span></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderWardrobeCharacterList(characters = []) {
+  return characters.map((character) => {
+    const profile = character?.profile || {};
+    const outfit = buildOutfitView(profile);
+    const items = getWardrobeItems(profile).filter((item) => Number(item?.id) !== 0);
+    const mainCount = items.filter((item) => item.slot !== 'accessory').length;
+    const accessoryCount = items.filter((item) => item.slot === 'accessory').length;
+    return `
+      <button class="bs-bt-wardrobe-character-card" type="button" data-wardrobe-character="${escapeHtml(character?.name || '')}">
+        <span class="bs-bt-wardrobe-character-head">
+          <strong>${escapeHtml(character?.name || '未命名')}</strong>
+        </span>
+        <span class="bs-bt-wardrobe-summary"><b>当前</b>${escapeHtml(getOutfitSummary(outfit))}</span>
+        <span class="bs-bt-wardrobe-summary"><b>衣柜</b>${escapeHtml(`${mainCount} 主件 / ${accessoryCount} 配件`)}</span>
+      </button>
+    `;
+  }).join('');
+}
+
+function renderWardrobeCharacterPage(character) {
+  const profile = character?.profile || {};
+  const outfit = buildOutfitView(profile);
+  const pressure = Number(outfit?.pregFit?.pregWearPressure);
+  const pressureTag = Number.isFinite(pressure) ? '<span class="bs-bt-wardrobe-pressure-tag">孕衣压 ' + escapeHtml(formatFixedDisplay(pressure, 1)) + '</span>' : '';
+  const currentIds = new Set([outfit.main?.id, ...(outfit.accessories || []).map((item) => item.id)].filter((id) => id !== undefined && id !== null));
+  const items = getWardrobeItems(profile).filter((item) => Number(item?.id) !== 0);
+  const mainItems = items.filter((item) => item.slot !== 'accessory');
+  const accessoryItems = items.filter((item) => item.slot === 'accessory');
+  const renderGroup = (title, groupItems) => `
+    <div class="bs-bt-wardrobe-group">
+      <div class="bs-bt-wardrobe-group-title">${escapeHtml(title)}</div>
+      ${groupItems.length > 0 ? groupItems.map((item) => renderWardrobeItemRow(item, { current: currentIds.has(item.id) })).join('') : '<div class="bs-bt-track-description-empty">无</div>'}
+    </div>
+  `;
+  return `
+    <div class="bs-bt-wardrobe-character">
+      <div class="bs-bt-wardrobe-character-title">
+        <button class="menu_button" type="button" data-wardrobe-back>返回衣柜</button>
+      </div>
+      <div class="bs-bt-wardrobe-page-title">${escapeHtml(character?.name || '未命名')}</div>
+      <div class="bs-bt-wardrobe-current">
+        <div class="bs-bt-wardrobe-current-head"><div class="bs-bt-wardrobe-group-title">当前穿着</div>${pressureTag}</div>
+        <div class="bs-bt-wardrobe-summary"><b>主件</b>${escapeHtml(outfit.main?.name || '全裸')}</div>
+        <div class="bs-bt-wardrobe-summary"><b>配件</b>${escapeHtml((outfit.accessories || []).length > 0 ? outfit.accessories.map((item) => item.name || item.id).join('、') : '无')}</div>
+      </div>
+      ${profile?.wardrobe?.enabled === true ? `${renderGroup('主件', mainItems)}${renderGroup('配件', accessoryItems)}` : '<div class="bs-bt-track-description-empty">尚未备装。</div>'}
+    </div>
+  `;
+}
+
+function renderWardrobePage(ctx) {
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const container = document.getElementById('bs-bt-wardrobe-list');
+  if (!container) return;
+  const characters = Object.values(chatState.characters || {});
+  if (characters.length === 0) {
+    selectedWardrobeName = '';
+    container.innerHTML = '<div class="bs-bt-track-description-empty">尚无注册角色。</div>';
+    return;
+  }
+  const selected = characters.find((character) => character?.name === selectedWardrobeName);
+  if (!selected) {
+    selectedWardrobeName = '';
+    container.innerHTML = renderWardrobeCharacterList(characters);
+    return;
+  }
+  container.innerHTML = renderWardrobeCharacterPage(selected);
+}
+
+function getWardrobeDetailItem(profile = {}, itemId = '') {
+  return findOutfitViewItem(profile, itemId) || findWardrobeViewItem(profile, itemId) || null;
+}
+
+function closeWardrobeItemBubble() {
+  document.querySelectorAll('.bs-bt-wardrobe-detail-bubble').forEach((node) => node.remove());
+}
+
+function positionWardrobeItemBubble(bubble, anchor) {
+  if (!bubble || !anchor) return;
+  const rect = anchor.getBoundingClientRect();
+  const bubbleRect = bubble.getBoundingClientRect();
+  const gap = 8;
+  const margin = 10;
+  let top = rect.bottom + gap;
+  let left = rect.left + Math.min(24, Math.max(0, rect.width * 0.12));
+  if (top + bubbleRect.height > window.innerHeight - margin) top = rect.top - bubbleRect.height - gap;
+  if (top < margin) top = margin;
+  if (left + bubbleRect.width > window.innerWidth - margin) left = window.innerWidth - bubbleRect.width - margin;
+  if (left < margin) left = margin;
+  bubble.style.top = top + 'px';
+  bubble.style.left = left + 'px';
+}
+
+function showWardrobeItemBubble(ctx, characterName, itemId, anchor) {
+  closeWardrobeItemBubble();
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const character = chatState.characters?.[characterName];
+  const profile = character?.profile || {};
+  const item = getWardrobeDetailItem(profile, itemId);
+  if (!item || !anchor) return;
+  const bubble = document.createElement('div');
+  bubble.className = 'bs-bt-wardrobe-detail-bubble';
+  bubble.innerHTML = renderWardrobeMetricMap(item, WARDROBE_DIMENSION_LABELS, { signed: item.slot === 'accessory' });
+  document.body.appendChild(bubble);
+  positionWardrobeItemBubble(bubble, anchor);
+}
 function buildTrackCharacterViewModel(character) {
   const runtimeCtx = getContextSafe();
   const runtimeSettings = runtimeCtx ? getSettings(runtimeCtx) : null;
@@ -1686,6 +2116,7 @@ function buildTrackCharacterViewModel(character) {
   const pregnant = profile.pregnant || {};
   const experience = profile.experience || {};
   const descriptions = profile.descriptions || {};
+  const outfitView = buildOutfitView(profile);
   const immune = profile.immune || {};
   const bio = profile.bio || {};
   const gestationSpeciesSpeed = getGestationSpeciesSpeed(profile);
@@ -1721,7 +2152,6 @@ function buildTrackCharacterViewModel(character) {
     },
     description: {
       normalBlocks: parseDescriptionBlocks(descriptions.normalDescription),
-      closeupBlocks: parseDescriptionBlocks(descriptions.closeupDescription),
       psychology: getPsychologyView(profile),
     },
     pregnancy: {
@@ -1769,6 +2199,7 @@ function buildTrackCharacterViewModel(character) {
       enabled: diaryEnabled,
       entries: Array.isArray(profile.diary) ? profile.diary : [],
     },
+    outfit: outfitView,
     debug: {
       immune: {
         metabolism: Boolean(immune.metabolism),
@@ -1943,9 +2374,10 @@ function renderTrackOverview(viewModel) {
 }
 
 function renderTrackDescription(viewModel) {
+  const normalBlocks = (Array.isArray(viewModel.description?.normalBlocks) ? viewModel.description.normalBlocks : []).filter((block) => !isWardrobeDescriptionBlock(block));
   return `
-    ${renderDescriptionGroup('基本描述', viewModel.description.normalBlocks)}
-    ${renderDescriptionGroup('特写描述', viewModel.description.closeupBlocks)}
+    ${renderWardrobeDescriptionSection(viewModel)}
+    ${renderDescriptionGroup('基本描述', normalBlocks)}
   `;
 }
 
@@ -3262,7 +3694,7 @@ function validateManualCharacterState(next, currentName) {
   if (!isPlainObject(next.profile)) errors.push('profile 必须是对象。');
 
   const profile = isPlainObject(next.profile) ? next.profile : {};
-  for (const path of ['base', 'pregnant', 'experience', 'bio', 'metabolism', 'notify', 'immune', 'psychology', 'descriptions', 'cooldown']) {
+  for (const path of ['base', 'pregnant', 'experience', 'bio', 'metabolism', 'notify', 'immune', 'psychology', 'wardrobe', 'outfit', 'descriptions', 'cooldown']) {
     if (profile[path] !== undefined && !isPlainObject(profile[path])) errors.push(`profile.${path} 必须是对象。`);
   }
   if (profile.children !== undefined && !Array.isArray(profile.children)) errors.push('profile.children 必须是数组。');
@@ -3525,21 +3957,21 @@ function setView(view) {
   const root = document.getElementById(PANEL_ID);
   if (!root) return;
   const normalizedView = view === 'time-lapse' ? 'full-state' : view;
-  const next = ['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'race-encyclopedia', 'tracker-preset'].includes(normalizedView) ? normalizedView : 'home';
+  const next = ['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'race-encyclopedia', 'tracker-preset', 'wardrobe'].includes(normalizedView) ? normalizedView : 'home';
   root.dataset.view = next;
   try {
     globalThis.localStorage?.setItem(LAST_VIEW_STORAGE_KEY, next);
   } catch {}
   document.querySelectorAll('#bs-biotracker-settings .bs-bt-view').forEach((node) => node.classList.toggle('is-active', node.dataset.view === next));
   const title = document.getElementById('bs-bt-title');
-  if (title) title.textContent = next === 'theme' ? 'THEME' : next === 'system' ? 'SYSTEM' : next === 'register' ? 'REGISTRY' : next === 'worldbook-filter' ? 'WORLDBOOK' : next === 'track-list' ? 'TRACK LIST' : next === 'track-char' ? 'TRACK CHAR' : next === 'full-state' ? 'FULL STATE' : next === 'race-encyclopedia' ? 'RACE DATA' : next === 'tracker-preset' ? 'PRESET' : 'HOME';
+  if (title) title.textContent = next === 'theme' ? 'THEME' : next === 'system' ? 'SYSTEM' : next === 'register' ? 'REGISTRY' : next === 'worldbook-filter' ? 'WORLDBOOK' : next === 'track-list' ? 'TRACK LIST' : next === 'track-char' ? 'TRACK CHAR' : next === 'full-state' ? 'FULL STATE' : next === 'race-encyclopedia' ? 'RACE DATA' : next === 'tracker-preset' ? 'PRESET' : next === 'wardrobe' ? 'WARDROBE' : 'HOME';
 }
 
 function getLastPagerView() {
   try {
     const value = String(globalThis.localStorage?.getItem(LAST_VIEW_STORAGE_KEY) || '').trim();
     if (value === 'time-lapse') return 'full-state';
-    if (['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'race-encyclopedia', 'tracker-preset'].includes(value)) {
+    if (['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'race-encyclopedia', 'tracker-preset', 'wardrobe'].includes(value)) {
       return value;
     }
   } catch {}
@@ -3569,15 +4001,18 @@ function applySettingsToForm(ctx) {
   setValue('bs-bt-system-prompt', settings.systemPrompt);
   setValue('bs-bt-register-custom-notes', settings.registryCustomNotes);
   setValue('bs-bt-registry-normal-description', settings.registryDescriptionGuides?.normalDescription);
-  setValue('bs-bt-registry-closeup-description', settings.registryDescriptionGuides?.closeupDescription);
   setValue('bs-bt-registry-pregnant-description', settings.registryDescriptionGuides?.pregnantDescription);
   setValue('bs-bt-diary-writing-prompt', settings.diaryWritingPrompt);
+  setValue('bs-bt-wardrobe-prep-prompt', settings.wardrobePrepPrompt);
+  setValue('bs-bt-wardrobe-prep-main-count', settings.wardrobePrepMainCount);
+  setValue('bs-bt-wardrobe-prep-accessory-count', settings.wardrobePrepAccessoryCount);
   populateModelList(settings);
   setConnectStatus(settings.modelOptions.length > 0 ? `已缓存 ${settings.modelOptions.length} 个模型` : '尚未连接');
   registryBreedingInferenceDraft = null;
   setRegisterTab('inference');
   setBreedingInferenceEditor('尚未执行繁育推演。若直接注册，会使用默认繁育心理规则。');
   setBreedingInferenceStatus('');
+  setWardrobePrepStatus('角色必须已注册，才能准备衣柜与当前穿着。');
   setRegisterStatus('输入名字与 Description 规则后发送注册请求，完成后可在“角色追踪”查看该角色状态变量。');
   syncWorldbookFilterInput(ctx);
   renderWorldbookEntryList(ctx, parseWorldbookExcludeNamesInput(settings.trackerWorldbookExcludeNames));
@@ -4147,6 +4582,9 @@ function readSettingsFromForm(ctx) {
   settings.contextSize = Math.max(2, Number(getValue('bs-bt-context-size')) || 12);
   settings.diaryRecentLimit = Math.max(0, Math.min(20, Math.floor(Number(getValue('bs-bt-diary-recent-limit')) || 0)));
   settings.diaryWritingPrompt = String(getValue('bs-bt-diary-writing-prompt')).trim();
+  settings.wardrobePrepPrompt = String(getValue('bs-bt-wardrobe-prep-prompt')).trim();
+  settings.wardrobePrepMainCount = Math.max(1, Math.min(12, Math.floor(Number(getValue('bs-bt-wardrobe-prep-main-count')) || 3)));
+  settings.wardrobePrepAccessoryCount = Math.max(0, Math.min(12, Math.floor(Number(getValue('bs-bt-wardrobe-prep-accessory-count')) || 0)));
   settings.targetNames = String(getValue('bs-bt-targets')).trim();
   settings.trackerWorldbookMode = normalizeWorldbookMode(getValue('bs-bt-tracker-worldbook-mode'));
   const filterNames = String(getValue('bs-bt-worldbook-filter-input')).trim();
@@ -4159,7 +4597,6 @@ function readSettingsFromForm(ctx) {
   settings.registryCustomNotes = String(getValue('bs-bt-register-custom-notes')).trim();
   settings.registryDescriptionGuides = {
     normalDescription: String(getValue('bs-bt-registry-normal-description')).trim(),
-    closeupDescription: String(getValue('bs-bt-registry-closeup-description')).trim(),
     pregnantDescription: String(getValue('bs-bt-registry-pregnant-description')).trim(),
   };
   syncRacePhysiologyOverrides(settings);
@@ -4471,6 +4908,7 @@ async function ensureModal(ctx) {
         return;
       }
       if (nextView === 'race-encyclopedia') renderRaceEncyclopediaPage(ctx);
+      if (nextView === 'wardrobe') renderWardrobePage(ctx);
       if (nextView === 'tracker-preset') {
         await refreshTrackerPresetPage(ctx).catch((error) => {
           console.error('[BS BioTracker] refreshTrackerPresetPage failed', error);
@@ -4479,6 +4917,33 @@ async function ensureModal(ctx) {
       setView(nextView);
     }),
   );
+  const wardrobeList = document.getElementById('bs-bt-wardrobe-list');
+  wardrobeList?.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const characterButton = target.closest('[data-wardrobe-character]');
+    if (characterButton) {
+      selectedWardrobeName = String(characterButton.getAttribute('data-wardrobe-character') || '');
+      renderWardrobePage(ctx);
+      return;
+    }
+    if (target.closest('[data-wardrobe-back]')) {
+      selectedWardrobeName = '';
+      renderWardrobePage(ctx);
+    }
+  });
+  wardrobeList?.addEventListener('pointerdown', (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const itemButton = target.closest('[data-wardrobe-item-id]');
+    if (!itemButton || !selectedWardrobeName) return;
+    event.preventDefault();
+    itemButton.setPointerCapture?.(event.pointerId);
+    showWardrobeItemBubble(ctx, selectedWardrobeName, itemButton.getAttribute('data-wardrobe-item-id'), itemButton);
+  });
+  wardrobeList?.addEventListener('pointerup', closeWardrobeItemBubble);
+  wardrobeList?.addEventListener('pointercancel', closeWardrobeItemBubble);
+  wardrobeList?.addEventListener('pointerleave', closeWardrobeItemBubble);
   document.querySelectorAll('#bs-bt-track-tabs .bs-bt-track-tab').forEach((node) =>
     node.addEventListener('click', () => {
       const nextTab = String(node.dataset.trackTab || 'overview');
@@ -4660,6 +5125,8 @@ async function ensureModal(ctx) {
       setRegisterTab(String(node.getAttribute('data-register-tab') || 'inference'));
     });
   });
+  document.getElementById('bs-bt-wardrobe-prep-run')?.addEventListener('click', (event) => runWardrobePrepInference(ctx, event.currentTarget));
+  document.getElementById('bs-bt-wardrobe-prep-apply')?.addEventListener('click', () => applyWardrobePrep(ctx));
   document.getElementById('bs-bt-breeding-inference-run')?.addEventListener('click', async (event) => {
     const button = event.currentTarget;
     const values = getRegisterFormValues();
@@ -4709,7 +5176,7 @@ async function ensureModal(ctx) {
       return;
     }
     if (!breedingInference) {
-      setBreedingInferenceStatus('没有可套用的繁育推演，或当前角色名/种族/补充设定已和推演时不同。', true);
+      setBreedingInferenceStatus('没有可套用的繁育推演，或当前角色名/种族/角色补充设定/额外推演提示已和推演时不同。', true);
       globalThis.toastr?.warning?.('[BS BioTracker] 请先为当前输入执行繁育推演');
       return;
     }
@@ -4748,7 +5215,8 @@ async function ensureModal(ctx) {
     readSettingsFromForm(ctx);
     let breedingInference = null;
     try {
-      breedingInference = getApplicableBreedingInferenceDraft({ targetName, declaredRace, customNotes });
+      const breedingInferencePrompt = String(document.getElementById('bs-bt-breeding-inference-prompt')?.value || '').trim();
+      breedingInference = getApplicableBreedingInferenceDraft({ targetName, declaredRace, customNotes, breedingInferencePrompt });
     } catch (error) {
       const message = String(error?.message || error);
       setRegisterStatus(message, true);

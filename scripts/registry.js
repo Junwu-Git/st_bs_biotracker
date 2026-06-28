@@ -19,6 +19,7 @@ import {
   parseRaceDescriptor,
 } from './race_config.js';
 import {
+  DEFAULT_WARDROBE_PREP_PROMPT,
   buildRecentMessages,
   createDefaultFemaleState,
   getCharacterCard,
@@ -265,6 +266,7 @@ function recordBreedingInferenceResultDebug(result, error = null) {
 export function buildBreedingInferenceSystemPrompt(settings, options = {}) {
   const customNotes = String(options.customNotes || settings?.registryCustomNotes || '').trim();
   const declaredRace = String(options.declaredRace || '').trim();
+  const breedingInferencePrompt = String(options.breedingInferencePrompt || '').trim();
   const psyMensLines = Object.entries(PSY_MENS_FIELDS).map(([key, value]) => `- mens.${key}_value: ${value.definition}`);
   const psyMensBoolLines = Object.entries(PSY_MENS_BOOL_FIELDS).map(([key, value]) => `- mens.${key}: ${value.definition}`);
   const psyPregLines = Object.entries(PSY_PREG_FIELDS).map(([key, value]) => `- preg.${key}_value: ${value.definition}`);
@@ -279,7 +281,8 @@ export function buildBreedingInferenceSystemPrompt(settings, options = {}) {
     '启用 mens 时，必须同时推演 isChaste 与 hasContraception；启用 preg 时，必须同时推演 knowsFatherSource 与 hasProfessionalPrenatalCare。',
     '数值范围为 0-100。0 是极端封闭/否认/失控，50 是普通中性，100 是极端掌控/执迷/展现。不要使用 100+，注册阶段只给 0-100 起始点。',
     declaredRace ? `用户已声明角色种族倾向：${declaredRace}` : '',
-    customNotes ? `用户自订补充设定：${customNotes}` : '',
+    customNotes ? `角色补充设定：${customNotes}` : '',
+    breedingInferencePrompt ? `额外推演提示：${breedingInferencePrompt}` : '',
     'mens 字段定义：',
     ...psyMensLines,
     ...psyMensBoolLines,
@@ -339,6 +342,63 @@ export function buildBreedingInferenceSystemPrompt(settings, options = {}) {
     '}',
     '如果使用 mens，preg 必须为 null；如果使用 preg，mens 必须为 null。',
   ].filter(Boolean).join('\n');
+}
+
+export function buildWardrobePrepSystemPrompt(settings, options = {}) {
+  const userPrompt = String(options.wardrobePrepPrompt || settings?.wardrobePrepPrompt || '').trim();
+  const mainCount = Math.max(1, Math.min(12, Math.floor(Number(options.wardrobePrepMainCount ?? settings?.wardrobePrepMainCount ?? 3) || 3)));
+  const accessoryCount = Math.max(0, Math.min(12, Math.floor(Number(options.wardrobePrepAccessoryCount ?? settings?.wardrobePrepAccessoryCount ?? 3) || 0)));
+  return [
+    '你是 AIRP 女性角色衣柜备装初始化器。',
+    '你只为 payload.target_character 生成衣柜 JSON，不得新增其他角色。',
+    '根据角色卡、世界书、最近对话、已注册状态、normalDescription/pregnantDescription 与衣柜记录中的服装线索，推断该角色合理拥有的长期衣物与当前穿着。',
+    `默认生成 ${mainCount} 件 main 主件、${accessoryCount} 件 accessory 配件；若用户额外提示指定更合理的数量或场景，可在接近该数量的范围内微调。`,
+    '只输出 JSON，不要输出额外解释。',
+    'JSON 顶层结构必须是：',
+    '{',
+    '  "wardrobe": { "items": [] },',
+    '  "outfit": { "mainItemId": 1, "accessoryItemIds": [], "temporaryItems": [] },',
+    '  "outfitDescription": "衣着动态|string;;",',
+    '  "outfitSelfView": "衣着自评|string;;"',
+    '}',
+    'wardrobe.items 只放长期衣柜，不要放系统保留的 id=0，也不要放病服、借来的外套、旅馆睡衣等临时衣物。',
+    '临时衣物如确实是当前穿着，放入 outfit.temporaryItems，并让 outfit.mainItemId 或 accessoryItemIds 指向其中 id；否则 temporaryItems 输出空数组。',
+    '每件衣物必须包含 id/name/note/slot/masking/support/capacity/convenience。',
+    'note 只写衣物稳定外观与来源：颜色、材质、版型、长短、固定开口、图案、制服/病服/借装来源等。皮肤暴露、开衩、透肤、深领等稳定外观写在 note。禁止写当前穿着反应、角色感受、近期身体变化、怀孕/胀痛/压胸/勒红/变紧/显怀等动态状态；这些由四维、pregFit 与当轮叙事推导。',
+    'id 必须使用正整数，从 1 开始递增且不可重复；0 保留给全裸。name 使用中文或角色设定中的自然名称。',
+    'slot 只能是 main 或 accessory。main 是主件；accessory 是配件补正。',
+    '四维数值范围 -10 到 10：masking=掩盖身体曲线、孕肚、胸腹变化的程度；support=对胸、腹、腰、重心的承托程度，高表示托得住但可能偏束，低表示松散；capacity=容许体型变化的程度；convenience=行动、穿脱、如厕、哺乳或排解需求的方便程度。',
+    '主件通常使用 0 到 10；配件单项只能 -3 到 3，通常只影响 1-2 个最相关维度，其他维度必须填 0，避免把配件写成整套服装。',
+    '配件例：外套可提高 masking；托腹带可提高 support 或 capacity；高跟鞋可降低 convenience；鞋履通常不应大幅提高 support，除非 note 明确是矫正/固定用途。',
+    'outfit.mainItemId 必须是 wardrobe.items 或 outfit.temporaryItems 中 slot=main 的 id；若无法判断当前穿着，选择最日常的一件主件。',
+    'outfit.accessoryItemIds 只能包含 slot=accessory 的 id；未知则空数组。',
+    'outfitDescription 必须输出 normalDescription 的衣着动态子字段，格式固定为：衣着动态|当前穿着动态描述;;。它只描述 outfit 在角色身上的当前客观/半客观状态、遮掩/支撑/容身/便捷表现；可参考孕态与四维，但不要写长期自我评价，也不要改写 wardrobe.items.note。',
+    'outfitSelfView 必须输出 normalDescription 的衣着自评子字段，格式固定为：衣着自评|角色对当前穿着、遮掩效果、合身程度或暴露风险的主观看法;;。自评更新频率较慢，应像角色认知或习惯判断，不要写成每轮都需要变化的即时动作。',
+    '[用户额外备装提示]',
+    userPrompt || '无',
+  ].join('\n');
+}
+
+function sanitizeWardrobePrepResult(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('备装推演必须返回 JSON 对象');
+  const items = Array.isArray(result?.wardrobe?.items) ? result.wardrobe.items : [];
+  if (items.length <= 0) throw new Error('备装推演缺少 wardrobe.items');
+  const outfit = result?.outfit && typeof result.outfit === 'object' && !Array.isArray(result.outfit) ? result.outfit : null;
+  if (!outfit) throw new Error('备装推演缺少 outfit');
+  const outfitDescription = String(result?.outfitDescription || result?.wearDescription || result?.descriptions?.normalDescription || result?.normalDescription || '').trim();
+  const outfitSelfView = String(result?.outfitSelfView || result?.wearSelfView || result?.selfView || '').trim();
+  if (!outfitDescription) throw new Error('备装推演缺少 outfitDescription');
+  if (!outfitSelfView) throw new Error('备装推演缺少 outfitSelfView');
+  return {
+    wardrobe: { items },
+    outfit: {
+      mainItemId: Number.isInteger(Number(outfit.mainItemId)) ? Number(outfit.mainItemId) : 0,
+      accessoryItemIds: Array.isArray(outfit.accessoryItemIds) ? outfit.accessoryItemIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id >= 0) : [],
+      temporaryItems: Array.isArray(outfit.temporaryItems) ? outfit.temporaryItems : [],
+    },
+    outfitDescription,
+    outfitSelfView,
+  };
 }
 
 async function runBreedingInference(settings, payload, options = {}) {
@@ -448,21 +508,54 @@ async function buildRegistryPayload(ctx, settings, chatState, options = {}) {
   };
 }
 
+export async function runRegistryWardrobeInference(ctx, options = {}) {
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const targetName = String(options.targetName || '').trim();
+  if (!targetName) throw new Error('备装推演需要 targetName');
+  if (!chatState.characters?.[targetName]) throw new Error(`备装推演需要已注册角色：${targetName}`);
+  const customNotes = String(options.customNotes || settings.registryCustomNotes || '').trim();
+  const declaredRace = String(options.declaredRace || '').trim();
+  const wardrobePrepPrompt = String(options.wardrobePrepPrompt || settings.wardrobePrepPrompt || '').trim();
+  const wardrobePrepMainCount = Math.max(1, Math.min(12, Math.floor(Number(options.wardrobePrepMainCount ?? settings.wardrobePrepMainCount ?? 3) || 3)));
+  const wardrobePrepAccessoryCount = Math.max(0, Math.min(12, Math.floor(Number(options.wardrobePrepAccessoryCount ?? settings.wardrobePrepAccessoryCount ?? 3) || 0)));
+  const payload = await buildRegistryPayload(ctx, settings, chatState, {
+    ...options,
+    reason: options.reason || 'wardrobe_prep_inference',
+    customNotes,
+    declaredRace,
+    userInstruction: wardrobePrepPrompt,
+  });
+  payload.wardrobe_prep_prompt = wardrobePrepPrompt;
+  payload.wardrobe_prep_main_count = wardrobePrepMainCount;
+  payload.wardrobe_prep_accessory_count = wardrobePrepAccessoryCount;
+  payload.existing_wardrobe = chatState.characters[targetName]?.profile?.wardrobe || null;
+  payload.existing_outfit = chatState.characters[targetName]?.profile?.outfit || null;
+  const systemPrompt = options.wardrobePrepSystemPrompt || buildWardrobePrepSystemPrompt(settings, { ...options, wardrobePrepPrompt, wardrobePrepMainCount, wardrobePrepAccessoryCount });
+  const result = await callOpenAICompatible(settings, payload, systemPrompt);
+  return sanitizeWardrobePrepResult(result);
+}
+
 export async function runRegistryBreedingInference(ctx, options = {}) {
   const settings = getSettings(ctx);
   const chatState = getChatState(ctx, settings);
   const customNotes = String(options.customNotes || settings.registryCustomNotes || '').trim();
   const declaredRace = String(options.declaredRace || '').trim();
+  const breedingInferencePrompt = String(options.breedingInferencePrompt || '').trim();
   const payload = await buildRegistryPayload(ctx, settings, chatState, {
     ...options,
     reason: options.reason || 'breeding_inference',
     customNotes,
     declaredRace,
+    breedingInferencePrompt,
+    userInstruction: breedingInferencePrompt,
   });
+  payload.breeding_inference_prompt = breedingInferencePrompt;
   return runBreedingInference(settings, payload, {
     ...options,
     customNotes,
     declaredRace,
+    breedingInferencePrompt,
   });
 }
 
@@ -593,16 +686,14 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '- 被祝福的冒险者妊娠加快: {"bio":{"gestationModifierMultiplier":1.5,"gestationModifierName":"丰饶祝福","gestationModifierDescription":"受女神祝福后，妊娠期间胎儿发育明显加快，孕期反应也会更早显现。"}}',
     '- 红尘之力导致孕期极端延长，即使当前未怀孕也应保留: {"bio":{"gestationModifierMultiplier":0.001,"gestationModifierName":"红尘织命","gestationModifierDescription":"受红尘之力影响，若进入妊娠，孕期推进速度仅为常规人类的千分之一，整体妊娠期会被极度拉长。"}}',
     '【6. 文字描述栏位】',
-    '参数说明：descriptions 包含 normalDescription、closeupDescription、pregnantDescription。',
-    '三个 descriptions 字段都必须使用旧版格式：字段名|描述内容;;字段名|描述内容;;...字段名|描述内容;;',
+    '参数说明：descriptions 包含 normalDescription、pregnantDescription。',
+    'normalDescription 与 pregnantDescription 必须使用旧版格式：字段名|描述内容;;字段名|描述内容;;...字段名|描述内容;;。',
     '只能用 | 分隔字段名与描述内容，只能用 ;; 分隔字段；每个字段都要保留字段名，结尾也要补 ;;。',
     '不要改成自然段、不要换行、不要写成纯长文。',
     '示例：状态|处于饥饿与寒冷的边缘，精神高度焦虑且带有防御性;;表情|戴着苍白口罩，眼神涣散且带病态妆容;;行动|蜷缩在自动贩卖机旁躲雨，机械地刷手机;;',
-    '以下三段规则文本由用户自定义，注册时应严格遵守：',
+    '以下规则文本由用户自定义，注册时应严格遵守。',
     '[normalDescription]',
     String(guides.normalDescription || DEFAULT_REGISTRY_DESCRIPTION_GUIDES.normalDescription),
-    '[closeupDescription]',
-    String(guides.closeupDescription || DEFAULT_REGISTRY_DESCRIPTION_GUIDES.closeupDescription),
     '[pregnantDescription]',
     String(guides.pregnantDescription || DEFAULT_REGISTRY_DESCRIPTION_GUIDES.pregnantDescription),
     '【7. 首篇日记（可选）】',
@@ -613,10 +704,10 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '- 若要填写首篇日记，内容与起始时间必须严格遵守下列用户自订规则：',
     '[diary]',
     diaryWritingPrompt || DEFAULT_DIARY_WRITING_PROMPT,
-    '【8. 用户自订补充设定】',
+    '【8. 角色补充设定】',
     customNotes ? customNotes : '无',
-    '若提供了自订补充设定，必须优先视为该角色已明确声明的特征，并在相关字段中如实体现；不要忽略，也不要擅自扩写超出原意的内容。',
-    '若用户自订补充设定明确描述的是一种未来也会持续生效、且倍率不为 1 的妊娠体质、祝福、诅咒、冻结或延长效果，即使角色当前未怀孕，也必须写入 bio.gestationModifierMultiplier、bio.gestationModifierName、bio.gestationModifierDescription；普通妊娠不得补写 bio。',
+    '若提供了角色补充设定，必须优先视为该角色已明确声明的特征，并在推演、注册与备装相关字段中如实体现；不要忽略，也不要擅自扩写超出原意的内容。',
+    '若角色补充设定明确描述的是一种未来也会持续生效、且倍率不为 1 的妊娠体质、祝福、诅咒、冻结或延长效果，即使角色当前未怀孕，也必须写入 bio.gestationModifierMultiplier、bio.gestationModifierName、bio.gestationModifierDescription；普通妊娠不得补写 bio。',
     '注意：未怀孕角色不要硬填 pregnantDescription；描述内容应遵守旧系统文字栏位语义，不要换行。',
     '只输出 JSON，不要输出额外解释。',
     'JSON 结构必须是：',
@@ -710,7 +801,6 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '    ],',
     '    "descriptions": {',
     '      "normalDescription": "string",',
-    '      "closeupDescription": "string",',
     '      "pregnantDescription": "string"',
     '    }',
     '  }',
@@ -733,7 +823,7 @@ const EXPERIENCE_FIELDS = [
   'miscarriageExperience',
 ];
 
-const DESCRIPTION_FIELDS = ['normalDescription', 'closeupDescription', 'pregnantDescription'];
+const DESCRIPTION_FIELDS = ['normalDescription', 'pregnantDescription'];
 const METABOLISM_FIELDS = ['excretion', 'hunger', 'sleep', 'milk', 'odor', 'companionship', 'flux'];
 
 function clampNumber(value, min, max, fallback = 0) {
