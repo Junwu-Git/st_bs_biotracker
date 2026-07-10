@@ -34,7 +34,9 @@ export function extractJson(text) {
 }
 
 export function getApiBase(settings) {
-  return String(settings.apiUrl || '').trim().replace(/\/+$/, '');
+  let apiBase = String(settings.apiUrl || '').trim().replace(/\/+$/, '');
+  apiBase = apiBase.replace(/\/(chat\/completions|models)$/i, '');
+  return apiBase.replace(/\/+$/, '');
 }
 
 export function getAuthHeaders(settings) {
@@ -502,17 +504,22 @@ export async function fetchModelList(settings) {
   const apiBase = getApiBase(settings);
   if (!apiBase) throw new Error('请先填写 API Base URL');
   if (!settings.apiKey) throw new Error('请先填写 API Key');
-  const response = await fetch(`${apiBase}/models`, { method: 'GET', headers: getAuthHeaders(settings) });
+  let response;
+  try {
+    response = await fetch(`${apiBase}/models`, { method: 'GET', headers: getAuthHeaders(settings) });
+  } catch (error) {
+    throw new Error(`模型列表连接失败。请检查 Base URL，或手动填写模型名称后直接使用追踪/注册。原始错误: ${String(error?.message || error)}`);
+  }
   if (!response.ok) {
     const errorText = await response.text().catch(() => '');
-    throw new Error(`模型列表请求失败 ${response.status}: ${errorText.slice(0, 240)}`);
+    throw new Error(`模型列表请求失败 ${response.status}: ${errorText.slice(0, 240)}。如果此 API 不支持 /models，可手动填写模型名称。`);
   }
   const data = await response.json();
   const models = (Array.isArray(data?.data) ? data.data : [])
     .map((item) => String(item?.id || '').trim())
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b));
-  if (models.length === 0) throw new Error('API 有响应，但没有返回可用模型');
+  if (models.length === 0) throw new Error('API 有响应，但没有返回可用模型；可手动填写模型名称。');
   return models;
 }
 

@@ -1271,8 +1271,30 @@ export function getRegisteredTargetNames(ctx, settings, chatState = null) {
     .filter(([, item]) => item?.initialized)
     .map(([name]) => name);
   if (targetNames.length === 0) return registeredNames;
-  const filtered = targetNames.filter((name) => state?.characters?.[name]?.initialized);
+  const filtered = targetNames
+    .map((name) => resolveRegisteredCharacterName(state, name))
+    .filter((name, index, list) => name && list.indexOf(name) === index);
   return filtered.length > 0 ? filtered : registeredNames;
+}
+
+function normalizeCharacterLookupName(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+}
+
+export function resolveRegisteredCharacterName(chatState, targetName, options = {}) {
+  const requireInitialized = options.requireInitialized !== false;
+  const rawName = String(targetName || '').trim();
+  if (!rawName) return '';
+  const characters = chatState?.characters && typeof chatState.characters === 'object' ? chatState.characters : {};
+  const isUsable = (entry) => entry && (!requireInitialized || entry.initialized === true);
+  if (isUsable(characters[rawName])) return rawName;
+  const normalized = normalizeCharacterLookupName(rawName);
+  for (const [name, entry] of Object.entries(characters)) {
+    if (!isUsable(entry)) continue;
+    if (normalizeCharacterLookupName(name) === normalized) return name;
+    if (normalizeCharacterLookupName(entry?.name) === normalized) return name;
+  }
+  return '';
 }
 
 export function buildRecentMessages(ctx, settings, endIndexExclusive = null) {

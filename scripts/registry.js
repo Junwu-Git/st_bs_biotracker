@@ -35,6 +35,7 @@ import {
   loadGlobalWorldBook,
   normalizeCharacterPsychologyState,
   recordChatStateSnapshot,
+  resolveRegisteredCharacterName,
   syncCharacterStageFromProfile,
   getVitalityInitByLevel,
   saveSettings,
@@ -511,9 +512,10 @@ async function buildRegistryPayload(ctx, settings, chatState, options = {}) {
 export async function runRegistryWardrobeInference(ctx, options = {}) {
   const settings = getSettings(ctx);
   const chatState = getChatState(ctx, settings);
-  const targetName = String(options.targetName || '').trim();
-  if (!targetName) throw new Error('备装推演需要 targetName');
-  if (!chatState.characters?.[targetName]) throw new Error(`备装推演需要已注册角色：${targetName}`);
+  const requestedTargetName = String(options.targetName || '').trim();
+  if (!requestedTargetName) throw new Error('备装推演需要 targetName');
+  const targetName = resolveRegisteredCharacterName(chatState, requestedTargetName);
+  if (!targetName) throw new Error(`备装推演需要已注册角色：${requestedTargetName}`);
   const customNotes = String(options.customNotes || settings.registryCustomNotes || '').trim();
   const declaredRace = String(options.declaredRace || '').trim();
   const wardrobePrepPrompt = String(options.wardrobePrepPrompt || settings.wardrobePrepPrompt || '').trim();
@@ -521,6 +523,7 @@ export async function runRegistryWardrobeInference(ctx, options = {}) {
   const wardrobePrepAccessoryCount = Math.max(0, Math.min(12, Math.floor(Number(options.wardrobePrepAccessoryCount ?? settings.wardrobePrepAccessoryCount ?? 3) || 0)));
   const payload = await buildRegistryPayload(ctx, settings, chatState, {
     ...options,
+    targetName,
     reason: options.reason || 'wardrobe_prep_inference',
     customNotes,
     declaredRace,

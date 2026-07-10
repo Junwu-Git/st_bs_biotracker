@@ -2,7 +2,7 @@
 
 ## 版本狀態
 
-v0.8.0
+v0.8.1
 
 ## 功能
 
@@ -63,5 +63,6 @@ v0.8.0
 
 ## 注意事項
 
-- API 端必須支援 OpenAI 風格的 `/models` 與 `/chat/completions`。
+- API 端必須支援 OpenAI 風格的 `/chat/completions`；`/models` 若不支援，可手動填寫模型名稱。
+- Base URL 建議填到版本前綴，例如 `https://example.com/v1` 或 `https://example.com/api/v3`；若誤貼到 `/chat/completions` 或 `/models`，插件會自動移除 endpoint 尾巴。
 - 模型若經常輸出非 JSON 內容，注册與 tracker 會失敗或結果不穩定。

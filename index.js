@@ -49,6 +49,7 @@ import {
   MODULE_NAME,
   normalizeCharacterPsychologyState,
   recordChatStateSnapshot,
+  resolveRegisteredCharacterName,
   saveSettings,
   THEME_CONFIG,
 } from './scripts/state.js';
@@ -215,7 +216,8 @@ async function runWardrobePrepInference(ctx, button = null) {
   readSettingsFromForm(ctx);
   const settings = getSettings(ctx);
   const chatState = getChatState(ctx, settings);
-  if (!chatState.characters?.[values.targetName]) {
+  const targetName = resolveRegisteredCharacterName(chatState, values.targetName);
+  if (!targetName) {
     setWardrobePrepStatus(`尚未找到已注册角色：${values.targetName}。请先完成注册，再备装。`, true);
     globalThis.toastr?.warning?.('[BS BioTracker] 备装需要已注册角色');
     return;
@@ -228,13 +230,13 @@ async function runWardrobePrepInference(ctx, button = null) {
     button.disabled = true;
     button.textContent = '生成中...';
   }
-  setWardrobePrepStatus(`正在为 ${values.targetName} 生成衣柜 JSON...`);
+  setWardrobePrepStatus(`正在为 ${targetName} 生成衣柜 JSON...`);
   try {
-    const result = await runRegistryWardrobeInference(ctx, { ...values, wardrobePrepPrompt, wardrobePrepMainCount, wardrobePrepAccessoryCount });
+    const result = await runRegistryWardrobeInference(ctx, { ...values, targetName, wardrobePrepPrompt, wardrobePrepMainCount, wardrobePrepAccessoryCount });
     const editor = document.getElementById('bs-bt-wardrobe-prep-json');
     if (editor) editor.value = JSON.stringify(result, null, 2);
     setWardrobePrepStatus('备装生成完成。可以手动微调 JSON，再套用备装。');
-    globalThis.toastr?.success?.(`[BS BioTracker] 已生成 ${values.targetName} 的备装 JSON`);
+    globalThis.toastr?.success?.(`[BS BioTracker] 已生成 ${targetName} 的备装 JSON`);
   } catch (error) {
     console.error('[BS BioTracker] runRegistryWardrobeInference failed', error);
     const message = String(error?.message || error);
@@ -252,7 +254,8 @@ function applyWardrobePrep(ctx) {
   const values = getRegisterFormValues();
   const settings = getSettings(ctx);
   const chatState = getChatState(ctx, settings);
-  const character = chatState.characters?.[values.targetName];
+  const targetName = resolveRegisteredCharacterName(chatState, values.targetName);
+  const character = targetName ? chatState.characters?.[targetName] : null;
   if (!values.targetName || !character) {
     setWardrobePrepStatus('请先在注册角色名输入一个已注册角色。', true);
     globalThis.toastr?.warning?.('[BS BioTracker] 备装需要已注册角色');
@@ -276,10 +279,10 @@ function applyWardrobePrep(ctx) {
     return;
   }
   const outfit = parsed?.outfit && typeof parsed.outfit === 'object' ? parsed.outfit : {};
-  const outfitDescription = getWardrobePrepOutfitDescription(parsed);
-  const outfitSelfView = getWardrobePrepOutfitSelfView(parsed);
+  let outfitDescription = getWardrobePrepOutfitDescription(parsed);
+  let outfitSelfView = getWardrobePrepOutfitSelfView(parsed);
   const workingState = cloneJsonValue(chatState);
-  const workingCharacter = workingState.characters?.[values.targetName];
+  const workingCharacter = workingState.characters?.[targetName];
   if (!workingCharacter?.profile) {
     setWardrobePrepStatus('备装目标状态异常。', true);
     return;
@@ -292,12 +295,12 @@ function applyWardrobePrep(ctx) {
   const logs = [];
   for (const item of items) {
     if (Number(item?.id) === 0 || String(item?.id || '').trim() === 'nude') continue;
-    logs.push(applyToolCall(workingState, { name: 'bsAddWardrobeItem', arguments: { female: values.targetName, item } }));
+    logs.push(applyToolCall(workingState, { name: 'bsAddWardrobeItem', arguments: { female: targetName, item } }));
   }
   logs.push(applyToolCall(workingState, {
     name: 'bsChangeOutfit',
     arguments: {
-      female: values.targetName,
+      female: targetName,
       mainItemId: Number.isInteger(Number(outfit.mainItemId)) ? Number(outfit.mainItemId) : 0,
       accessoryItemIds: Array.isArray(outfit.accessoryItemIds) ? outfit.accessoryItemIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id >= 0) : [],
       temporaryItems: Array.isArray(outfit.temporaryItems) ? outfit.temporaryItems : [],
@@ -308,11 +311,13 @@ function applyWardrobePrep(ctx) {
     setWardrobePrepStatus(failed.message || '备装失败。', true);
     return;
   }
+  if (!outfitDescription) outfitDescription = buildWardrobePrepFallbackOutfitDescription(items, outfit);
+  if (!outfitSelfView) outfitSelfView = buildWardrobePrepFallbackOutfitSelfView(items, outfit);
   if (!outfitDescription || !outfitSelfView) {
     setWardrobePrepStatus('备装 JSON 需要 outfitDescription 与 outfitSelfView。请重新生成或手动补上。', true);
     return;
   }
-  const preparedCharacter = workingState.characters?.[values.targetName];
+  const preparedCharacter = workingState.characters?.[targetName];
   if (!preparedCharacter?.profile) {
     setWardrobePrepStatus('备装目标状态异常。', true);
     return;
@@ -324,14 +329,14 @@ function applyWardrobePrep(ctx) {
     ...(preparedCharacter.profile.descriptions || {}),
     normalDescription,
   };
-  chatState.characters[values.targetName] = preparedCharacter;
+  chatState.characters[targetName] = preparedCharacter;
   recordChatStateSnapshot(ctx, chatState, { reason: 'wardrobe_prep' });
   saveSettings(ctx);
   resetPoller(ctx, trackerDeps);
   renderStatusPanel(ctx);
   renderWardrobePage(ctx);
-  setWardrobePrepStatus(`已为 ${values.targetName} 重新套用备装；旧衣柜已由本次 JSON 覆盖。`);
-  globalThis.toastr?.success?.(`[BS BioTracker] 已备装 ${values.targetName}`);
+  setWardrobePrepStatus(`已为 ${targetName} 重新套用备装；旧衣柜已由本次 JSON 覆盖。`);
+  globalThis.toastr?.success?.(`[BS BioTracker] 已备装 ${targetName}`);
 }
 function getRegisterFormValues() {
   return {
@@ -1783,6 +1788,36 @@ function getWardrobePrepOutfitSelfView(parsed = {}) {
     if (matched) return matched;
   }
   return '';
+}
+
+function getWardrobePrepCurrentItems(items = [], outfit = {}) {
+  const temporaryItems = Array.isArray(outfit?.temporaryItems) ? outfit.temporaryItems : [];
+  const availableItems = [...items, ...temporaryItems]
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => ({ ...item, id: Number(item.id) }));
+  const mainItemId = Number.isInteger(Number(outfit?.mainItemId)) ? Number(outfit.mainItemId) : 0;
+  const main = mainItemId === 0
+    ? { id: 0, name: '全裸', slot: 'main' }
+    : availableItems.find((item) => item.id === mainItemId && String(item.slot || 'main') === 'main');
+  const accessoryIds = Array.isArray(outfit?.accessoryItemIds) ? outfit.accessoryItemIds.map((id) => Number(id)) : [];
+  const accessories = accessoryIds
+    .map((id) => availableItems.find((item) => item.id === id && String(item.slot || '') === 'accessory'))
+    .filter(Boolean);
+  return { main, accessories };
+}
+
+function buildWardrobePrepFallbackOutfitDescription(items = [], outfit = {}) {
+  const current = getWardrobePrepCurrentItems(items, outfit);
+  const mainName = String(current.main?.name || '全裸').trim();
+  const accessoryNames = current.accessories.map((item) => String(item.name || '').trim()).filter(Boolean);
+  const accessoryText = accessoryNames.length > 0 ? `，搭配${accessoryNames.join('、')}` : '';
+  return `当前以${mainName}作为主件${accessoryText}，遮掩、支撑、容身与便捷表现按衣物四维参与叙事。`;
+}
+
+function buildWardrobePrepFallbackOutfitSelfView(items = [], outfit = {}) {
+  const current = getWardrobePrepCurrentItems(items, outfit);
+  const mainName = String(current.main?.name || '全裸').trim();
+  return `角色暂以${mainName}判断自己的当前穿着与遮掩效果；若合身程度变化，后续叙事会据孕期衣着压力更新感受。`;
 }
 
 function getPsychologyView(profile = {}) {
