@@ -16,6 +16,7 @@ import {
   getRegisteredTargetNames,
   getSettings,
   getLatestMatchingSnapshot,
+  hydrateChatStateFromHost,
   loadGlobalWorldBook,
   recordChatStateSnapshot,
   restoreChatStateFromSnapshot,
@@ -24,6 +25,7 @@ import {
 } from './state.js';
 import { getDerivedTypeMetabolismExemptions } from './race_config.js';
 import { LABOR_STAGES, PREGNANCY_STAGES } from './stage_config.js';
+import { canLoadHostWorldInfo, getHostChat, loadHostWorldInfo, refreshHostChatView } from './host.js';
 
 export const POLL_RUNTIME_KEY = '__bs_biotracker_poll__';
 export const RUN_RUNTIME_KEY = '__bs_biotracker_running__';
@@ -32,6 +34,22 @@ const AFTER_AI_SETTLE_MS = 1400;
 const MAINFLOW_CONTEXT_SNAPSHOT_KEY = '__bs_biotracker_mainflow_context_snapshot__';
 const DEBUG_LAST_TRACKER_REQUEST_KEY = '__bs_biotracker_debug_last_tracker_request__';
 const DEBUG_LAST_TRACKER_RESULT_KEY = '__bs_biotracker_debug_last_tracker_result__';
+
+function getTrackerResumeIndexes(ctx, settings) {
+  const chatKey = getChatKey(ctx);
+  const snapshots = settings?.chatStates?.[chatKey]?.snapshots;
+  if (!Array.isArray(snapshots)) return [0];
+  return snapshots.map((snapshot) => {
+    const count = Number(snapshot?.messageCount);
+    return Number.isInteger(count) && count >= 0 ? count : null;
+  }).filter((count) => count !== null);
+}
+
+export function isFailedAutoRetryBlocked(ctx, chatState) {
+  const chat = getHostChat(ctx);
+  if (chat.length === 0 || !chatState?.lastFailedSignature) return false;
+  return chatState.lastFailedSignature === buildSignature(ctx, chat.length);
+}
 
 function normalizeWorldbookMode(value) {
   const mode = String(value || 'exclude').trim();
@@ -526,7 +544,7 @@ function prepareManualReplay(ctx, chatState, chatLength) {
 
 function hasPendingChatHistory(ctx, chatState) {
   const matchedSnapshot = getLatestMatchingSnapshot(ctx, chatState);
-  const currentLength = Array.isArray(ctx.chat) ? ctx.chat.length : 0;
+  const currentLength = getHostChat(ctx).length;
   return !matchedSnapshot || matchedSnapshot.messageCount !== currentLength;
 }
 
@@ -556,7 +574,7 @@ function recordTrackerResultDebug(result, error = null) {
 }
 
 function buildStreamingGuardSignature(ctx) {
-  const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+  const chat = getHostChat(ctx);
   const last = chat[chat.length - 1];
   if (!last) return '';
   const content = String(last.mes || '');
@@ -573,7 +591,7 @@ function buildStreamingGuardSignature(ctx) {
 
 function isAfterAiMessageSettled(ctx, settings, chatState) {
   if (settings.triggerTiming !== 'after_ai') return true;
-  const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+  const chat = getHostChat(ctx);
   const lastMessage = chat[chat.length - 1];
   if (!lastMessage || lastMessage.is_user) {
     delete chatState.pendingAssistantSignature;
@@ -596,7 +614,7 @@ function isAfterAiMessageSettled(ctx, settings, chatState) {
 }
 
 async function processTrackerMessage(ctx, settings, chatState, deps, reason, messageIndex) {
-  const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+  const chat = getHostChat(ctx);
   const message = chat[messageIndex];
   const shouldTrigger = reason === 'manual' ? true : shouldTriggerForMessage(settings, message);
   if (!shouldTrigger) {
@@ -611,9 +629,9 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
   } else if (!payload.character_worldbook && !payload.character_worldbook_name) {
     payload.character_worldbook_name = await getCharacterWorldBookNameViaSTscript();
   }
-  if (!payload.character_worldbook && payload.character_worldbook_name && typeof ctx?.loadWorldInfo === 'function') {
+  if (!payload.character_worldbook && payload.character_worldbook_name && canLoadHostWorldInfo(ctx)) {
     try {
-      const loadedWorldBook = await ctx.loadWorldInfo(payload.character_worldbook_name);
+      const loadedWorldBook = await loadHostWorldInfo(ctx, payload.character_worldbook_name);
       payload.character_worldbook = filterTrackerWorldbookEntries(
         loadedWorldBook || null,
         parseTrackerWorldbookExcludeNames(settings),
@@ -641,15 +659,21 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
   const result = normalizeTrackerResult(rawResult);
   applyToolCallsResult(ctx, result);
   chatState.lastProcessedSignature = chatState.lastAttemptedSignature;
+  chatState.lastFailedSignature = '';
   recordChatStateSnapshot(ctx, chatState, { messageCount: messageIndex + 1, reason: 'tracker' });
   saveSettings(ctx);
 }
 
 export async function runTracker(ctx, deps, reason = 'manual') {
   const settings = getSettings(ctx);
+  await hydrateChatStateFromHost(ctx, settings);
+  await refreshHostChatView(ctx, {
+    resumeIndexes: getTrackerResumeIndexes(ctx, settings),
+    contextSize: settings.contextSize,
+  });
   const chatState = getChatState(ctx, settings);
   const registeredTargets = getRegisteredTargetNames(ctx, settings, chatState);
-  const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+  const chat = getHostChat(ctx);
   const lastMessage = chat[chat.length - 1];
   if (!lastMessage) {
     chatState.lastRawResult = {
@@ -682,6 +706,15 @@ export async function runTracker(ctx, deps, reason = 'manual') {
     deps.updateMainFlowPrompt?.(ctx);
     return { skipped: true, reason: 'no_registered_targets' };
   }
+  if (reason === 'poll' && !isAfterAiMessageSettled(ctx, settings, chatState)) {
+    return { skipped: true, reason: 'message_not_settled' };
+  }
+  if (reason === 'poll' && !hasPendingChatHistory(ctx, chatState)) {
+    return { skipped: true, reason: 'no_pending_history' };
+  }
+  if (reason === 'poll' && isFailedAutoRetryBlocked(ctx, chatState)) {
+    return { skipped: true, reason: 'failed_message_blocked' };
+  }
   globalThis[RUN_RUNTIME_KEY] = true;
   try {
     const { nextMessageIndex } =
@@ -704,6 +737,7 @@ export async function runTracker(ctx, deps, reason = 'manual') {
   } catch (error) {
     console.error('[BS BioTracker] runTracker failed', error);
     recordTrackerResultDebug(null, error);
+    chatState.lastFailedSignature = chatState.lastAttemptedSignature || buildSignature(ctx, chat.length);
     chatState.lastRawResult = {
       error: String(error?.message || error),
       tool_calls: [],
@@ -721,12 +755,6 @@ export async function runTracker(ctx, deps, reason = 'manual') {
 export async function poll(ctx, deps) {
   const settings = getSettings(ctx);
   if (!settings.enabled) return;
-  const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
-  if (chat.length === 0) return;
-  const chatState = getChatState(ctx, settings);
-  if (getRegisteredTargetNames(ctx, settings, chatState).length === 0) return;
-  if (!isAfterAiMessageSettled(ctx, settings, chatState)) return;
-  if (!hasPendingChatHistory(ctx, chatState)) return;
   await runTracker(ctx, deps, 'poll');
 }
 

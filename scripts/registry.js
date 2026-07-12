@@ -40,6 +40,7 @@ import {
   getVitalityInitByLevel,
   saveSettings,
 } from './state.js';
+import { canLoadHostWorldInfo, getHostWorldBook, loadHostWorldInfo } from './host.js';
 
 const DEBUG_LAST_REGISTRY_REQUEST_KEY = '__bs_biotracker_debug_last_registry_request__';
 const DEBUG_LAST_REGISTRY_RESULT_KEY = '__bs_biotracker_debug_last_registry_result__';
@@ -56,20 +57,17 @@ async function getCharacterWorldBook(ctx) {
   const card = getCharacterCard(ctx);
   if (card?.worldBook) return card.worldBook;
   const boundWorldBookName = getCharacterWorldBookName(ctx) || await getCharacterWorldBookNameViaSTscript();
-  if (boundWorldBookName && typeof ctx?.loadWorldInfo === 'function') {
+  if (boundWorldBookName && canLoadHostWorldInfo(ctx)) {
     try {
-      return await ctx.loadWorldInfo(boundWorldBookName);
+      return await loadHostWorldInfo(ctx, boundWorldBookName);
     } catch (error) {
       console.warn('[BS BioTracker] loadWorldInfo failed', error);
     }
   }
-  if (globalThis.ST_API?.worldBook?.get) {
-    try {
-      const result = await globalThis.ST_API.worldBook.get({ name: boundWorldBookName || 'Current Chat', scope: 'character' });
-      return result?.worldBook || null;
-    } catch (error) {
-      console.warn('[BS BioTracker] getCharacterWorldBook failed', error);
-    }
+  try {
+    return await getHostWorldBook(boundWorldBookName || 'Current Chat', 'character');
+  } catch (error) {
+    console.warn('[BS BioTracker] getCharacterWorldBook failed', error);
   }
   return null;
 }

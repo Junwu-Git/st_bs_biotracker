@@ -1,4 +1,12 @@
 import { DEFAULT_SYSTEM_PROMPT } from './state.js';
+import {
+  getHostChat,
+  getHostChatCompletionSettings,
+  getHostContext,
+  getHostPreset,
+  getHostPresetManager,
+  getHostWorldInfoPrompt,
+} from './host.js';
 
 const DEBUG_LAST_EFFECTIVE_REQUEST_KEY = '__bs_biotracker_debug_last_effective_request__';
 const DEBUG_LAST_API_RESPONSE_KEY = '__bs_biotracker_debug_last_api_response__';
@@ -101,11 +109,7 @@ function recordEffectiveRequestDebug(source, presetName, sampling, messages, bod
 }
 
 function getSillyTavernContext() {
-  try {
-    return globalThis.SillyTavern?.getContext?.() || null;
-  } catch {
-    return null;
-  }
+  return getHostContext();
 }
 
 function shouldApplyAsyncPreset(settings) {
@@ -274,11 +278,11 @@ function resolvePayloadValueWithStMacros(value, stCtx) {
 }
 
 async function buildResolvedWorldInfo(stCtx) {
-  if (typeof stCtx?.getWorldInfoPrompt !== 'function') return null;
-  const chat = Array.isArray(stCtx?.chat) ? stCtx.chat : [];
-  const maxContext = Number(stCtx?.maxContext || stCtx?.chatCompletionSettings?.openai_max_context || 0);
+  const chat = getHostChat(stCtx);
+  const maxContext = Number(stCtx?.maxContext || getHostChatCompletionSettings(stCtx)?.openai_max_context || 0);
   try {
-    const result = await stCtx.getWorldInfoPrompt(chat, maxContext > 0 ? maxContext : undefined, true);
+    const result = await getHostWorldInfoPrompt(stCtx, chat, maxContext > 0 ? maxContext : undefined, true);
+    if (!result) return null;
     const before = sanitizeTransportString(result?.worldInfoBefore || '').trim();
     const after = sanitizeTransportString(result?.worldInfoAfter || '').trim();
     const combined = [before, after].filter(Boolean).join('\n').trim();
@@ -316,13 +320,13 @@ function resolvePresetName(settings, stCtx = null) {
   if (!settings?.useStPresetForAsync) return '';
   const context = stCtx || getSillyTavernContext();
   try {
-    const pm = typeof context?.getPresetManager === 'function' ? context.getPresetManager('openai') : null;
+    const pm = getHostPresetManager(context, 'openai');
     if (pm && typeof pm.getSelectedPresetName === 'function') {
       const currentName = String(pm.getSelectedPresetName() || '').trim();
       if (currentName) return currentName;
     }
   } catch {}
-  const runtimeName = String(context?.chatCompletionSettings?.preset_settings_openai || '').trim();
+  const runtimeName = String(getHostChatCompletionSettings(context)?.preset_settings_openai || '').trim();
   return runtimeName;
 }
 
@@ -334,22 +338,11 @@ async function getResolvedPreset(settings) {
     if (!presetName) return null;
 
     let preset = null;
-    const pm = typeof stCtx?.getPresetManager === 'function' ? stCtx.getPresetManager('openai') : null;
+    const pm = getHostPresetManager(stCtx, 'openai');
     if (pm && typeof pm.getCompletionPresetByName === 'function') {
       preset = pm.getCompletionPresetByName(presetName) || null;
     }
-    if (!preset && typeof globalThis.ST_API?.preset?.get === 'function') {
-      const presetResult = await globalThis.ST_API.preset.get({ name: presetName });
-      preset = presetResult?.preset || null;
-    }
-    if (!preset && typeof globalThis.openai_settings === 'object' && globalThis.openai_settings[presetName]) {
-      preset = globalThis.openai_settings[presetName];
-    }
-    if (!preset) {
-      const oai = stCtx?.chatCompletionSettings;
-      if (oai?.[presetName]) preset = oai[presetName];
-      else if (oai?.presets?.[presetName]) preset = oai.presets[presetName];
-    }
+    if (!preset) preset = await getHostPreset(presetName, stCtx);
     if (!preset || typeof preset !== 'object') return null;
     return { presetName, preset };
   } catch (error) {

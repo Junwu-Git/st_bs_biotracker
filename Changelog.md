@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.8.2
+
+這版新增 TauriTavern 支援，並將宿主資料操作集中至薄型 adapter，降低追蹤核心對 SillyTavern 內部結構的直接依賴。
+
+### 新增與調整
+
+- 新增宿主 adapter，集中封裝 context、聊天窗口、角色列表、聊天 ID、擴充設定、生成預設、世界書與宿主事件訂閱。
+- 在 TauriTavern 中透過 `windowInfo` 與 `history` API 按需建立絕對索引聊天視圖，避免將窗口內 index 誤當完整聊天樓層。
+- TauriTavern 使用 `stableId` 識別聊天，並以 per-chat `store` 作為聊天追蹤狀態的持久化來源；`extensionSettings` 只保存全域插件設定。標準 SillyTavern 仍維持原有 `extensionSettings.chatStates` 儲存方式。
+- TauriTavern 的狀態清除以當前聊天為單位；因宿主未提供跨聊天 store 枚舉，介面不會執行無法保證完整性的「清空所有聊天」。
+- 統一 World Info prompt、角色／全域世界書與 preset 的 fallback 存取，並集中處理聊天建立、切換、刪除等事件的重複訂閱與異步錯誤。
+- 新增雙宿主回歸測試，覆蓋標準 SillyTavern 設定保存、TauriTavern stableId／per-chat store、窗口歷史絕對索引與宿主 API fallback。
+- 修正自動追蹤請求失敗後會隨 poll 對同一訊息持續重試的問題；同一訊息失敗後會停止自動重送，新訊息會自然解除，手動分析仍可再次嘗試。
+
 ## v0.8.1
 
 這版改善備裝流程與 API 設定的容錯，減少角色名稱差異、模型列表端點與 AI 漏填欄位造成的操作中斷。

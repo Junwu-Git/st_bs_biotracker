@@ -9,6 +9,22 @@ import {
   PSY_PREG_BOOL_FIELDS,
 } from './registry_psy_config.js';
 import { LABOR_STAGES, MENSTRUAL_STAGES, MENSTRUAL_STAGE_DAYS, PREGNANCY_STAGE_DAYS, PREGNANCY_STAGES } from './stage_config.js';
+import {
+  canLoadHostWorldInfo,
+  getHostChat,
+  getHostChatId,
+  getHostCharacters,
+  getHostContext,
+  getHostExtensionSettings,
+  getHostKind,
+  getHostWorldBook,
+  hasAbsoluteHostChatView,
+  loadHostWorldInfo,
+  loadHostChatState,
+  resolveHostChatId,
+  saveHostSettings,
+  scheduleHostChatStateSave,
+} from './host.js';
 
 export const MODULE_NAME = 'bs_biotracker';
 const MAX_CHAT_STATE_SNAPSHOTS = 24;
@@ -541,7 +557,7 @@ export function syncCharacterStageFromProfile(characterState) {
 }
 
 export function getContextSafe() {
-  return globalThis.SillyTavern?.getContext?.() || null;
+  return getHostContext();
 }
 
 export function cloneValue(value) {
@@ -841,6 +857,7 @@ export function createEmptyChatState() {
   return {
     lastAttemptedSignature: '',
     lastProcessedSignature: '',
+    lastFailedSignature: '',
     lastRunAt: 0,
     sceneSummary: '',
     minutesPassed: 0,
@@ -963,11 +980,28 @@ export function createDefaultFemaleState(name = '') {
 }
 
 export function getSettings(ctx) {
-  const root = ctx.extensionSettings;
+  const root = getHostExtensionSettings(ctx);
+  if (!root) throw new Error('[BS BioTracker] host extension settings are unavailable');
   let shouldSave = false;
   if (!root[MODULE_NAME]) root[MODULE_NAME] = cloneValue(DEFAULT_SETTINGS);
   const settings = root[MODULE_NAME];
+  const useTauriChatStore = getHostKind() === 'tauritavern';
+  if (useTauriChatStore) {
+    const descriptor = Object.getOwnPropertyDescriptor(settings, 'chatStates');
+    const runtimeChatStates = descriptor && descriptor.enumerable === false && settings.chatStates && typeof settings.chatStates === 'object'
+      ? settings.chatStates
+      : {};
+    if (descriptor) delete settings.chatStates;
+    Object.defineProperty(settings, 'chatStates', {
+      value: runtimeChatStates,
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    });
+    if (!descriptor || descriptor.enumerable !== false) shouldSave = true;
+  }
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
+    if (useTauriChatStore && key === 'chatStates') continue;
     if (settings[key] === undefined) {
       settings[key] = cloneValue(value);
       shouldSave = true;
@@ -1016,16 +1050,31 @@ export function getSettings(ctx) {
     if (JSON.stringify(mergedGuides) !== JSON.stringify(settings.registryDescriptionGuides)) shouldSave = true;
     settings.registryDescriptionGuides = mergedGuides;
   }
-  if (shouldSave) ctx.saveSettingsDebounced?.();
+  if (shouldSave) saveHostSettings(ctx);
   return settings;
 }
 
 export function saveSettings(ctx) {
-  ctx.saveSettingsDebounced?.();
+  saveHostSettings(ctx);
+  const root = getHostExtensionSettings(ctx);
+  const chatState = root?.[MODULE_NAME]?.chatStates?.[getChatKey(ctx)];
+  if (chatState) scheduleHostChatStateSave(ctx, chatState);
+}
+
+export async function hydrateChatStateFromHost(ctx, settings) {
+  if (!settings?.chatStates || typeof settings.chatStates !== 'object') return false;
+  const chatKey = await resolveHostChatId(ctx);
+  const localState = settings.chatStates[chatKey];
+  if (localState && !isChatStateEffectivelyEmpty(localState)) return false;
+  const storedState = await loadHostChatState();
+  if (!storedState || isChatStateEffectivelyEmpty(storedState)) return false;
+  settings.chatStates[chatKey] = storedState;
+  saveHostSettings(ctx);
+  return true;
 }
 
 export function getChatKey(ctx) {
-  return String(ctx.getCurrentChatId?.() || ctx.chatId || `${ctx.characterId ?? 'char'}:${ctx.groupId ?? 'solo'}`);
+  return getHostChatId(ctx);
 }
 
 export function getChatState(ctx, settings) {
@@ -1055,7 +1104,8 @@ export function getChatState(ctx, settings) {
   }
   if (needsRepackChatStateSnapshots(chatState) && repackChatStateSnapshots(chatState)) shouldSave = true;
   if (shouldSave) saveSettings(ctx);
-  const latestSnapshot = getLatestMatchingSnapshot(ctx, chatState);
+  const canRestoreSnapshot = getHostKind() !== 'tauritavern' || hasAbsoluteHostChatView(ctx);
+  const latestSnapshot = canRestoreSnapshot ? getLatestMatchingSnapshot(ctx, chatState) : null;
   if (latestSnapshot) {
     const latestSnapshotKey = getSnapshotRuntimeKey(latestSnapshot);
     if (chatState[RESTORED_SNAPSHOT_RUNTIME_KEY] !== latestSnapshotKey) {
@@ -1084,7 +1134,7 @@ function isChatStateEffectivelyEmpty(chatState) {
 
 export function inheritChatStateFromMatchingChat(ctx, settings) {
   const chatKey = getChatKey(ctx);
-  const currentChat = Array.isArray(ctx?.chat) ? ctx.chat : [];
+  const currentChat = getHostChat(ctx);
   if (!chatKey || currentChat.length === 0) return { inherited: false, reason: 'empty_chat' };
   if (currentChat.length < MIN_CHAT_INHERIT_MESSAGE_COUNT) return { inherited: false, reason: 'chat_too_short' };
 
@@ -1172,13 +1222,13 @@ export function getCharacterWorldBookName(ctx) {
 }
 
 export function getResolvedCharacter(ctx) {
-  const characters = Array.isArray(ctx?.characters) ? ctx.characters : [];
+  const characters = getHostCharacters(ctx);
   const directId = Number.isInteger(ctx?.characterId) ? ctx.characterId : null;
   if (directId !== null && characters[directId]) {
     return { id: directId, card: characters[directId], source: 'characterId' };
   }
 
-  const assistantMessages = (Array.isArray(ctx?.chat) ? ctx.chat : [])
+  const assistantMessages = getHostChat(ctx)
     .filter((message) => message && !message.is_user && !message.is_system)
     .slice()
     .reverse();
@@ -1236,20 +1286,18 @@ export async function getActiveGlobalWorldBookNames() {
 export async function loadGlobalWorldBook(ctx, name) {
   const normalizedName = String(name || '').trim();
   if (!normalizedName) return null;
-  if (typeof ctx?.loadWorldInfo === 'function') {
+  if (canLoadHostWorldInfo(ctx)) {
     try {
-      return await ctx.loadWorldInfo(normalizedName);
+      return await loadHostWorldInfo(ctx, normalizedName);
     } catch (error) {
       console.warn(`[BS BioTracker] load active global worldbook "${normalizedName}" failed`, error);
     }
   }
-  if (typeof globalThis.ST_API?.worldBook?.get === 'function') {
-    try {
-      const result = await globalThis.ST_API.worldBook.get({ name: normalizedName, scope: 'global' });
-      return result?.worldBook || null;
-    } catch (error) {
-      console.warn(`[BS BioTracker] ST_API get active global worldbook "${normalizedName}" failed`, error);
-    }
+  try {
+    const worldBook = await getHostWorldBook(normalizedName, 'global');
+    if (worldBook) return worldBook;
+  } catch (error) {
+    console.warn(`[BS BioTracker] host get active global worldbook "${normalizedName}" failed`, error);
   }
   return null;
 }
@@ -1260,7 +1308,7 @@ export function getTargetNames(ctx, settings) {
     .map((item) => item.trim())
     .filter(Boolean);
   if (names.length > 0) return names;
-  const cardName = ctx.characters?.[ctx.characterId]?.name;
+  const cardName = getHostCharacters(ctx)[ctx.characterId]?.name;
   return cardName ? [cardName] : [];
 }
 
@@ -1299,7 +1347,7 @@ export function resolveRegisteredCharacterName(chatState, targetName, options = 
 
 export function buildRecentMessages(ctx, settings, endIndexExclusive = null) {
   const count = Math.max(2, Number(settings.contextSize) || 12);
-  const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+  const chat = getHostChat(ctx);
   const end = Number.isInteger(endIndexExclusive) ? Math.max(0, Math.min(chat.length, endIndexExclusive)) : chat.length;
   return chat.slice(Math.max(0, end - count), end).map((message) => ({
     name: message.name || (message.is_user ? ctx.name1 : ctx.name2) || '',
@@ -1335,13 +1383,13 @@ function foldMessageSignatureDigest(seed, signature) {
 }
 
 export function buildMessageSignatures(ctx, endIndexExclusive = null) {
-  const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+  const chat = getHostChat(ctx);
   const end = Number.isInteger(endIndexExclusive) ? Math.max(0, Math.min(chat.length, endIndexExclusive)) : chat.length;
   return chat.slice(0, end).map((message) => buildMessageSignature(ctx, message));
 }
 
 export function buildMessageDigest(ctx, endIndexExclusive = null) {
-  const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+  const chat = getHostChat(ctx);
   const end = Number.isInteger(endIndexExclusive) ? Math.max(0, Math.min(chat.length, endIndexExclusive)) : chat.length;
   let hash = MESSAGE_DIGEST_SEED;
   for (let index = 0; index < end; index += 1) {
@@ -1877,13 +1925,13 @@ export function recordChatStateSnapshot(ctx, chatState, options = {}) {
   if (!Array.isArray(chatState.snapshots)) chatState.snapshots = [];
   const messageCount = Number.isInteger(options.messageCount)
     ? Math.max(0, options.messageCount)
-    : (Array.isArray(ctx.chat) ? ctx.chat.length : 0);
+    : getHostChat(ctx).length;
   const snapshot = createStoredSnapshotState(
     chatState.snapshots,
     exportChatStateSnapshotPayload(chatState),
     {
       messageCount,
-      messageDigest: buildMessageDigest(ctx, messageCount),
+      messageDigest: hasAbsoluteHostChatView(ctx) ? '' : buildMessageDigest(ctx, messageCount),
       reason: String(options.reason || 'state'),
       createdAt: Date.now(),
     },
@@ -1896,7 +1944,7 @@ export function recordChatStateSnapshot(ctx, chatState, options = {}) {
 
 export function getLatestMatchingSnapshot(ctx, chatState, messageCount = null) {
   compactChatStateSnapshots(chatState);
-  const chatLength = Array.isArray(ctx.chat) ? ctx.chat.length : 0;
+  const chatLength = getHostChat(ctx).length;
   const requestedCount = Number.isInteger(messageCount)
     ? Math.max(0, Math.min(chatLength, messageCount))
     : null;
@@ -1915,7 +1963,7 @@ export function getLatestMatchingSnapshot(ctx, chatState, messageCount = null) {
 }
 
 export function buildSignature(ctx, endIndexExclusive = null) {
-  const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+  const chat = getHostChat(ctx);
   const end = Number.isInteger(endIndexExclusive) ? Math.max(0, Math.min(chat.length, endIndexExclusive)) : chat.length;
   const last = chat[end - 1];
   if (!last) return '';

@@ -32,6 +32,19 @@ import { applyToolCall } from './scripts/tools.js';
 import { getEmbryoTypeReferenceText } from './scripts/embryo_prompt_context.js';
 import { buildSingleRacePhysiologyText } from './scripts/race_prompt_context.js';
 import {
+  canLoadHostWorldInfo,
+  getHostChatCompletionSettings,
+  getHostContext,
+  getHostKind,
+  getHostPreset,
+  getHostPresetManager,
+  getHostWorldBook,
+  listHostPresets,
+  loadHostWorldInfo,
+  registerHostExtensionMenuItem,
+  replaceHostEventSubscription,
+} from './scripts/host.js';
+import {
   createEmptyChatState,
   DEFAULT_SYSTEM_PROMPT,
   getCharacterWorldBookName,
@@ -45,6 +58,7 @@ import {
   inheritChatStateFromMatchingChat,
   getResolvedCharacter,
   getSettings,
+  hydrateChatStateFromHost,
   loadGlobalWorldBook,
   MODULE_NAME,
   normalizeCharacterPsychologyState,
@@ -1133,9 +1147,9 @@ async function getCurrentCharacterWorldbook(ctx) {
   for (const candidate of candidates) {
     if (!candidate.value) continue;
     if (candidate.label === 'bound world name') {
-      if (typeof ctx?.loadWorldInfo === 'function') {
+      if (canLoadHostWorldInfo(ctx)) {
         try {
-          return await ctx.loadWorldInfo(String(candidate.value));
+          return await loadHostWorldInfo(ctx, String(candidate.value));
         } catch (error) {
           console.warn('[BS BioTracker] getCurrentCharacterWorldbook loadWorldInfo failed', error);
         }
@@ -1146,20 +1160,17 @@ async function getCurrentCharacterWorldbook(ctx) {
     return candidate.value;
   }
   const scriptWorldBookName = await getCharacterWorldBookNameViaSTscript();
-  if (scriptWorldBookName && typeof ctx?.loadWorldInfo === 'function') {
+  if (scriptWorldBookName && canLoadHostWorldInfo(ctx)) {
     try {
-      return await ctx.loadWorldInfo(String(scriptWorldBookName));
+      return await loadHostWorldInfo(ctx, String(scriptWorldBookName));
     } catch (error) {
       console.warn('[BS BioTracker] getCurrentCharacterWorldbook STscript/loadWorldInfo failed', error);
     }
   }
-  if (globalThis.ST_API?.worldBook?.get) {
-    try {
-      const result = await globalThis.ST_API.worldBook.get({ name: getCharacterWorldBookName(ctx) || scriptWorldBookName || 'Current Chat', scope: 'character' });
-      return result?.worldBook || null;
-    } catch (error) {
-      console.warn('[BS BioTracker] inspectCurrentCharacterWorldbook fallback failed', error);
-    }
+  try {
+    return await getHostWorldBook(getCharacterWorldBookName(ctx) || scriptWorldBookName || 'Current Chat', 'character');
+  } catch (error) {
+    console.warn('[BS BioTracker] inspectCurrentCharacterWorldbook fallback failed', error);
   }
   return null;
 }
@@ -1210,14 +1221,12 @@ async function inspectCurrentCharacterWorldbook(ctx) {
   const stscriptWorldBookName = await getCharacterWorldBookNameViaSTscript();
   let apiSourceSummary = '不可用';
   let apiSourcePreview = '无';
-  if (globalThis.ST_API?.worldBook?.get) {
-    try {
-      const result = await globalThis.ST_API.worldBook.get({ name: 'Current Chat', scope: 'character' });
-      apiSourceSummary = summarizeValueShape(result?.worldBook);
-      apiSourcePreview = safeJsonPreview(result?.worldBook);
-    } catch (error) {
-      apiSourceSummary = `调用失败: ${String(error?.message || error)}`;
-    }
+  try {
+    const worldBook = await getHostWorldBook('Current Chat', 'character');
+    apiSourceSummary = summarizeValueShape(worldBook);
+    apiSourcePreview = safeJsonPreview(worldBook);
+  } catch (error) {
+    apiSourceSummary = `调用失败: ${String(error?.message || error)}`;
   }
   const lines = [
     `角色：${characterName}`,
@@ -1225,7 +1234,7 @@ async function inspectCurrentCharacterWorldbook(ctx) {
     `resolvedCharacterId：${resolvedCharacterId === null || resolvedCharacterId === undefined ? '无' : String(resolvedCharacterId)}`,
     `resolvedSource：${resolvedSource}`,
     `groupId：${groupId === undefined || groupId === null || groupId === '' ? '无' : String(groupId)}`,
-    `loadWorldInfo：${typeof ctx?.loadWorldInfo === 'function' ? '可用' : '不可用'}`,
+    `loadWorldInfo：${canLoadHostWorldInfo(ctx) ? '可用' : '不可用'}`,
     `STscript(/getcharbook)：${stscriptWorldBookName || '无'}`,
     `世界书来源：${worldBook ? '已取得' : '未取得'}`,
     `找到的条目名数量：${foundNames.length}`,
@@ -4131,8 +4140,8 @@ async function refreshTrackerPresetPage(ctx) {
 
   // 策略 1: bastneth 自訂 API — ST_API.preset.list()
   try {
-    if (typeof globalThis.ST_API?.preset?.list === 'function') {
-      const result = await globalThis.ST_API.preset.list();
+    {
+      const result = await listHostPresets();
       if (Array.isArray(result?.presets)) {
         result.presets.forEach((preset) => {
           const name = String(preset?.name || '').trim();
@@ -4151,8 +4160,8 @@ async function refreshTrackerPresetPage(ctx) {
   // 策略 2: SillyTavern PresetManager
   try {
     try {
-      const stCtx = globalThis.SillyTavern?.getContext?.();
-      const pm = typeof stCtx?.getPresetManager === 'function' ? stCtx.getPresetManager('openai') : null;
+      const stCtx = getHostContext();
+      const pm = getHostPresetManager(stCtx, 'openai');
       if (pm) {
         cachedPresetManager = pm;
         // getAllPresets() 返回 select 中選項文字陣列
@@ -4192,7 +4201,7 @@ async function refreshTrackerPresetPage(ctx) {
           if (typeof pm.getSelectedPresetName === 'function') {
             activeName = String(pm.getSelectedPresetName() || '').trim();
           }
-          const oai = stCtx.chatCompletionSettings;
+          const oai = getHostChatCompletionSettings(stCtx);
           if (!activeName && oai?.preset_settings_openai) activeName = String(oai.preset_settings_openai).trim();
         } catch {}
       }
@@ -4263,7 +4272,8 @@ function getTrackerPromptOverrideMap(settings, presetName) {
 function getPromptOrderEntriesFromSettings(settings, stCtx = null) {
   const direct = Array.isArray(settings?.prompt_order) ? settings.prompt_order : null;
   if (direct) return direct;
-  const runtime = Array.isArray(stCtx?.chatCompletionSettings?.prompt_order) ? stCtx.chatCompletionSettings.prompt_order : null;
+  const chatCompletionSettings = getHostChatCompletionSettings(stCtx);
+  const runtime = Array.isArray(chatCompletionSettings?.prompt_order) ? chatCompletionSettings.prompt_order : null;
   return runtime || [];
 }
 
@@ -4283,7 +4293,7 @@ function normalizePromptListForDisplay(prompts, presetName) {
   const list = Array.isArray(prompts)
     ? prompts.filter((prompt) => prompt && typeof prompt === 'object' && prompt.identifier)
     : [];
-  const stCtx = globalThis.SillyTavern?.getContext?.();
+  const stCtx = getHostContext();
   const isActivePreset = presetName && presetName === String(cachedActivePresetName || '').trim();
   const promptOrderEntries = isActivePreset
     ? pickPromptOrderList(getPromptOrderEntriesFromSettings(cachedPresetData?.settings, stCtx), stCtx)
@@ -4473,25 +4483,11 @@ async function getPresetPromptList(presetName) {
     if (cachedPresetPromptMap.has(targetPresetName)) {
       return cachedPresetPromptMap.get(targetPresetName) || [];
     }
-    if (typeof globalThis.ST_API?.preset?.get === 'function') {
-      const result = await globalThis.ST_API.preset.get({ name: targetPresetName });
-      const prompts = Array.isArray(result?.preset?.prompts) ? result.preset.prompts : [];
-      if (prompts.length > 0) cachedPresetPromptMap.set(targetPresetName, prompts);
-      if (prompts.length > 0) return prompts;
-    }
-    // 嘗試從 openai_settings 全域變數撈
-    if (typeof globalThis.openai_settings === 'object' && globalThis.openai_settings[targetPresetName]?.prompts) {
-      return globalThis.openai_settings[targetPresetName].prompts;
-    }
-    // 再試 SillyTavern context
-    const stCtx = globalThis.SillyTavern?.getContext?.();
-    const oai = stCtx?.chatCompletionSettings;
-    if (oai && typeof oai === 'object') {
-      // oai_settings 本身可能就是 keyed by preset name
-      if (oai[targetPresetName]?.prompts) return oai[targetPresetName].prompts;
-      // 或 oai_settings.presets 是巢狀的
-      if (oai.presets?.[targetPresetName]?.prompts) return oai.presets[targetPresetName].prompts;
-    }
+    const stCtx = getHostContext();
+    const hostPreset = await getHostPreset(targetPresetName, stCtx);
+    const prompts = Array.isArray(hostPreset?.prompts) ? hostPreset.prompts : [];
+    if (prompts.length > 0) cachedPresetPromptMap.set(targetPresetName, prompts);
+    if (prompts.length > 0) return prompts;
   } catch {}
   const domPrompts = scrapePromptManagerDomBlocks();
   if (domPrompts.length > 0) return domPrompts;
@@ -5392,6 +5388,10 @@ async function ensureModal(ctx) {
     globalThis.toastr?.success?.('[BS BioTracker] 当前聊天状态已清除');
   });
   document.getElementById('bs-bt-clear-all-chats')?.addEventListener('click', () => {
+    if (getHostKind() === 'tauritavern') {
+      globalThis.toastr?.info?.('[BS BioTracker] TauriTavern 使用独立的每聊天存储；请在目标聊天中使用“清除当前聊天状态”');
+      return;
+    }
     const settings = getSettings(ctx);
     const chatCount = Object.keys(settings.chatStates || {}).length;
     if (chatCount <= 0) {
@@ -5588,18 +5588,16 @@ function ensureManualMenuItem(ctx, retries = 20) {
 }
 
 async function registerMenuItem(ctx) {
-  if (globalThis.ST_API?.ui?.registerExtensionsMenuItem) {
-    try {
-      await globalThis.ST_API.ui.registerExtensionsMenuItem({
+  try {
+    const registered = await registerHostExtensionMenuItem({
         id: MENU_API_ID,
         label: 'BS BioTracker',
         icon: 'fa-solid fa-person-pregnant',
         onClick: () => toggleModal(ctx),
-      });
-      return;
-    } catch (error) {
-      console.warn('[BS BioTracker] ST_API 菜单注册失败，改用手动注入。', error);
-    }
+    });
+    if (registered) return;
+  } catch (error) {
+    console.warn('[BS BioTracker] host 菜单注册失败，改用手动注入。', error);
   }
   ensureManualMenuItem(ctx);
 }
@@ -5610,69 +5608,65 @@ async function bootstrap() {
   if (globalThis[BOOTSTRAP_RUNTIME_KEY]) return;
   globalThis[BOOTSTRAP_RUNTIME_KEY] = true;
   try {
+    await hydrateChatStateFromHost(ctx, getSettings(ctx));
     installMainflowRequestCapture();
     await ensureModal(ctx);
     await registerMenuItem(ctx);
     trackerDeps.updateMainFlowPrompt = updateMainFlowPrompt;
     resetPoller(ctx, trackerDeps);
     updateMainFlowPrompt(ctx);
-    const { eventSource, event_types } = ctx;
-    if (eventSource && event_types?.CHAT_CHANGED) {
-      if (globalThis[CHAT_CHANGED_HANDLER_KEY] && typeof eventSource.off === 'function') {
-        eventSource.off(event_types.CHAT_CHANGED, globalThis[CHAT_CHANGED_HANDLER_KEY]);
-      }
-      globalThis[CHAT_CHANGED_HANDLER_KEY] = () => {
+    globalThis[CHAT_CHANGED_HANDLER_KEY] = replaceHostEventSubscription(
+      ctx,
+      'chatChanged',
+      globalThis[CHAT_CHANGED_HANDLER_KEY],
+      async () => {
+        await hydrateChatStateFromHost(ctx, getSettings(ctx));
         if (globalThis[PENDING_CHAT_INHERIT_KEY]) {
           tryInheritForkedChatState(ctx, 'chat_changed');
         }
         renderStatusPanel(ctx);
         updateMainFlowPrompt(ctx);
         scheduleWorldbookFilterReload(ctx, 'chat_changed');
-      };
-      eventSource.on(event_types.CHAT_CHANGED, globalThis[CHAT_CHANGED_HANDLER_KEY]);
-    }
-    if (eventSource && event_types?.CHAT_CREATED) {
-      if (globalThis[CHAT_CREATED_HANDLER_KEY] && typeof eventSource.off === 'function') {
-        eventSource.off(event_types.CHAT_CREATED, globalThis[CHAT_CREATED_HANDLER_KEY]);
-      }
-      globalThis[CHAT_CREATED_HANDLER_KEY] = () => {
+      },
+    );
+    globalThis[CHAT_CREATED_HANDLER_KEY] = replaceHostEventSubscription(
+      ctx,
+      'chatCreated',
+      globalThis[CHAT_CREATED_HANDLER_KEY],
+      () => {
         globalThis[PENDING_CHAT_INHERIT_KEY] = true;
         tryInheritForkedChatState(ctx, 'chat_created');
         scheduleWorldbookFilterReload(ctx, 'chat_created');
-      };
-      eventSource.on(event_types.CHAT_CREATED, globalThis[CHAT_CREATED_HANDLER_KEY]);
-    }
-    if (eventSource && event_types?.CHAT_DELETED) {
-      if (globalThis[CHAT_DELETED_HANDLER_KEY] && typeof eventSource.off === 'function') {
-        eventSource.off(event_types.CHAT_DELETED, globalThis[CHAT_DELETED_HANDLER_KEY]);
-      }
-      globalThis[CHAT_DELETED_HANDLER_KEY] = (payload) => {
+      },
+    );
+    globalThis[CHAT_DELETED_HANDLER_KEY] = replaceHostEventSubscription(
+      ctx,
+      'chatDeleted',
+      globalThis[CHAT_DELETED_HANDLER_KEY],
+      (payload) => {
         const chatKey = extractDeletedChatKey(ctx, payload);
         cleanupOrphanedChatStateByKey(ctx, chatKey, 'chat_deleted');
-      };
-      eventSource.on(event_types.CHAT_DELETED, globalThis[CHAT_DELETED_HANDLER_KEY]);
-    }
-    if (eventSource && event_types?.GROUP_CHAT_DELETED) {
-      if (globalThis[GROUP_CHAT_DELETED_HANDLER_KEY] && typeof eventSource.off === 'function') {
-        eventSource.off(event_types.GROUP_CHAT_DELETED, globalThis[GROUP_CHAT_DELETED_HANDLER_KEY]);
-      }
-      globalThis[GROUP_CHAT_DELETED_HANDLER_KEY] = (payload) => {
+      },
+    );
+    globalThis[GROUP_CHAT_DELETED_HANDLER_KEY] = replaceHostEventSubscription(
+      ctx,
+      'groupChatDeleted',
+      globalThis[GROUP_CHAT_DELETED_HANDLER_KEY],
+      (payload) => {
         const chatKey = extractDeletedChatKey(ctx, payload);
         cleanupOrphanedChatStateByKey(ctx, chatKey, 'group_chat_deleted');
-      };
-      eventSource.on(event_types.GROUP_CHAT_DELETED, globalThis[GROUP_CHAT_DELETED_HANDLER_KEY]);
-    }
-    if (eventSource && event_types?.GROUP_CHAT_CREATED) {
-      if (globalThis[GROUP_CHAT_CREATED_HANDLER_KEY] && typeof eventSource.off === 'function') {
-        eventSource.off(event_types.GROUP_CHAT_CREATED, globalThis[GROUP_CHAT_CREATED_HANDLER_KEY]);
-      }
-      globalThis[GROUP_CHAT_CREATED_HANDLER_KEY] = () => {
+      },
+    );
+    globalThis[GROUP_CHAT_CREATED_HANDLER_KEY] = replaceHostEventSubscription(
+      ctx,
+      'groupChatCreated',
+      globalThis[GROUP_CHAT_CREATED_HANDLER_KEY],
+      () => {
         globalThis[PENDING_CHAT_INHERIT_KEY] = true;
         tryInheritForkedChatState(ctx, 'group_chat_created');
         scheduleWorldbookFilterReload(ctx, 'group_chat_created');
-      };
-      eventSource.on(event_types.GROUP_CHAT_CREATED, globalThis[GROUP_CHAT_CREATED_HANDLER_KEY]);
-    }
+      },
+    );
   } catch (error) {
     globalThis[BOOTSTRAP_RUNTIME_KEY] = false;
     throw error;
@@ -5680,13 +5674,12 @@ async function bootstrap() {
 }
 
 const ctx = getContextSafe();
-if (ctx?.eventSource && ctx?.event_types?.APP_READY) {
-  if (globalThis[APP_READY_HANDLER_KEY] && typeof ctx.eventSource.off === 'function') {
-    ctx.eventSource.off(ctx.event_types.APP_READY, globalThis[APP_READY_HANDLER_KEY]);
-  }
-  globalThis[APP_READY_HANDLER_KEY] = bootstrap;
-  ctx.eventSource.on(ctx.event_types.APP_READY, globalThis[APP_READY_HANDLER_KEY]);
-}
-else setTimeout(() => {
+globalThis[APP_READY_HANDLER_KEY] = replaceHostEventSubscription(
+  ctx,
+  'appReady',
+  globalThis[APP_READY_HANDLER_KEY],
+  bootstrap,
+);
+if (!globalThis[APP_READY_HANDLER_KEY]) setTimeout(() => {
   bootstrap().catch((error) => console.error('[BS BioTracker] bootstrap failed', error));
 }, 1000);
