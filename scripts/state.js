@@ -1123,7 +1123,7 @@ export function getChatState(ctx, settings) {
   return chatState;
 }
 
-function isChatStateEffectivelyEmpty(chatState) {
+export function isChatStateEffectivelyEmpty(chatState) {
   if (!chatState || typeof chatState !== 'object') return true;
   const hasCharacters = Object.keys(chatState.characters || {}).length > 0;
   const hasSnapshots = Array.isArray(chatState.snapshots) && chatState.snapshots.length > 0;

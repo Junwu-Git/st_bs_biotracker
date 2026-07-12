@@ -157,3 +157,10 @@ test('failed automatic request is blocked only for the same last message', () =>
   ctx.chat.push({ is_user: false, name: 'Alice', mes: 'new reply' });
   assert.equal(isFailedAutoRetryBlocked(ctx, chatState), false);
 });
+
+test('chat state counting ignores empty stored keys', () => {
+  assert.equal(state.isChatStateEffectivelyEmpty(state.createEmptyChatState()), true);
+  const populated = state.createEmptyChatState();
+  populated.characters.Alice = { initialized: true };
+  assert.equal(state.isChatStateEffectivelyEmpty(populated), false);
+});

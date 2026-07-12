@@ -56,6 +56,7 @@ import {
   getChatState,
   getContextSafe,
   inheritChatStateFromMatchingChat,
+  isChatStateEffectivelyEmpty,
   getResolvedCharacter,
   getSettings,
   hydrateChatStateFromHost,
@@ -5387,14 +5388,17 @@ async function ensureModal(ctx) {
     setRegisterStatus('当前聊天状态已清除。');
     globalThis.toastr?.success?.('[BS BioTracker] 当前聊天状态已清除');
   });
-  document.getElementById('bs-bt-clear-all-chats')?.addEventListener('click', () => {
-    if (getHostKind() === 'tauritavern') {
-      globalThis.toastr?.info?.('[BS BioTracker] TauriTavern 使用独立的每聊天存储；请在目标聊天中使用“清除当前聊天状态”');
-      return;
-    }
+  const clearAllChatsButton = document.getElementById('bs-bt-clear-all-chats');
+  if (clearAllChatsButton && getHostKind() === 'tauritavern') clearAllChatsButton.hidden = true;
+  clearAllChatsButton?.addEventListener('click', () => {
     const settings = getSettings(ctx);
-    const chatCount = Object.keys(settings.chatStates || {}).length;
+    const storedEntries = Object.entries(settings.chatStates || {});
+    const chatCount = storedEntries.filter(([, chatState]) => !isChatStateEffectivelyEmpty(chatState)).length;
     if (chatCount <= 0) {
+      if (storedEntries.length > 0) {
+        settings.chatStates = {};
+        saveSettings(ctx);
+      }
       globalThis.toastr?.info?.('[BS BioTracker] 没有可清除的聊天追踪状态');
       return;
     }

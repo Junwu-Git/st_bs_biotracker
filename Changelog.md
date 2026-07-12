@@ -13,6 +13,7 @@
 - 統一 World Info prompt、角色／全域世界書與 preset 的 fallback 存取，並集中處理聊天建立、切換、刪除等事件的重複訂閱與異步錯誤。
 - 新增雙宿主回歸測試，覆蓋標準 SillyTavern 設定保存、TauriTavern stableId／per-chat store、窗口歷史絕對索引與宿主 API fallback。
 - 修正自動追蹤請求失敗後會隨 poll 對同一訊息持續重試的問題；同一訊息失敗後會停止自動重送，新訊息會自然解除，手動分析仍可再次嘗試。
+- SillyTavern 的「清空所有聊天」改為只統計真正含有追蹤資料的聊天，並順帶清理空白殘留 key；TauriTavern 則隱藏宿主無法完整執行的全聊天清除入口。
 
 ## v0.8.1
 
