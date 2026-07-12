@@ -107,11 +107,21 @@ function hasPreparedWardrobe(existingState = {}) {
   return Object.values(existingState || {}).some((item) => item?.profile?.wardrobe?.enabled === true);
 }
 
-function getTrackerToolDefinitions(settings, existingState = {}) {
+export function hasBreedingPsychology(existingState = {}) {
+  return Object.values(existingState || {}).some((item) => {
+    const stageProfiles = item?.profile?.psychology?.stageProfiles;
+    return stageProfiles && typeof stageProfiles === 'object' && !Array.isArray(stageProfiles)
+      && Object.keys(stageProfiles).length > 0;
+  });
+}
+
+export function getTrackerToolDefinitions(settings, existingState = {}) {
   const diaryEnabled = Math.max(0, Math.min(20, Math.floor(Number(settings?.diaryRecentLimit) || 0))) > 0;
   const wardrobeEnabled = hasPreparedWardrobe(existingState);
+  const psychologyEnabled = hasBreedingPsychology(existingState);
   const hiddenTools = new Set();
   if (!diaryEnabled) hiddenTools.add('bsWriteDiary');
+  if (!psychologyEnabled) hiddenTools.add('bsUpdatePsychology');
   if (!wardrobeEnabled) {
     hiddenTools.add('bsAddWardrobeItem');
     hiddenTools.add('bsRemoveWardrobeItem');
@@ -234,6 +244,7 @@ function buildPromptFacingCharacterState(item, diaryLimit = 0) {
   delete profile.immune;
   delete profile.cooldown;
   if (immune.metabolism) delete profile.metabolism;
+  if (!hasBreedingPsychology({ current: item })) delete profile.psychology;
   profile.diary = getRecentDiaryEntries(item?.profile || {}, diaryLimit);
 
   delete next.updatedAt;
@@ -481,6 +492,7 @@ export function buildTrackerPayload(ctx, settings, reason = 'manual', endIndexEx
   );
   const payloadWorldBook = mainflowContextSnapshot ? null : filteredWorldBook;
   const diaryEnabled = getDiaryRecentLimit(settings, Object.keys(existingState || {}).length) > 0;
+  const psychologyEnabled = hasBreedingPsychology(existingState);
   return {
     reason,
     chat_id: getChatKey(ctx),
@@ -496,6 +508,8 @@ export function buildTrackerPayload(ctx, settings, reason = 'manual', endIndexEx
     existing_state: buildTrackerStateView(existingState, settings),
     available_tools: getTrackerToolDefinitions(settings, existingState),
     diary_enabled: diaryEnabled,
+    require_full_description_updates: settings?.requireFullDescriptionUpdates === true,
+    ...(psychologyEnabled ? { breeding_psychology_enabled: true } : {}),
     wardrobe_enabled: hasPreparedWardrobe(existingState),
     recent_messages: recentMessages,
   };

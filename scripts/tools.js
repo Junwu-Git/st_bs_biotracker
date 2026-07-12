@@ -171,7 +171,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
   {
     name: 'bsSetDescription',
     description:
-      '只更新单一角色的描述字段，可单独更新 normalDescription / pregnantDescription，也可只传其中几个既有子字段，例如 行动|描述内容;;表情|描述内容;;。未传入的子字段会保留旧值；不能新增角色原本没有的子字段。描述内容必须使用格式：字段名|描述内容;;字段名|描述内容;;...字段名|描述内容;;，不可改成自然段或换行文本。',
+      '更新单一角色的描述字段。调用前必须逐一检查该描述栏位的所有既有子字段；未传入某子字段仅表示它已检查且完全不变，不得因求简短而省略受本轮剧情、姿势、衣着、表情、身体状态或环境影响的字段。不能新增角色原本没有的子字段。描述内容必须使用格式：字段名|描述内容;;字段名|描述内容;;...字段名|描述内容;;，不可改成自然段或换行文本。',
     input_schema: {
       type: 'object',
       properties: {
@@ -479,6 +479,16 @@ function ensureWardrobeState(profile) {
   if (!items.some((item) => item.id === DEFAULT_WARDROBE_ITEM.id)) items.unshift({ ...DEFAULT_WARDROBE_ITEM });
   profile.wardrobe.items = items;
   return profile.wardrobe;
+}
+
+function hasPreparedWardrobe(profile) {
+  return Boolean(profile?.wardrobe?.enabled === true);
+}
+
+function hasBreedingPsychology(profile) {
+  const stageProfiles = profile?.psychology?.stageProfiles;
+  return Boolean(stageProfiles && typeof stageProfiles === 'object' && !Array.isArray(stageProfiles)
+    && Object.keys(stageProfiles).length > 0);
 }
 
 function findWardrobeItem(profile, itemId, slot = '') {
@@ -3499,6 +3509,7 @@ function applyAddWardrobeItem(chatState, args) {
   if (item.id === DEFAULT_WARDROBE_ITEM.id) return { applied: false, message: `bsAddWardrobeItem skipped for ${female}: id=0 is reserved.` };
   const next = cloneValue(character);
   const profile = next.profile || {};
+  if (!hasPreparedWardrobe(profile)) return { applied: false, message: `bsAddWardrobeItem skipped for ${female}: wardrobe is not prepared.` };
   const wardrobe = ensureWardrobeState(profile);
   const existingIndex = wardrobe.items.findIndex((entry) => entry.id === item.id);
   if (existingIndex >= 0) wardrobe.items[existingIndex] = item;
@@ -3518,6 +3529,7 @@ function applyRemoveWardrobeItem(chatState, args) {
   if (itemId === DEFAULT_WARDROBE_ITEM.id) return { applied: false, message: `bsRemoveWardrobeItem skipped for ${female}: id=0 cannot be removed.` };
   const next = cloneValue(character);
   const profile = next.profile || {};
+  if (!hasPreparedWardrobe(profile)) return { applied: false, message: `bsRemoveWardrobeItem skipped for ${female}: wardrobe is not prepared.` };
   const wardrobe = ensureWardrobeState(profile);
   const before = wardrobe.items.length;
   wardrobe.items = wardrobe.items.filter((item) => item.id !== itemId);
@@ -3537,6 +3549,7 @@ function applyChangeOutfit(chatState, args) {
   if (!female || !character) return { applied: false, message: `bsChangeOutfit skipped: unknown character ${female || '(empty)'}.` };
   const next = cloneValue(character);
   const profile = next.profile || {};
+  if (!hasPreparedWardrobe(profile)) return { applied: false, message: `bsChangeOutfit skipped for ${female}: wardrobe is not prepared.` };
   const outfit = ensureOutfitState(profile);
   if (args?.temporaryItems !== undefined) {
     if (!Array.isArray(args.temporaryItems)) return { applied: false, message: `bsChangeOutfit skipped for ${female}: temporaryItems must be an array.` };
@@ -3672,6 +3685,9 @@ function applyUpdatePsychology(chatState, args) {
 
   const next = cloneValue(character);
   const profile = next.profile || {};
+  if (!hasBreedingPsychology(profile)) {
+    return { applied: false, message: `bsUpdatePsychology skipped for ${female}: breeding psychology is not inferred.` };
+  }
   const psychology = profile.psychology || {};
   const base = profile.base || {};
   const stage = String(base.stage || '');

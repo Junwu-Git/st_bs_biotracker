@@ -1,17 +1,23 @@
 import { fetchModelList } from './scripts/api.js';
-import { applyRegistryBreedingInference, runRegistry, runRegistryBreedingInference, runRegistryWardrobeInference } from './scripts/registry.js';
+import { applyRegistryBreedingInference, runRegistry, runRegistryBreedingInference, runRegistryDiaryInference, runRegistryWardrobeInference } from './scripts/registry.js';
 import {
   AMORPHOUS_RACES,
+  DERIVED_TYPE_FLUX_PROFILES,
+  DERIVED_TYPE_INHERITANCE_PROFILES,
   DERIVED_TYPE_RACES,
   RACE_INTRODUCTION_FIELD,
   RACE_PHYSIOLOGY_FIELDS,
   getEmbryoTypeByRace,
   getBuiltinRacePhysiologyProfile,
   getDerivedTypeFluxProfile,
+  getDerivedTypeInheritanceProfile,
+  getDerivedTypeIntroductionLine,
   getDerivedTypeMetabolismExemptions,
+  getDerivedTypeOverride,
   getRaceIntroductionLine,
   getRacePhysiologyOverride,
   setRacePhysiologyOverrides,
+  setDerivedTypeOverrides,
   METOVIVIPAROUS_RACES,
   OVIPAROUS_RACES,
   OVOVIVIPAROUS_RACES,
@@ -111,6 +117,8 @@ let selectedWardrobeName = '';
 let selectedRaceEncyclopedia = '';
 let selectedDerivedEncyclopedia = '';
 let racePhysiologyEditorOpen = false;
+let derivedTypeEditorOpen = false;
+let selectedEncyclopediaSubpage = 'race';
 let worldbookEntrySearch = '';
 let latestWorldbookEntries = [];
 let globalWorldbookEntrySearch = '';
@@ -202,7 +210,7 @@ function setRegisterStatus(message, isError = false) {
 
 function setRegisterTab(tab) {
   const requested = String(tab || 'inference');
-  const next = ['inference', 'registry', 'wardrobe'].includes(requested) ? requested : 'inference';
+  const next = ['inference', 'registry', 'wardrobe', 'diary'].includes(requested) ? requested : 'inference';
   document.querySelectorAll('#bs-bt-register-tabs [data-register-tab]').forEach((node) => {
     node.classList.toggle('is-active', String(node.getAttribute('data-register-tab') || '') === next);
   });
@@ -353,6 +361,79 @@ function applyWardrobePrep(ctx) {
   setWardrobePrepStatus(`已为 ${targetName} 重新套用备装；旧衣柜已由本次 JSON 覆盖。`);
   globalThis.toastr?.success?.(`[BS BioTracker] 已备装 ${targetName}`);
 }
+
+function setDiaryStatus(message, isError = false) {
+  const node = document.getElementById('bs-bt-diary-status');
+  if (!node) return;
+  node.textContent = message;
+  node.dataset.kind = isError ? 'error' : 'normal';
+}
+
+async function generateRegistryDiary(ctx, button = null) {
+  const values = getRegisterFormValues();
+  if (!values.targetName) {
+    setDiaryStatus('请先输入要写日记的已注册角色名。', true);
+    return;
+  }
+  readSettingsFromForm(ctx);
+  const settings = getSettings(ctx);
+  const requestedDate = String(document.getElementById('bs-bt-diary-date')?.value || '').trim();
+  const diaryWritingPrompt = String(document.getElementById('bs-bt-diary-writing-prompt')?.value || settings.diaryWritingPrompt || '').trim();
+  const originalText = button?.textContent;
+  if (button) {
+    button.disabled = true;
+    button.textContent = '生成中...';
+  }
+  setDiaryStatus(`正在为 ${values.targetName} 生成日记...`);
+  try {
+    const result = await runRegistryDiaryInference(ctx, { ...values, requestedDate, diaryWritingPrompt });
+    const editor = document.getElementById('bs-bt-diary-result');
+    if (editor) editor.value = JSON.stringify(result, null, 2);
+    setDiaryStatus('生成完成。可修改日期与正文后再写入。');
+  } catch (error) {
+    const message = String(error?.message || error);
+    setDiaryStatus(message, true);
+    globalThis.toastr?.error?.(message, '[BS BioTracker]');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText || '生成日记';
+    }
+  }
+}
+
+function applyRegistryDiary(ctx) {
+  const values = getRegisterFormValues();
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const targetName = resolveRegisteredCharacterName(chatState, values.targetName);
+  if (!targetName) {
+    setDiaryStatus('请先输入已注册角色名。', true);
+    return;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(String(document.getElementById('bs-bt-diary-result')?.value || '').trim());
+  } catch (error) {
+    setDiaryStatus(`日记 JSON 无法解析：${String(error?.message || error)}`, true);
+    return;
+  }
+  const result = applyToolCall(chatState, {
+    name: 'bsWriteDiary',
+    arguments: { female: targetName, time: parsed?.time, content: parsed?.content },
+  });
+  if (!result?.applied) {
+    setDiaryStatus(result?.message || '日记写入失败。', true);
+    return;
+  }
+  recordChatStateSnapshot(ctx, chatState, { reason: 'manual_diary' });
+  saveSettings(ctx);
+  resetPoller(ctx, trackerDeps);
+  renderStatusPanel(ctx);
+  setDiaryStatus(`已写入 ${targetName} 的日记：${String(parsed.time || '')}`);
+  globalThis.toastr?.success?.(`[BS BioTracker] 已写入 ${targetName} 的日记`);
+}
+
 function getRegisterFormValues() {
   return {
     targetName: String(document.getElementById('bs-bt-register-name')?.value || '').trim(),
@@ -391,7 +472,7 @@ function getApplicableBreedingInferenceDraft(values) {
   if (draft.breedingInferencePrompt !== values.breedingInferencePrompt) return null;
   const editor = document.getElementById('bs-bt-breeding-inference-status');
   const raw = String((editor && 'value' in editor ? editor.value : editor?.textContent) || '').trim();
-  if (!raw || raw === '尚未执行繁育推演。若直接注册，会使用默认繁育心理规则。') return draft.result;
+  if (!raw || raw === '尚未执行繁育推演。直接注册不会生成繁育心理人设。') return draft.result;
   try {
     const edited = JSON.parse(raw);
     if (!edited || typeof edited !== 'object' || Array.isArray(edited)) throw new Error('繁育推演 JSON 必须是对象');
@@ -701,20 +782,114 @@ function renderWorldbookEntryList(ctx, entries = [], { scope = 'character' } = {
   }
 }
 
-function updateBatteryIndicator(activeCharacterCount = 0) {
+const MAINFLOW_PROMPT_TOKEN_INPUT_KEY = '__bs_biotracker_mainflow_prompt_token_input__';
+const MAINFLOW_PROMPT_TOKEN_COUNT_CACHE_KEY = '__bs_biotracker_mainflow_prompt_token_count_cache__';
+
+function estimateTokens(text) {
+  const value = String(text || '');
+  let cjk = 0;
+  for (const char of value) {
+    if (/[぀-ヿ㐀-鿿豈-﫿]/u.test(char)) cjk += 1;
+  }
+  const other = Math.max(0, value.length - cjk);
+  return Math.ceil((cjk * 0.75 + other * 0.25) * 1.12);
+}
+
+function formatTokenEstimate(value, approximate = true) {
+  const tokens = Math.max(0, Math.round(Number(value) || 0));
+  const prefix = approximate ? '~' : '';
+  return tokens >= 1000 ? `${prefix}${(tokens / 1000).toFixed(tokens >= 10000 ? 0 : 1)}k` : `${prefix}${tokens}`;
+}
+
+function getHostTokenCounter() {
+  const ctx = getContextSafe();
+  if (typeof ctx?.getTokenCountAsync === 'function') return { owner: ctx, count: ctx.getTokenCountAsync };
+  if (typeof ctx?.tokenizers?.getTokenCountAsync === 'function') return { owner: ctx.tokenizers, count: ctx.tokenizers.getTokenCountAsync };
+  return null;
+}
+
+function queueHostTokenCount(input, settings) {
+  if (!input?.text || !input.key) return;
+  const existing = globalThis[MAINFLOW_PROMPT_TOKEN_COUNT_CACHE_KEY] || {};
+  if (existing.key === input.key || existing.pendingKey === input.key) return;
+  const tokenizer = getHostTokenCounter();
+  if (!tokenizer) return;
+  globalThis[MAINFLOW_PROMPT_TOKEN_COUNT_CACHE_KEY] = { ...existing, pendingKey: input.key };
+  Promise.resolve(tokenizer.count.call(tokenizer.owner, input.text))
+    .then((count) => {
+      const tokenCount = Number(count);
+      const current = globalThis[MAINFLOW_PROMPT_TOKEN_COUNT_CACHE_KEY] || {};
+      if (!Number.isFinite(tokenCount) || tokenCount < 0) throw new Error('invalid host token count');
+      globalThis[MAINFLOW_PROMPT_TOKEN_COUNT_CACHE_KEY] = {
+        ...current,
+        key: input.key,
+        tokenCount: Math.round(tokenCount),
+        source: 'host tokenizer',
+        pendingKey: '',
+      };
+      updateBatteryIndicator(settings);
+    })
+    .catch((error) => {
+      console.warn('[BS BioTracker] host token count failed; using local estimate', error);
+      const current = globalThis[MAINFLOW_PROMPT_TOKEN_COUNT_CACHE_KEY] || {};
+      globalThis[MAINFLOW_PROMPT_TOKEN_COUNT_CACHE_KEY] = {
+        ...current,
+        key: input.key,
+        tokenCount: estimateTokens(input.text),
+        source: 'local estimate',
+        pendingKey: '',
+      };
+      updateBatteryIndicator(settings);
+    });
+}
+
+function updateBatteryIndicator(settings = null) {
   const icons = document.getElementById('bs-bt-status-icons');
   const fill = document.getElementById('bs-bt-battery-fill');
   if (!icons || !fill) return;
-  const count = Math.max(0, Math.floor(Number(activeCharacterCount) || 0));
-  const chargeRatio = count >= 3 ? 0.18 : count === 2 ? 0.38 : count === 1 ? 0.62 : 0.88;
-  const width = Math.max(3, Math.round(16 * chargeRatio));
+  const budget = Math.max(500, Math.floor(Number(settings?.trackerTokenBudget) || 4096));
+  const injected = globalThis[MAINFLOW_PROMPT_TOKEN_INPUT_KEY];
+  const input = {
+    text: String(injected?.prompt || ''),
+    key: injected?.capturedAt ? String(injected.capturedAt) : '',
+  };
+  const cache = globalThis[MAINFLOW_PROMPT_TOKEN_COUNT_CACHE_KEY] || {};
+  const usingCachedCount = cache.key === input.key && Number.isFinite(Number(cache.tokenCount));
+  const tokenCount = usingCachedCount ? Number(cache.tokenCount) : estimateTokens(input.text);
+  const source = usingCachedCount ? String(cache.source || 'local estimate') : 'local estimate';
+  const usageRatio = tokenCount / budget;
+  const chargeRatio = Math.max(0, 1 - usageRatio);
+  const width = Math.round(16 * chargeRatio);
   fill.setAttribute('width', String(width));
-  icons.dataset.batteryState = count >= 3 ? 'critical' : count === 2 ? 'low' : count === 1 ? 'mid' : 'high';
-  icons.setAttribute('aria-label', `battery ${width}/16 with ${count} tracked active character${count === 1 ? '' : 's'}`);
+  icons.dataset.batteryState = usageRatio >= 1 ? 'critical' : usageRatio >= 0.75 ? 'low' : usageRatio >= 0.45 ? 'mid' : 'high';
+  icons.setAttribute('aria-label', input.text
+    ? `BioTracker 主流注入 ${formatTokenEstimate(tokenCount, source !== 'host tokenizer')} / ${budget.toLocaleString()} token（${source}）；仅作注意力预算警示`
+    : `尚无追踪请求；注意力预算 ${budget.toLocaleString()} token`);
+  icons.title = icons.getAttribute('aria-label');
+  if (input.text && !usingCachedCount) queueHostTokenCount(input, settings);
 }
 
 function syncRacePhysiologyOverrides(settings) {
   setRacePhysiologyOverrides(settings?.racePhysiologyOverrides || {});
+  setDerivedTypeOverrides(settings?.derivedTypeOverrides || {});
+}
+
+function setEncyclopediaSubpage(page) {
+  selectedEncyclopediaSubpage = page === 'derived' ? 'derived' : 'race';
+  document.querySelectorAll('#bs-bt-encyclopedia-tabs [data-encyclopedia-tab]').forEach((node) => {
+    node.classList.toggle('is-active', node.dataset.encyclopediaTab === selectedEncyclopediaSubpage);
+  });
+  document.querySelectorAll('[data-encyclopedia-page]').forEach((node) => {
+    const active = node.dataset.encyclopediaPage === selectedEncyclopediaSubpage;
+    node.classList.toggle('is-active', active);
+    node.hidden = !active;
+  });
+}
+
+function scrollEncyclopediaToTop() {
+  const view = document.getElementById('bs-bt-view-race-encyclopedia');
+  const scroller = view?.closest('.bs-bt-screen-content');
+  if (scroller) scroller.scrollTop = 0;
 }
 
 function getRacePhysiologyFieldStep(field) {
@@ -901,13 +1076,80 @@ function closeRacePhysiologyEditor() {
   if (modal) modal.hidden = true;
 }
 
+function renderDerivedTypeEditor(derivedType) {
+  const editor = document.getElementById('bs-bt-derived-editor');
+  const builtinFlux = DERIVED_TYPE_FLUX_PROFILES[derivedType];
+  const builtinInheritance = DERIVED_TYPE_INHERITANCE_PROFILES[derivedType];
+  if (!editor || !builtinFlux || !builtinInheritance) return;
+  const flux = getDerivedTypeFluxProfile(derivedType) || builtinFlux;
+  const introductionLine = getDerivedTypeIntroductionLine(derivedType);
+  const inheritance = getDerivedTypeInheritanceProfile(derivedType) || builtinInheritance;
+  editor.innerHTML =
+    '<label class="bs-bt-race-editor-field bs-bt-race-editor-field-wide"><span>衍生短敘述</span><textarea id="bs-bt-derived-introduction-line" class="text_pole bs-bt-race-introduction-input">' + escapeHtml(introductionLine) + '</textarea></label>' +
+    '<label class="bs-bt-race-editor-field bs-bt-race-editor-field-wide"><span>Flux 描述</span><textarea id="bs-bt-derived-flux-definition" class="text_pole bs-bt-race-introduction-input">' + escapeHtml(flux.fluxDefinition || '') + '</textarea></label>' +
+    '<label class="bs-bt-race-editor-field"><span>遗传速度</span><input id="bs-bt-derived-inheritance-speed" class="text_pole" type="number" min="0" step="0.01" value="' + escapeHtml(inheritance.inheritanceSpeed) + '" /></label>';
+}
+
+function collectDerivedTypeEditorOverride(derivedType) {
+  const builtinFlux = DERIVED_TYPE_FLUX_PROFILES[derivedType];
+  const builtinInheritance = DERIVED_TYPE_INHERITANCE_PROFILES[derivedType];
+  if (!builtinFlux || !builtinInheritance) return null;
+  const result = {};
+  const introductionLine = String(document.getElementById('bs-bt-derived-introduction-line')?.value || '').trim();
+  const fluxDefinition = String(document.getElementById('bs-bt-derived-flux-definition')?.value || '').trim();
+  const speed = Number(document.getElementById('bs-bt-derived-inheritance-speed')?.value);
+  if (introductionLine) result.introductionLine = introductionLine;
+  if (fluxDefinition && fluxDefinition !== builtinFlux.fluxDefinition) result.fluxDefinition = fluxDefinition;
+  if (Number.isFinite(speed) && speed >= 0 && Math.abs(speed - builtinInheritance.inheritanceSpeed) > 0.0001) result.inheritanceSpeed = speed;
+  return result;
+}
+
+function closeDerivedTypeEditor() {
+  derivedTypeEditorOpen = false;
+  const modal = document.getElementById('bs-bt-derived-editor-modal');
+  if (modal) modal.hidden = true;
+}
+
+function saveDerivedTypeOverrideFromEditor(ctx) {
+  if (!ctx || !selectedDerivedEncyclopedia) return;
+  const settings = getSettings(ctx);
+  const overrides = { ...(settings.derivedTypeOverrides || {}) };
+  const profile = collectDerivedTypeEditorOverride(selectedDerivedEncyclopedia);
+  if (!profile) return;
+  if (Object.keys(profile).length) overrides[selectedDerivedEncyclopedia] = profile;
+  else delete overrides[selectedDerivedEncyclopedia];
+  settings.derivedTypeOverrides = overrides;
+  syncRacePhysiologyOverrides(settings);
+  saveSettings(ctx);
+  updateMainFlowPrompt(ctx);
+  closeDerivedTypeEditor();
+  renderRaceEncyclopediaPage(ctx);
+}
+
+function resetDerivedTypeOverride(ctx) {
+  if (!ctx || !selectedDerivedEncyclopedia) return;
+  const settings = getSettings(ctx);
+  const overrides = { ...(settings.derivedTypeOverrides || {}) };
+  delete overrides[selectedDerivedEncyclopedia];
+  settings.derivedTypeOverrides = overrides;
+  syncRacePhysiologyOverrides(settings);
+  saveSettings(ctx);
+  updateMainFlowPrompt(ctx);
+  closeDerivedTypeEditor();
+  renderRaceEncyclopediaPage(ctx);
+}
+
 function renderRaceEncyclopediaPage(ctx = null) {
   if (ctx) syncRacePhysiologyOverrides(getSettings(ctx));
+  setEncyclopediaSubpage(selectedEncyclopediaSubpage);
   const countNode = document.getElementById('bs-bt-race-count');
   const selectNode = document.getElementById('bs-bt-race-select');
   const outputNode = document.getElementById('bs-bt-race-output');
   const derivedSelectNode = document.getElementById('bs-bt-derived-select');
   const derivedOutputNode = document.getElementById('bs-bt-derived-output');
+  const derivedEditButton = document.getElementById('bs-bt-derived-open-editor');
+  const derivedEditorModal = document.getElementById('bs-bt-derived-editor-modal');
+  const derivedEditorTitle = document.getElementById('bs-bt-derived-editor-title');
   const editButton = document.getElementById('bs-bt-race-open-editor');
   const editorModal = document.getElementById('bs-bt-race-editor-modal');
   const editorTitle = document.getElementById('bs-bt-race-editor-title');
@@ -963,17 +1205,31 @@ function renderRaceEncyclopediaPage(ctx = null) {
 
   if (!selectedDerivedEncyclopedia) {
     derivedOutputNode.textContent = '暂无可显示的衍生资料。';
+    if (derivedEditButton) derivedEditButton.disabled = true;
+    closeDerivedTypeEditor();
     return;
   }
 
+  if (derivedEditButton) {
+    derivedEditButton.disabled = false;
+    derivedEditButton.textContent = getDerivedTypeOverride(selectedDerivedEncyclopedia) ? '编辑覆盖' : '调整参数';
+  }
+  if (derivedEditorModal) derivedEditorModal.hidden = !derivedTypeEditorOpen;
+  if (derivedEditorTitle) derivedEditorTitle.textContent = selectedDerivedEncyclopedia + ' 参数覆盖';
+  if (derivedTypeEditorOpen) renderDerivedTypeEditor(selectedDerivedEncyclopedia);
+
   const fluxProfile = getDerivedTypeFluxProfile(selectedDerivedEncyclopedia);
+  const introductionLine = getDerivedTypeIntroductionLine(selectedDerivedEncyclopedia);
   const fluxName = String(fluxProfile?.fluxName || '未知').trim() || '未知';
   const fluxDefinition = String(fluxProfile?.fluxDefinition || '').trim();
   const exemptions = getDerivedTypeMetabolismExemptions(selectedDerivedEncyclopedia);
+  const inheritanceSpeed = Number(getDerivedTypeInheritanceProfile(selectedDerivedEncyclopedia)?.inheritanceSpeed);
   derivedOutputNode.textContent = [
     `【${selectedDerivedEncyclopedia}】`,
+    ...(introductionLine ? [introductionLine] : []),
     `- Flux: ${fluxName}`,
     `- 代谢抵免: ${exemptions.length > 0 ? exemptions.join(' / ') : '无'}`,
+    `- 遗传速度: ${Number.isFinite(inheritanceSpeed) ? inheritanceSpeed : '未知'}x`,
     fluxDefinition || '- 暂无额外说明。',
   ].join('\n\n');
 }
@@ -1862,6 +2118,12 @@ function getPsychologyView(profile = {}) {
   };
 }
 
+function hasBreedingPsychologyProfile(profile = {}) {
+  const stageProfiles = profile?.psychology?.stageProfiles;
+  return Boolean(stageProfiles && typeof stageProfiles === 'object' && !Array.isArray(stageProfiles)
+    && Object.keys(stageProfiles).length > 0);
+}
+
 function buildRadarSvg(items) {
   const cx = 90;
   const cy = 88;
@@ -2045,7 +2307,7 @@ function renderCurrentOutfitSection(outfitView = {}) {
 }
 
 function renderWardrobeCharacterList(characters = []) {
-  return characters.map((character) => {
+  return characters.filter((character) => character?.profile?.wardrobe?.enabled === true).map((character) => {
     const profile = character?.profile || {};
     const outfit = buildOutfitView(profile);
     const items = getWardrobeItems(profile).filter((item) => Number(item?.id) !== 0);
@@ -2105,10 +2367,16 @@ function renderWardrobePage(ctx) {
     container.innerHTML = '<div class="bs-bt-track-description-empty">尚无注册角色。</div>';
     return;
   }
-  const selected = characters.find((character) => character?.name === selectedWardrobeName);
+  const preparedCharacters = characters.filter((character) => character?.profile?.wardrobe?.enabled === true);
+  if (preparedCharacters.length === 0) {
+    selectedWardrobeName = '';
+    container.innerHTML = '<div class="bs-bt-track-description-empty">尚无已备装角色。请先在「注册 → 备装」生成并套用衣柜。</div>';
+    return;
+  }
+  const selected = preparedCharacters.find((character) => character?.name === selectedWardrobeName);
   if (!selected) {
     selectedWardrobeName = '';
-    container.innerHTML = renderWardrobeCharacterList(characters);
+    container.innerHTML = renderWardrobeCharacterList(preparedCharacters);
     return;
   }
   container.innerHTML = renderWardrobeCharacterPage(selected);
@@ -2197,7 +2465,7 @@ function buildTrackCharacterViewModel(character) {
     },
     description: {
       normalBlocks: parseDescriptionBlocks(descriptions.normalDescription),
-      psychology: getPsychologyView(profile),
+      psychology: hasBreedingPsychologyProfile(profile) ? getPsychologyView(profile) : null,
     },
     pregnancy: {
       eggs: Number(base.eggs) || 0,
@@ -2428,6 +2696,7 @@ function renderTrackDescription(viewModel) {
 
 function renderTrackPsychology(viewModel) {
   const psychology = viewModel.description.psychology;
+  if (!psychology) return '';
   const flags = Array.isArray(psychology.flags) ? psychology.flags : [];
   return `
     <div class="bs-bt-track-section">
@@ -2552,7 +2821,7 @@ function renderTrackDiary(viewModel) {
   const diaryEnabled = viewModel.diary?.enabled !== false;
   const entries = Array.isArray(viewModel.diary?.entries) ? viewModel.diary.entries : [];
   return `
-    ${renderTrackPsychology(viewModel)}
+    ${viewModel.description?.psychology ? renderTrackPsychology(viewModel) : ''}
     ${diaryEnabled ? renderCardCarouselSection(
       '日记',
       entries,
@@ -3401,7 +3670,7 @@ function renderStatusPanel(ctx) {
   const content = document.getElementById('bs-bt-track-content');
   const tabs = document.querySelectorAll('#bs-bt-track-tabs .bs-bt-track-tab');
   if (!list) return;
-  updateBatteryIndicator(characters.filter((item) => item?.profile?.base?.isHere !== false).length);
+  updateBatteryIndicator(settings);
 
   list.innerHTML = '';
   if (latestCall) {
@@ -3994,7 +4263,7 @@ function applyTheme(settings) {
   });
   const brand = document.getElementById('bs-bt-brand');
   if (brand) brand.textContent = 'Bastneth Pager';
-  updateBatteryIndicator(0);
+  updateBatteryIndicator(settings);
   updateClock();
 }
 
@@ -4040,6 +4309,8 @@ function applySettingsToForm(ctx) {
   setValue('bs-bt-trigger', settings.triggerTiming);
   setValue('bs-bt-poll-ms', settings.pollMs);
   setValue('bs-bt-context-size', settings.contextSize);
+  setValue('bs-bt-tracker-token-budget', settings.trackerTokenBudget);
+  setValue('bs-bt-require-full-description-updates', settings.requireFullDescriptionUpdates);
   setValue('bs-bt-diary-recent-limit', settings.diaryRecentLimit);
   setValue('bs-bt-targets', settings.targetNames);
   setValue('bs-bt-tracker-worldbook-mode', normalizeWorldbookMode(settings.trackerWorldbookMode));
@@ -4055,9 +4326,10 @@ function applySettingsToForm(ctx) {
   setConnectStatus(settings.modelOptions.length > 0 ? `已缓存 ${settings.modelOptions.length} 个模型` : '尚未连接');
   registryBreedingInferenceDraft = null;
   setRegisterTab('inference');
-  setBreedingInferenceEditor('尚未执行繁育推演。若直接注册，会使用默认繁育心理规则。');
+  setBreedingInferenceEditor('尚未执行繁育推演。直接注册不会生成繁育心理人设。');
   setBreedingInferenceStatus('');
   setWardrobePrepStatus('角色必须已注册，才能准备衣柜与当前穿着。');
+  setDiaryStatus('角色必须已注册，且同一故事日尚未写过日记。');
   setRegisterStatus('输入名字与 Description 规则后发送注册请求，完成后可在“角色追踪”查看该角色状态变量。');
   syncWorldbookFilterInput(ctx);
   renderWorldbookEntryList(ctx, parseWorldbookExcludeNamesInput(settings.trackerWorldbookExcludeNames));
@@ -4590,11 +4862,13 @@ function updateMainFlowPrompt(ctx) {
   const settings = getSettings(ctx);
   syncRacePhysiologyOverrides(settings);
   const prompt = buildMainFlowPrompt(ctx, settings);
+  globalThis[MAINFLOW_PROMPT_TOKEN_INPUT_KEY] = { capturedAt: Date.now(), prompt };
   try {
     ctx.setExtensionPrompt?.(MAINFLOW_PROMPT_KEY, prompt, 1, Math.max(2, Number(settings.contextSize) || 12), false);
   } catch (error) {
     console.warn('[BS BioTracker] setExtensionPrompt failed', error);
   }
+  updateBatteryIndicator(settings);
 }
 
 function readSettingsFromForm(ctx) {
@@ -4612,6 +4886,8 @@ function readSettingsFromForm(ctx) {
   settings.triggerTiming = String(getValue('bs-bt-trigger')).trim() || 'after_ai';
   settings.pollMs = Math.max(800, Number(getValue('bs-bt-poll-ms')) || 1800);
   settings.contextSize = Math.max(2, Number(getValue('bs-bt-context-size')) || 12);
+  settings.trackerTokenBudget = Math.max(500, Math.min(100000, Math.floor(Number(getValue('bs-bt-tracker-token-budget')) || 4096)));
+  settings.requireFullDescriptionUpdates = Boolean(document.getElementById('bs-bt-require-full-description-updates')?.checked);
   settings.diaryRecentLimit = Math.max(0, Math.min(20, Math.floor(Number(getValue('bs-bt-diary-recent-limit')) || 0)));
   settings.diaryWritingPrompt = String(getValue('bs-bt-diary-writing-prompt')).trim();
   settings.wardrobePrepPrompt = String(getValue('bs-bt-wardrobe-prep-prompt')).trim();
@@ -4955,8 +5231,12 @@ async function ensureModal(ctx) {
     if (!(target instanceof Element)) return;
     const characterButton = target.closest('[data-wardrobe-character]');
     if (characterButton) {
-      selectedWardrobeName = String(characterButton.getAttribute('data-wardrobe-character') || '');
-      renderWardrobePage(ctx);
+      const characterName = String(characterButton.getAttribute('data-wardrobe-character') || '');
+      const character = getChatState(ctx, getSettings(ctx)).characters?.[characterName];
+      if (character?.profile?.wardrobe?.enabled === true) {
+        selectedWardrobeName = characterName;
+        renderWardrobePage(ctx);
+      }
       return;
     }
     if (target.closest('[data-wardrobe-back]')) {
@@ -5094,9 +5374,32 @@ async function ensureModal(ctx) {
   });
   document.getElementById('bs-bt-derived-select')?.addEventListener('change', (event) => {
     selectedDerivedEncyclopedia = String(event.target?.value || '');
+    derivedTypeEditorOpen = false;
     renderRaceEncyclopediaPage(ctx);
   });
+  document.getElementById('bs-bt-derived-open-editor')?.addEventListener('click', () => {
+    if (!selectedDerivedEncyclopedia) return;
+    setEncyclopediaSubpage('derived');
+    scrollEncyclopediaToTop();
+    derivedTypeEditorOpen = true;
+    renderRaceEncyclopediaPage(ctx);
+  });
+  document.getElementById('bs-bt-derived-editor-close')?.addEventListener('click', closeDerivedTypeEditor);
+  document.getElementById('bs-bt-derived-editor-modal')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closeDerivedTypeEditor();
+  });
+  document.getElementById('bs-bt-derived-save-override')?.addEventListener('click', () => {
+    const name = selectedDerivedEncyclopedia;
+    saveDerivedTypeOverrideFromEditor(ctx);
+    globalThis.toastr?.success?.(`[BS BioTracker] 已保存 ${name} 的衍生参数覆盖`);
+  });
+  document.getElementById('bs-bt-derived-reset-override')?.addEventListener('click', () => {
+    const name = selectedDerivedEncyclopedia;
+    resetDerivedTypeOverride(ctx);
+    globalThis.toastr?.success?.(`[BS BioTracker] 已恢复 ${name} 的内置衍生参数`);
+  });
   document.getElementById('bs-bt-race-open-editor')?.addEventListener('click', () => {
+    setEncyclopediaSubpage('race');
     openRacePhysiologyEditor(ctx);
   });
   document.getElementById('bs-bt-race-editor-close')?.addEventListener('click', () => {
@@ -5157,8 +5460,18 @@ async function ensureModal(ctx) {
       setRegisterTab(String(node.getAttribute('data-register-tab') || 'inference'));
     });
   });
+  document.querySelectorAll('#bs-bt-encyclopedia-tabs [data-encyclopedia-tab]').forEach((node) => {
+    node.addEventListener('click', () => {
+      closeRacePhysiologyEditor();
+      closeDerivedTypeEditor();
+      setEncyclopediaSubpage(String(node.dataset.encyclopediaTab || 'race'));
+      scrollEncyclopediaToTop();
+    });
+  });
   document.getElementById('bs-bt-wardrobe-prep-run')?.addEventListener('click', (event) => runWardrobePrepInference(ctx, event.currentTarget));
   document.getElementById('bs-bt-wardrobe-prep-apply')?.addEventListener('click', () => applyWardrobePrep(ctx));
+  document.getElementById('bs-bt-diary-generate')?.addEventListener('click', (event) => generateRegistryDiary(ctx, event.currentTarget));
+  document.getElementById('bs-bt-diary-apply')?.addEventListener('click', () => applyRegistryDiary(ctx));
   document.getElementById('bs-bt-breeding-inference-run')?.addEventListener('click', async (event) => {
     const button = event.currentTarget;
     const values = getRegisterFormValues();
@@ -5263,8 +5576,9 @@ async function ensureModal(ctx) {
       renderStatusPanel(ctx);
       renderFullStatePage(ctx);
       updateMainFlowPrompt(ctx);
-      setRegisterStatus(breedingInference ? `注册完成：${character.name}（已套用繁育推演）` : `注册完成：${character.name}`);
-      setView('track-list');
+      setRegisterStatus(breedingInference
+        ? `注册完成：${character.name}（已套用繁育推演）。可继续备装或写日记。`
+        : `注册完成：${character.name}。可继续备装或写日记。`);
       globalThis.toastr?.success?.(`[BS BioTracker] 已注册 ${character.name}`);
     } catch (error) {
       console.error('[BS BioTracker] runRegistry failed', error);

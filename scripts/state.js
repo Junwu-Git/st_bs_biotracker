@@ -113,6 +113,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   triggerTiming: 'after_ai',
   pollMs: 1800,
   contextSize: 12,
+  trackerTokenBudget: 4096,
+  requireFullDescriptionUpdates: false,
   diaryRecentLimit: 5,
   diaryWritingPrompt: DEFAULT_DIARY_WRITING_PROMPT,
   wardrobePrepPrompt: '',
@@ -128,6 +130,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   registryCustomNotes: '',
   registryDescriptionGuides: DEFAULT_REGISTRY_DESCRIPTION_GUIDES,
   racePhysiologyOverrides: {},
+  derivedTypeOverrides: {},
   chatStates: {},
 });
 
@@ -1035,6 +1038,17 @@ export function getSettings(ctx) {
   const diaryRecentLimit = Math.max(0, Math.min(20, Math.floor(Number.isFinite(rawDiaryRecentLimit) ? rawDiaryRecentLimit : DEFAULT_SETTINGS.diaryRecentLimit)));
   if (settings.diaryRecentLimit !== diaryRecentLimit) {
     settings.diaryRecentLimit = diaryRecentLimit;
+    shouldSave = true;
+  }
+  const rawTrackerTokenBudget = Number(settings.trackerTokenBudget);
+  const trackerTokenBudget = Math.max(500, Math.min(100000, Math.floor(Number.isFinite(rawTrackerTokenBudget) ? rawTrackerTokenBudget : DEFAULT_SETTINGS.trackerTokenBudget)));
+  if (settings.trackerTokenBudget !== trackerTokenBudget) {
+    settings.trackerTokenBudget = trackerTokenBudget;
+    shouldSave = true;
+  }
+  const requireFullDescriptionUpdates = settings.requireFullDescriptionUpdates === true;
+  if (settings.requireFullDescriptionUpdates !== requireFullDescriptionUpdates) {
+    settings.requireFullDescriptionUpdates = requireFullDescriptionUpdates;
     shouldSave = true;
   }
   if (!settings.registryDescriptionGuides || typeof settings.registryDescriptionGuides !== 'object') {

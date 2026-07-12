@@ -804,6 +804,47 @@ export const RACE_PHYSIOLOGY_FIELDS = Object.freeze([
 ]);
 
 let customRacePhysiologyProfiles = {};
+let customDerivedTypeProfiles = {};
+
+function sanitizeDerivedTypeProfilePatch(profile) {
+  if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return null;
+  const result = {};
+  for (const field of ['introductionLine', 'fluxDefinition']) {
+    if (!Object.prototype.hasOwnProperty.call(profile, field)) continue;
+    const value = String(profile[field] || '').trim();
+    if (value) result[field] = value;
+  }
+  if (Object.prototype.hasOwnProperty.call(profile, 'inheritanceSpeed')) {
+    const value = Number(profile.inheritanceSpeed);
+    if (Number.isFinite(value)) result.inheritanceSpeed = Math.max(0, value);
+  }
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+export function setDerivedTypeOverrides(overrides = {}) {
+  const next = {};
+  if (overrides && typeof overrides === 'object' && !Array.isArray(overrides)) {
+    for (const [derivedType, profile] of Object.entries(overrides)) {
+      const key = String(derivedType || '').trim();
+      const patch = sanitizeDerivedTypeProfilePatch(profile);
+      if (key && patch) next[key] = Object.freeze(patch);
+    }
+  }
+  customDerivedTypeProfiles = Object.freeze(next);
+}
+
+export function getDerivedTypeOverride(derivedType) {
+  const baseName = getBaseDerivedTypeName(derivedType);
+  const profile = customDerivedTypeProfiles[baseName];
+  return profile ? {
+    ...profile,
+  } : null;
+}
+
+export function getDerivedTypeIntroductionLine(derivedType) {
+  const baseName = getBaseDerivedTypeName(derivedType);
+  return String(customDerivedTypeProfiles[baseName]?.introductionLine || '').trim();
+}
 
 function sanitizeRacePhysiologyProfilePatch(profile) {
   if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return null;
@@ -931,19 +972,28 @@ export function getBaseDerivedTypeName(derivedType) {
 export function getDerivedTypeInheritanceProfile(derivedType) {
   const baseName = getBaseDerivedTypeName(derivedType);
   if (!baseName) return null;
-  return DERIVED_TYPE_INHERITANCE_PROFILES[baseName] || null;
+  const builtin = DERIVED_TYPE_INHERITANCE_PROFILES[baseName];
+  if (!builtin) return null;
+  const inheritanceSpeed = customDerivedTypeProfiles[baseName]?.inheritanceSpeed;
+  return inheritanceSpeed === undefined ? builtin : { ...builtin, inheritanceSpeed };
 }
 
 export function getDerivedTypeFluxProfile(derivedType) {
   const baseName = getBaseDerivedTypeName(derivedType);
   if (!baseName) return null;
-  return DERIVED_TYPE_FLUX_PROFILES[baseName] || null;
+  const builtin = DERIVED_TYPE_FLUX_PROFILES[baseName];
+  if (!builtin) return null;
+  const override = customDerivedTypeProfiles[baseName] || {};
+  return {
+    ...builtin,
+    ...(override.fluxDefinition !== undefined ? { fluxDefinition: override.fluxDefinition } : {}),
+  };
 }
 
 export function getDerivedTypeMetabolismExemptions(derivedType) {
   const baseName = getBaseDerivedTypeName(derivedType);
   if (!baseName) return [];
-  return DERIVED_TYPE_METABOLISM_EXEMPTIONS[baseName] || [];
+  return [...(DERIVED_TYPE_METABOLISM_EXEMPTIONS[baseName] || [])];
 }
 
 export function parseRaceDescriptor(rawRace) {

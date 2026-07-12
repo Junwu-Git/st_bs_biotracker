@@ -932,6 +932,23 @@
   overflow-wrap: anywhere;
 }
 
+#bs-biotracker-settings .bs-bt-setting-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+}
+
+#bs-biotracker-settings .bs-bt-setting-toggle-row label {
+  flex: 0 1 auto;
+  margin: 0;
+}
+
+#bs-biotracker-settings .bs-bt-setting-toggle-row input[type='checkbox'] {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
 #bs-biotracker-settings .bs-bt-inline-status[data-kind='error'] {
   color: #8a1f1f;
 }
@@ -1210,7 +1227,20 @@
 }
 
 #bs-biotracker-settings #bs-bt-register-tabs {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+#bs-biotracker-settings #bs-bt-encyclopedia-tabs {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+#bs-biotracker-settings .bs-bt-encyclopedia-page {
+  display: grid;
+  gap: 10px;
+}
+
+#bs-biotracker-settings .bs-bt-encyclopedia-page[hidden] {
+  display: none;
 }
 
 #bs-biotracker-settings .bs-bt-full-state-tabs {

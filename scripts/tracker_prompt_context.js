@@ -154,7 +154,7 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '',
   '[wardrobe / outfit]',
   '- wardrobe 是角色衣柜，包含 items；outfit 是当前穿着。主流敘事通常只需要关注在场角色的 outfit。',
-  '- 衣物 item 字段：id/name/note/slot/masking/support/capacity/convenience。id 使用整数；默认主件 id=0 表示全裸，不要加入 wardrobe.items。note 只写衣物稳定外观与来源：颜色、材质、版型、长短、固定开口、图案、制服/病服/借装来源等；皮肤暴露、开衩、透肤、深领等稳定外观写在 note。禁止写当前穿着反应、角色感受、近期身体变化、怀孕/胀痛/压胸/勒红/变紧/显怀等动态状态；这些由四维、pregFit 与当轮叙事推导。 slot=main 为主件且只能穿一件；slot=accessory 为配件补正，可叠加。配件单项只能 -3 到 3，通常只影响 1-2 个最相关维度，其他维度填 0。',
+  '- 衣物 item 字段：id/name/note/slot/masking/support/capacity/convenience。id 使用整数；默认主件 id=0 表示全裸，不要加入 wardrobe.items。note 只写衣物稳定外观与来源：颜色、材质、版型、长短、固定开口、图案、制服/病服/借装来源等；皮肤暴露、开衩、透肤、深领等稳定外观写在 note。禁止写当前穿着反应、角色感受、近期身体变化、怀孕/胀痛/压胸/勒红/变紧/显怀等动态状态；这些由四维、pregFit 与当轮叙事推导。slot=main 为一次只能穿一件的完整基础套装：一般将上衣与下着合并为同一 main（连身裙、连体衣除外），不得拆成彼此互斥的 main，也不得把下着放入 accessory；四维按整套评分。slot=accessory 为可叠加的外套、鞋履、帽子、饰品或功能配件补正。配件单项只能 -3 到 3，通常只影响 1-2 个最相关维度，其他维度填 0。',
   '- 四维含义：masking=掩盖身体曲线、孕肚、胸腹变化的程度，不等于皮肤裸露程度，露肤、开衩、透肤等稳定外观由 note 描述；support=对胸、腹、腰、重心的承托程度；capacity=容许体型变化的程度；convenience=行动、穿脱、如厕、哺乳或排解需求的方便程度。',
   '- 可用 bsAddWardrobeItem 添加/更新长期衣柜衣物，bsRemoveWardrobeItem 删除长期衣柜衣物，bsChangeOutfit 更换当前主件和配件列表。bsChangeOutfit 是覆盖式换装：mainItemId 是换装后的唯一主件；accessoryItemIds 是换装后仍穿戴的完整配件列表。要脱掉某配件，就传不包含该 id 的新列表；脱掉所有配件传 accessoryItemIds: []；全裸传 mainItemId: 0 且 accessoryItemIds: []。',
   '- 临时衣物（如病服、借来的外套、旅馆睡衣）不要加入 wardrobe；在 bsChangeOutfit 传 temporaryItems，并让 mainItemId/accessoryItemIds 指向其中 id。换回衣柜服装时传 temporaryItems: [] 清除临时衣物。',
@@ -164,7 +164,7 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '[descriptions]',
   '- normalDescription / pregnantDescription 为文字描述栏位。',
   '- 两者格式固定为：字段名|描述内容;;字段名|描述内容;;...字段名|描述内容;;',
-  '- 使用 bsSetDescription 时，可以只传需要变化的既有子字段；未传入的子字段会保留旧值，需要因故事變化而實時更新子字段。',
+  '- 使用 bsSetDescription 前，必须逐一检查该描述栏位全部既有子字段；未传入的子字段会保留旧值，且仅代表它已检查并确认完全不变。不得为了简短而省略受本轮剧情、姿势、衣着、表情、身体状态或环境影响的字段。',
   '- 不要新增角色原本没有的描述子字段；只能更新 existing_state 中该角色该 descriptions 已存在的字段名。',
   '- 不要改写成自然段，不要省略字段名，不要把 ;; 或 | 换成别的分隔方式。',
   '',
@@ -190,11 +190,17 @@ function buildTrackerMetabolismGuide(payload = null) {
   const fluxNames = collectRelevantFluxNames(payload || {});
   const diaryEnabled = payload?.diary_enabled !== false;
   const wardrobeEnabled = payload?.wardrobe_enabled === true;
+  const breedingPsychologyEnabled = payload?.breeding_psychology_enabled === true;
   let baseGuide = diaryEnabled
     ? TRACKER_VARIABLE_GUIDE_PROMPT
     : TRACKER_VARIABLE_GUIDE_PROMPT.replace(`${TRACKER_DIARY_SECTION}\n`, '');
   if (!wardrobeEnabled) {
     baseGuide = baseGuide.replace(/\n?\[wardrobe \/ outfit\][\s\S]*?\n\[descriptions\]/, '\n[descriptions]');
+  }
+  if (!breedingPsychologyEnabled) {
+    baseGuide = baseGuide
+      .replace('、psychology', '')
+      .replace(/\n?\[psychology\][\s\S]*?\n\[children\]/, '\n[children]');
   }
   return fluxNames.length > 0
     ? baseGuide.replace(
@@ -232,6 +238,17 @@ export function buildTrackerSystemPrompt(basePrompt = '', descriptionGuides = nu
   if (!diaryEnabled) {
     parts.push('[diary]\n- diary 系统当前已关闭（settings.diaryRecentLimit = 0）。本轮不要参考 diary，也不要调用 bsWriteDiary。');
   }
+  parts.push(payload?.require_full_description_updates === true
+    ? [
+      '[descriptions 完整更新模式：强制提示约束]',
+      '- 只要调用 bsSetDescription 更新 normalDescription 或 pregnantDescription，其对应字符串必须带回该角色该栏位所有既有子字段，不得只传部分字段。',
+      '- 即使字段内容未改变，也必须原样带回；先完整检查，再按既有字段顺序输出。此规则优先于节省 token 的考虑。',
+      '- 若因上下文缺失无法可靠填写某个字段，则不要调用该栏位的 bsSetDescription；不要编造内容或交出不完整更新。',
+    ].join('\n')
+    : [
+      '[descriptions 更新勤勉规则]',
+      '- 若调用 bsSetDescription，先逐字段检查；所有受本轮影响的既有字段必须一并更新。省略只允许用于已确认完全不变的字段。',
+    ].join('\n'));
 
   if (descriptionGuides) {
     parts.push([

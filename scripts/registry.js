@@ -351,7 +351,7 @@ export function buildWardrobePrepSystemPrompt(settings, options = {}) {
     '你是 AIRP 女性角色衣柜备装初始化器。',
     '你只为 payload.target_character 生成衣柜 JSON，不得新增其他角色。',
     '根据角色卡、世界书、最近对话、已注册状态、normalDescription/pregnantDescription 与衣柜记录中的服装线索，推断该角色合理拥有的长期衣物与当前穿着。',
-    `默认生成 ${mainCount} 件 main 主件、${accessoryCount} 件 accessory 配件；若用户额外提示指定更合理的数量或场景，可在接近该数量的范围内微调。`,
+    `默认生成 ${mainCount} 套 main 主件、${accessoryCount} 件 accessory 配件；main 的计数单位是完整套装，不是单件。若用户额外提示指定更合理的数量或场景，可在接近该数量的范围内微调。`,
     '只输出 JSON，不要输出额外解释。',
     'JSON 顶层结构必须是：',
     '{',
@@ -365,7 +365,7 @@ export function buildWardrobePrepSystemPrompt(settings, options = {}) {
     '每件衣物必须包含 id/name/note/slot/masking/support/capacity/convenience。',
     'note 只写衣物稳定外观与来源：颜色、材质、版型、长短、固定开口、图案、制服/病服/借装来源等。皮肤暴露、开衩、透肤、深领等稳定外观写在 note。禁止写当前穿着反应、角色感受、近期身体变化、怀孕/胀痛/压胸/勒红/变紧/显怀等动态状态；这些由四维、pregFit 与当轮叙事推导。',
     'id 必须使用正整数，从 1 开始递增且不可重复；0 保留给全裸。name 使用中文或角色设定中的自然名称。',
-    'slot 只能是 main 或 accessory。main 是主件；accessory 是配件补正。',
+    'slot 只能是 main 或 accessory。main 是可独立穿着的完整基础套装：一般必须把上衣与下着合并为同一个 main（连身裙、连体衣等一体式服装除外），name 与 note 都要同时写出上下身；不得把卫衣/T恤与牛仔裤/裙子拆成彼此互斥的多个 main，也不得把下着塞进 accessory。main 的四维按整套效果评分。accessory 才是可独立叠加在 main 上的外套、鞋履、帽子、饰品、托腹带等配件补正。',
     '四维数值范围 -10 到 10：masking=掩盖身体曲线、孕肚、胸腹变化的程度；support=对胸、腹、腰、重心的承托程度，高表示托得住但可能偏束，低表示松散；capacity=容许体型变化的程度；convenience=行动、穿脱、如厕、哺乳或排解需求的方便程度。',
     '主件通常使用 0 到 10；配件单项只能 -3 到 3，通常只影响 1-2 个最相关维度，其他维度必须填 0，避免把配件写成整套服装。',
     '配件例：外套可提高 masking；托腹带可提高 support 或 capacity；高跟鞋可降低 convenience；鞋履通常不应大幅提高 support，除非 note 明确是矫正/固定用途。',
@@ -404,7 +404,8 @@ async function runBreedingInference(settings, payload, options = {}) {
   const systemPrompt = options.breedingInferenceSystemPrompt || buildBreedingInferenceSystemPrompt(settings, options);
   recordBreedingInferenceRequestDebug(systemPrompt, payload);
   try {
-    const result = await callOpenAICompatible(settings, payload, systemPrompt);
+    const rawResult = await callOpenAICompatible(settings, payload, systemPrompt);
+    const result = normalizeBreedingInferenceResult(rawResult);
     const stageProfiles = normalizePsychologyStageProfiles(result?.stageProfiles);
     const missing = getMissingPsychologyStageProfileKeys(stageProfiles);
     if (missing.length > 0) {
@@ -421,6 +422,24 @@ async function runBreedingInference(settings, payload, options = {}) {
     recordBreedingInferenceResultDebug(null, error);
     throw error;
   }
+}
+
+export function normalizeBreedingInferenceResult(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  const psychology = result.psychology && typeof result.psychology === 'object' && !Array.isArray(result.psychology)
+    ? result.psychology
+    : {};
+  const profilePsychology = result.profile?.psychology && typeof result.profile.psychology === 'object' && !Array.isArray(result.profile.psychology)
+    ? result.profile.psychology
+    : {};
+  return {
+    ...result,
+    ...(result.mens === undefined && (psychology.mens || profilePsychology.mens) ? { mens: psychology.mens || profilePsychology.mens } : {}),
+    ...(result.preg === undefined && (psychology.preg || profilePsychology.preg) ? { preg: psychology.preg || profilePsychology.preg } : {}),
+    ...(result.stageProfiles === undefined && (psychology.stageProfiles || profilePsychology.stageProfiles)
+      ? { stageProfiles: psychology.stageProfiles || profilePsychology.stageProfiles }
+      : {}),
+  };
 }
 
 function getMissingPsychologyStageProfileKeys(stageProfiles) {
@@ -537,6 +556,42 @@ export async function runRegistryWardrobeInference(ctx, options = {}) {
   return sanitizeWardrobePrepResult(result);
 }
 
+export async function runRegistryDiaryInference(ctx, options = {}) {
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const requestedTargetName = String(options.targetName || '').trim();
+  if (!requestedTargetName) throw new Error('日记生成需要 targetName');
+  const targetName = resolveRegisteredCharacterName(chatState, requestedTargetName);
+  if (!targetName) throw new Error(`日记生成需要已注册角色：${requestedTargetName}`);
+  const diaryWritingPrompt = String(options.diaryWritingPrompt || settings.diaryWritingPrompt || DEFAULT_DIARY_WRITING_PROMPT).trim();
+  const requestedDate = String(options.requestedDate || '').trim();
+  const payload = await buildRegistryPayload(ctx, settings, chatState, {
+    ...options,
+    targetName,
+    reason: 'diary_inference',
+    userInstruction: diaryWritingPrompt,
+  });
+  payload.diary_writing_prompt = diaryWritingPrompt;
+  payload.requested_diary_date = requestedDate || null;
+  payload.existing_character_state = chatState.characters[targetName];
+  const systemPrompt = [
+    '你是 AIRP 角色主观日记写作者。',
+    '只为 payload.target_character 写一篇事后回顾式日记，不得替其他角色写。',
+    '结合角色资料、现有状态、最近聊天与既有日记，使用第一人称，保持角色语气与认知边界。',
+    '不要把日记写成即时旁白、系统总结或数值清单。',
+    '严格遵守 payload.diary_writing_prompt。',
+    requestedDate
+      ? 'time 必须使用 payload.requested_diary_date。'
+      : 'payload.requested_diary_date 为空时，请依故事上下文自行填写合适的日期标题；不要使用现实系统日期。',
+    '只输出 JSON：{"time":"日期标题","content":"日记正文"}。',
+  ].join('\n');
+  const result = await callOpenAICompatible(settings, payload, systemPrompt);
+  const time = String(result?.time || requestedDate || '').trim();
+  const content = String(result?.content || '').trim();
+  if (!time || !content) throw new Error('日记生成结果缺少 time 或 content');
+  return { time, content };
+}
+
 export async function runRegistryBreedingInference(ctx, options = {}) {
   const settings = getSettings(ctx);
   const chatState = getChatState(ctx, settings);
@@ -562,12 +617,12 @@ export async function runRegistryBreedingInference(ctx, options = {}) {
 
 
 export function buildRegistrySystemPrompt(settings, options = {}) {
+  const includeBreedingPsychology = Boolean(options.includeBreedingPsychology);
   const guides = {
     ...DEFAULT_REGISTRY_DESCRIPTION_GUIDES,
     ...(settings?.registryDescriptionGuides || {}),
     ...(options.descriptionGuides || {}),
   };
-  const diaryWritingPrompt = String(options.diaryWritingPrompt || settings?.diaryWritingPrompt || DEFAULT_DIARY_WRITING_PROMPT).trim();
   const customNotes = String(options.customNotes || settings?.registryCustomNotes || '').trim();
   const declaredRace = String(options.declaredRace || '').trim();
   const embryoTypeLorePrompt = buildEmbryoTypeLorePrompt(options.payload || {}, { includeAllIfEmpty: true });
@@ -582,18 +637,20 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     `  阶段预览: ${value.preview}`,
   ]);
   const psyPregBoolLines = Object.entries(PSY_PREG_BOOL_FIELDS).map(([key, value]) => `- psychology.preg.${key}: ${value.definition}`);
-  return [
+  const prompt = [
     racePhysiologyPrompt,
     '你是 AIRP 女性角色注册初始化器。',
     '只在用户明确要求注册指定角色时工作，不得擅自新增其他角色。',
     '根据角色卡、用户要求、已有资料，输出角色初始化 JSON。',
-    '正式注册前可能已有 payload.breeding_inference（繁育推演）。若存在，必须优先把它当作繁育心理初稿，再结合角色资料校正，不要无故忽略。',
+    includeBreedingPsychology
+      ? 'payload.breeding_inference 是已确认的繁育推演。必须优先把它当作繁育心理初稿，再结合角色资料校正，不要无故忽略。'
+      : '本次未启用繁育心理推演：不要输出、补全或推断任何繁育阶段人格字段，保留角色卡原有的阶段人设与表现。',
     '你只需要填写角色注册时真正需要声明的内容，不需要补充其他无关信息。',
     '不要扩写额外分类，不要发散到注册步骤之外的内容。',
     '你只需要填写以下声明内容：',
     '1. 角色基础注册：base.age、base.race、base.vitalityLevel、base.psyStressLevel、base.libido、base.uterinePressure、base.latestSexDays、base.sperms、metabolism',
     '2. 情感与妊娠经验：experience',
-    '3. 繁育心理：psychology.mens 或 psychology.preg（二选一，互斥）',
+    ...(includeBreedingPsychology ? ['3. 繁育心理：psychology.mens 或 psychology.preg（二选一，互斥）'] : []),
     '4. 既有孩子记录：children',
     '5. 初登场即怀孕：pregnant.pregnantDays、pregnant.fetusesCount、pregnant.fetuses',
     '6. 文字描述栏位：descriptions',
@@ -697,15 +754,7 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     String(guides.normalDescription || DEFAULT_REGISTRY_DESCRIPTION_GUIDES.normalDescription),
     '[pregnantDescription]',
     String(guides.pregnantDescription || DEFAULT_REGISTRY_DESCRIPTION_GUIDES.pregnantDescription),
-    '【7. 首篇日记（可选）】',
-    '参数说明：diary 是角色主观日记数组；注册时可按角色个性决定是否直接写下第一篇日记。',
-    '- diary[*].time: 日记的日期标题，不是具体钟点；应填写故事内日期、年月日、某日/第几天等日期性标题。不要填 HH:mm、午後 这类时刻。',
-    '- diary[*].content: 像角色事后写下的私人记录，而不是即时心声、旁白或客观状态摘要。',
-    '- 若角色本来就不爱写、不会写、或当前没有合理的起始日记，可直接省略 diary 或返回空数组。',
-    '- 若要填写首篇日记，内容与起始时间必须严格遵守下列用户自订规则：',
-    '[diary]',
-    diaryWritingPrompt || DEFAULT_DIARY_WRITING_PROMPT,
-    '【8. 角色补充设定】',
+    `【${includeBreedingPsychology ? 7 : 6}. 角色补充设定】`,
     customNotes ? customNotes : '无',
     '若提供了角色补充设定，必须优先视为该角色已明确声明的特征，并在推演、注册与备装相关字段中如实体现；不要忽略，也不要擅自扩写超出原意的内容。',
     '若角色补充设定明确描述的是一种未来也会持续生效、且倍率不为 1 的妊娠体质、祝福、诅咒、冻结或延长效果，即使角色当前未怀孕，也必须写入 bio.gestationModifierMultiplier、bio.gestationModifierName、bio.gestationModifierDescription；普通妊娠不得补写 bio。',
@@ -794,12 +843,6 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '      "companionship": 0',
     '    },',
     '    "children": [],',
-    '    "diary": [',
-    '      {',
-    '        "time": "string",',
-    '        "content": "string"',
-    '      }',
-    '    ],',
     '    "descriptions": {',
     '      "normalDescription": "string",',
     '      "pregnantDescription": "string"',
@@ -811,6 +854,17 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '如果角色没有孩子，children 返回 [] 或省略。',
     '如果角色没有明确经验背景，experience 只填能确定的部分。',
   ].join('\n');
+  if (includeBreedingPsychology) return prompt;
+  return prompt
+    .replace(/【3\. 繁育心理】[\s\S]*?(?=【4\. 既有孩子记录】)/, '')
+    .replace(/\n\s*"psychology": \{[\s\S]*?\n\s*\},\n\s*"metabolism": \{/, '\n    "metabolism": {')
+    .replace('4. 既有孩子记录：children', '3. 既有孩子记录：children')
+    .replace('5. 初登场即怀孕：', '4. 初登场即怀孕：')
+    .replace('6. 文字描述栏位：descriptions', '5. 文字描述栏位：descriptions')
+    .replace('【4. 既有孩子记录】', '【3. 既有孩子记录】')
+    .replace('【5. 初登场即怀孕】', '【4. 初登场即怀孕】')
+    .replace('【5.1 妊娠變速类补充设定', '【4.1 妊娠變速类补充设定')
+    .replace('【6. 文字描述栏位】', '【5. 文字描述栏位】');
 }
 
 const EXPERIENCE_FIELDS = [
@@ -1126,12 +1180,13 @@ function sanitizeRegistryProfile(profile, baseProfile) {
   return sanitized;
 }
 
-export function applyRegistryResult(chatState, result) {
+export function applyRegistryResult(chatState, result, { allowBreedingPsychology = true } = {}) {
   const name = String(result?.name || '').trim();
   if (!name) throw new Error('注册结果缺少角色名称');
   const current = chatState.characters[name];
   const base = current && typeof current === 'object' ? current : createDefaultFemaleState(name);
   const sanitizedProfile = sanitizeRegistryProfile(result.profile, base.profile);
+  if (!allowBreedingPsychology) delete sanitizedProfile.psychology;
   const effectiveRace = sanitizedProfile.base?.race ?? base.profile.base.race;
   const mergedRaceProfile = getMergedRacePhysiologyProfile(effectiveRace);
   const basePsychology = normalizeCharacterPsychologyState(base).profile.psychology;
@@ -1293,8 +1348,10 @@ export async function runRegistry(ctx, options = {}) {
   const customNotes = String(options.customNotes || settings.registryCustomNotes || '').trim();
   const declaredRace = String(options.declaredRace || '').trim();
   if (!targetName) throw new Error('runRegistry 需要 targetName');
+  const includeBreedingPsychology = Boolean(options.breedingInference);
   const payload = await buildRegistryPayload(ctx, settings, chatState, { ...options, customNotes, declaredRace });
-  if (options.breedingInference) payload.breeding_inference = options.breedingInference;
+  payload.breeding_psychology_enabled = includeBreedingPsychology;
+  if (includeBreedingPsychology) payload.breeding_inference = options.breedingInference;
   try {
     const currentCharacterText = JSON.stringify(payload.current_character) || '';
     const characterWorldBookText = JSON.stringify(payload.character_worldbook) || '';
@@ -1316,7 +1373,7 @@ export async function runRegistry(ctx, options = {}) {
   } catch (error) {
     console.warn('[BS BioTracker][registry] payload size debug failed', error);
   }
-  const systemPrompt = options.systemPrompt || buildRegistrySystemPrompt(settings, { ...options, customNotes, declaredRace, payload });
+  const systemPrompt = options.systemPrompt || buildRegistrySystemPrompt(settings, { ...options, customNotes, declaredRace, payload, includeBreedingPsychology });
   recordRegistryRequestDebug(systemPrompt, payload);
   try {
     const result = await callOpenAICompatible(
@@ -1341,7 +1398,7 @@ export async function runRegistry(ctx, options = {}) {
       }
     }
     recordRegistryResultDebug(result);
-    const character = applyRegistryResult(chatState, result);
+    const character = applyRegistryResult(chatState, result, { allowBreedingPsychology: includeBreedingPsychology });
     recordChatStateSnapshot(ctx, chatState, { reason: 'registry' });
     saveSettings(ctx);
     return character;

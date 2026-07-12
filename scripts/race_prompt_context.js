@@ -1,4 +1,4 @@
-import { getDerivedTypeFluxProfile, getDerivedTypeMetabolismExemptions, getEmbryoTypeByRace, getMergedRacePhysiologyProfile, getRaceComponents, getRaceIntroductionLine, getRacePhysiologyProfile } from './race_config.js';
+import { getDerivedTypeFluxProfile, getDerivedTypeIntroductionLine, getDerivedTypeMetabolismExemptions, getEmbryoTypeByRace, getMergedRacePhysiologyProfile, getRaceComponents, getRaceIntroductionLine, getRacePhysiologyProfile } from './race_config.js';
 
 function formatNumber(value, digits = 2) {
   const num = Number(value);
@@ -225,12 +225,14 @@ function buildDerivedFluxLoreBlock(derivedType) {
   const value = String(derivedType || '').trim();
   if (!value) return '';
   const fluxProfile = getDerivedTypeFluxProfile(value);
+  const introductionLine = getDerivedTypeIntroductionLine(value);
   const fluxDefinition = String(fluxProfile?.fluxDefinition || '').trim();
   if (!fluxDefinition) return '';
   const exemptions = getDerivedTypeMetabolismExemptions(value);
   return [
     '[衍生需求补充设定]',
     `【${value}】`,
+    ...(introductionLine ? [introductionLine] : []),
     `该衍生类型由 flux 抵免的普通需求：${exemptions.length > 0 ? exemptions.join(' / ') : '无'}。未被抵免的需求仍会作为 metabolism 保留。`,
     fluxDefinition,
   ].join('\n');

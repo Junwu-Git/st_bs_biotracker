@@ -154,6 +154,18 @@
             </div>
 
             <div class="settings_section">
+              <label for="bs-bt-tracker-token-budget">追踪提示词注意力预算（估算 token，仅作为左上角电池的插件请求体积警示，不限制發送）</label>
+              <input id="bs-bt-tracker-token-budget" class="text_pole" type="number" min="500" max="100000" step="100" />
+            </div>
+
+            <div class="settings_section">
+              <div class="bs-bt-setting-toggle-row">
+                <input id="bs-bt-require-full-description-updates" type="checkbox" />
+                <label for="bs-bt-require-full-description-updates">bsSetDescription 完整更新模式(仅为LLM提示词要求，不保證成效)</label>
+              </div>
+            </div>
+
+            <div class="settings_section">
               <label for="bs-bt-diary-recent-limit">送入分析的单角色最近日记数（设 0 视为关闭日记系统）</label>
               <input id="bs-bt-diary-recent-limit" class="text_pole" type="number" min="0" max="20" step="1" />
             </div>
@@ -211,7 +223,7 @@
             <div class="settings_section">
               <label for="bs-bt-register-custom-notes">角色补充设定</label>
               <textarea id="bs-bt-register-custom-notes" class="text_pole bs-bt-textarea" rows="3"
-                placeholder="推演、注册、备装都会参考。例如：羊膜绒毛膜为 MCMA、时常泌乳体质、特殊繁殖设定、职业衣着偏好等"></textarea>
+                placeholder="推演、注册、备装、日记都会参考。例如：羊膜绒毛膜为 MCMA、时常泌乳体质、特殊繁殖设定、职业衣着偏好等"></textarea>
             </div>
 
             <div class="settings_section">
@@ -219,6 +231,7 @@
                 <button type="button" class="bs-bt-track-tab is-active" data-register-tab="inference">推演</button>
                 <button type="button" class="bs-bt-track-tab" data-register-tab="registry">注册</button>
                 <button type="button" class="bs-bt-track-tab" data-register-tab="wardrobe">备装</button>
+                <button type="button" class="bs-bt-track-tab" data-register-tab="diary">日记</button>
               </div>
             </div>
 
@@ -238,7 +251,7 @@
               <div class="settings_section">
                 <label for="bs-bt-breeding-inference-status">繁育推演</label>
                 <textarea id="bs-bt-breeding-inference-status" class="text_pole bs-bt-textarea bs-bt-status-box"
-                  rows="14">尚未执行繁育推演。若直接注册，会使用默认繁育心理规则。</textarea>
+                  rows="14">尚未执行繁育推演。直接注册不会生成繁育心理人设。</textarea>
                 <div id="bs-bt-breeding-inference-message" class="bs-bt-inline-status"></div>
               </div>
             </div>
@@ -253,12 +266,6 @@
               <div class="settings_section">
                 <label for="bs-bt-registry-pregnant-description">注册默认 pregnantDescription 规则</label>
                 <textarea id="bs-bt-registry-pregnant-description" class="text_pole bs-bt-textarea" rows="8"></textarea>
-              </div>
-
-              <div class="settings_section">
-                <label for="bs-bt-diary-writing-prompt">日记写作规则</label>
-                <textarea id="bs-bt-diary-writing-prompt" class="text_pole bs-bt-textarea" rows="5"
-                  placeholder="例如：日记要有事后整理感，至少两段；包含事件、身体感受、自我解释、情绪反刍，不要写成即时心声。"></textarea>
               </div>
 
               <div class="settings_section bs-bt-action-row">
@@ -306,6 +313,28 @@
               <div class="settings_section">
                 <div class="bs-bt-status-title">备装状态</div>
                 <pre id="bs-bt-wardrobe-prep-status" class="bs-bt-status-box">角色必须已注册，才能准备衣柜与当前穿着。</pre>
+              </div>
+            </div>
+            <div class="bs-bt-register-page" data-register-page="diary" hidden>
+              <div class="settings_section">
+                <label for="bs-bt-diary-writing-prompt">日记写作规则</label>
+                <textarea id="bs-bt-diary-writing-prompt" class="text_pole bs-bt-textarea" rows="5"
+                  placeholder="例如：日记要有事后整理感，至少两段；包含事件、身体感受、自我解释、情绪反刍，不要写成即时心声。"></textarea>
+              </div>
+              <div class="settings_section">
+                <label for="bs-bt-diary-date">日期（可选）</label>
+                <input id="bs-bt-diary-date" class="text_pole" type="text"
+                  placeholder="留空时由 AI 依故事上下文填写" />
+              </div>
+              <div class="settings_section bs-bt-action-row">
+                <button id="bs-bt-diary-generate" class="menu_button" type="button">生成日记</button>
+                <button id="bs-bt-diary-apply" class="menu_button" type="button">写入日记</button>
+              </div>
+              <div class="settings_section">
+                <label for="bs-bt-diary-result">日记预览</label>
+                <textarea id="bs-bt-diary-result" class="text_pole bs-bt-textarea" rows="14"
+                  placeholder="生成结果会显示为 JSON，可修改 time 与 content 后再写入。"></textarea>
+                <div id="bs-bt-diary-status" class="bs-bt-inline-status">角色必须已注册，且同一故事日尚未写过日记。</div>
               </div>
             </div>
           </div>
@@ -524,6 +553,15 @@
             </div>
 
             <div class="settings_section">
+              <div class="bs-bt-track-tabs" id="bs-bt-encyclopedia-tabs">
+                <button type="button" class="bs-bt-track-tab is-active" data-encyclopedia-tab="race">一般类型</button>
+                <button type="button" class="bs-bt-track-tab" data-encyclopedia-tab="derived">衍生类型</button>
+              </div>
+            </div>
+
+            <div class="bs-bt-encyclopedia-page is-active" data-encyclopedia-page="race">
+
+            <div class="settings_section">
               <label for="bs-bt-race-select">选择种族</label>
               <select id="bs-bt-race-select" class="text_pole">
                 <option value="">请选择种族</option>
@@ -553,7 +591,9 @@
               <div class="bs-bt-status-title">种族资料</div>
               <pre id="bs-bt-race-output" class="bs-bt-status-box">请选择种族查看资料。</pre>
             </div>
+            </div>
 
+            <div class="bs-bt-encyclopedia-page" data-encyclopedia-page="derived" hidden>
             <div class="settings_section">
               <label for="bs-bt-derived-select">选择衍生</label>
               <select id="bs-bt-derived-select" class="text_pole">
@@ -562,8 +602,27 @@
             </div>
 
             <div class="settings_section">
+              <button id="bs-bt-derived-open-editor" class="menu_button" type="button">调整参数</button>
+              <div id="bs-bt-derived-editor-modal" class="bs-bt-race-editor-modal" hidden>
+                <div class="bs-bt-race-editor-dialog">
+                  <div class="bs-bt-race-editor-head">
+                    <div id="bs-bt-derived-editor-title" class="bs-bt-status-title">衍生参数覆盖</div>
+                    <button id="bs-bt-derived-editor-close" class="bs-bt-race-close-button" type="button" aria-label="关闭衍生参数覆盖">×</button>
+                  </div>
+                  <div id="bs-bt-derived-editor" class="bs-bt-race-editor"></div>
+                  <div class="settings_section bs-bt-action-row">
+                    <button id="bs-bt-derived-save-override" class="menu_button" type="button">保存覆盖</button>
+                    <button id="bs-bt-derived-reset-override" class="menu_button" type="button">恢复内置</button>
+                  </div>
+                  <div id="bs-bt-derived-editor-status" class="bs-bt-inline-status">只保存与内置值不同的字段；代谢抵免维持内置规则，子项会继承所属衍生大类。</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings_section">
               <div class="bs-bt-status-title">衍生资料</div>
               <pre id="bs-bt-derived-output" class="bs-bt-status-box">请选择衍生查看 Flux 资料。</pre>
+            </div>
             </div>
           </div>
         </section>
