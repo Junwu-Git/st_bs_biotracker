@@ -16,15 +16,38 @@ const HOST_EVENT_TYPE_KEYS = Object.freeze({
 });
 
 export function getHostKind() {
-  return globalThis.__TAURITAVERN__ ? 'tauritavern' : 'sillytavern';
+  if (globalThis.__TAURITAVERN__) return 'tauritavern';
+  if (globalThis.Luker?.getContext) return 'luker';
+  return 'sillytavern';
 }
 
 export function getHostContext() {
   try {
-    return globalThis.SillyTavern?.getContext?.() || null;
+    return globalThis.Luker?.getContext?.() || globalThis.SillyTavern?.getContext?.() || null;
   } catch (error) {
     console.warn('[BS BioTracker] unable to read host context', error);
     return null;
+  }
+}
+
+export async function getHostAgentRunBarrier(ctx, message) {
+  if (getHostKind() !== 'tauritavern') return { state: 'not_applicable', runId: '' };
+  const runId = String(message?.extra?.tauritavern?.agent?.runId || '').trim();
+  if (!runId) return { state: 'not_applicable', runId: '' };
+  const ready = globalThis.__TAURITAVERN__?.ready || globalThis.__TAURITAVERN_MAIN_READY__;
+  if (ready && typeof ready.then === 'function') await ready;
+  const agentApi = getTauriTavernApi()?.agent;
+  if (typeof agentApi?.readEvents !== 'function') return { state: 'pending', runId };
+  try {
+    const result = await agentApi.readEvents({ runId, limit: 500 });
+    const events = Array.isArray(result?.events) ? result.events : [];
+    const types = new Set(events.map((event) => String(event?.type || '')));
+    if (types.has('run_completed')) return { state: 'completed', runId };
+    if (types.has('run_cancelled') || types.has('run_failed')) return { state: 'aborted', runId };
+    return { state: 'pending', runId };
+  } catch (error) {
+    console.warn('[BS BioTracker] unable to read TauriTavern agent run events', error);
+    return { state: 'pending', runId };
   }
 }
 
@@ -251,8 +274,20 @@ function getCurrentTauriChatHandle() {
   return typeof api?.current?.handle === 'function' ? api.current.handle() : null;
 }
 
-export async function loadHostChatState() {
-  if (getHostKind() !== 'tauritavern') return null;
+export async function loadHostChatState(ctx = null) {
+  const hostKind = getHostKind();
+  if (hostKind === 'luker') {
+    const runtime = ctx || getHostContext();
+    if (typeof runtime?.getChatState !== 'function') return null;
+    try {
+      const stored = await runtime.getChatState(TAURI_STATE_NAMESPACE);
+      if (stored?.version === 1 && stored.chatState && typeof stored.chatState === 'object') return cloneHostValue(stored.chatState);
+    } catch (error) {
+      console.warn('[BS BioTracker] unable to load Luker chat state', error);
+    }
+    return null;
+  }
+  if (hostKind !== 'tauritavern') return null;
   const ready = globalThis.__TAURITAVERN__?.ready || globalThis.__TAURITAVERN_MAIN_READY__;
   if (ready && typeof ready.then === 'function') await ready;
   const handle = getCurrentTauriChatHandle();
@@ -269,7 +304,28 @@ export async function loadHostChatState() {
 }
 
 export function scheduleHostChatStateSave(ctx, chatState) {
-  if (getHostKind() !== 'tauritavern' || !chatState || typeof chatState !== 'object') return;
+  const hostKind = getHostKind();
+  if (!chatState || typeof chatState !== 'object') return;
+  if (hostKind === 'luker') {
+    if (typeof ctx?.updateChatState !== 'function') return;
+    const chatId = getHostChatId(ctx);
+    const previous = TAURI_STATE_SAVE_QUEUE.get(chatId);
+    if (previous?.timer) clearTimeout(previous.timer);
+    const payload = { version: 1, chatState: cloneHostValue(chatState) };
+    const timer = setTimeout(async () => {
+      const queued = TAURI_STATE_SAVE_QUEUE.get(chatId);
+      if (!queued || queued.timer !== timer) return;
+      TAURI_STATE_SAVE_QUEUE.delete(chatId);
+      try {
+        await queued.ctx.updateChatState(TAURI_STATE_NAMESPACE, () => queued.payload);
+      } catch (error) {
+        console.warn('[BS BioTracker] unable to save Luker chat state', error);
+      }
+    }, TAURI_STATE_SAVE_DELAY_MS);
+    TAURI_STATE_SAVE_QUEUE.set(chatId, { ctx, payload, timer });
+    return;
+  }
+  if (hostKind !== 'tauritavern') return;
   const handle = getCurrentTauriChatHandle();
   if (typeof handle?.store?.setJson !== 'function') return;
   const chatId = getHostChatId(ctx);

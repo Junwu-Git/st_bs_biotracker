@@ -115,6 +115,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   contextSize: 12,
   trackerTokenBudget: 4096,
   requireFullDescriptionUpdates: false,
+  lukerMultiAgentManualOnly: true,
   diaryRecentLimit: 5,
   diaryWritingPrompt: DEFAULT_DIARY_WRITING_PROMPT,
   wardrobePrepPrompt: '',
@@ -988,8 +989,8 @@ export function getSettings(ctx) {
   let shouldSave = false;
   if (!root[MODULE_NAME]) root[MODULE_NAME] = cloneValue(DEFAULT_SETTINGS);
   const settings = root[MODULE_NAME];
-  const useTauriChatStore = getHostKind() === 'tauritavern';
-  if (useTauriChatStore) {
+  const useHostChatStore = ['tauritavern', 'luker'].includes(getHostKind());
+  if (useHostChatStore) {
     const descriptor = Object.getOwnPropertyDescriptor(settings, 'chatStates');
     const runtimeChatStates = descriptor && descriptor.enumerable === false && settings.chatStates && typeof settings.chatStates === 'object'
       ? settings.chatStates
@@ -1004,7 +1005,7 @@ export function getSettings(ctx) {
     if (!descriptor || descriptor.enumerable !== false) shouldSave = true;
   }
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
-    if (useTauriChatStore && key === 'chatStates') continue;
+    if (useHostChatStore && key === 'chatStates') continue;
     if (settings[key] === undefined) {
       settings[key] = cloneValue(value);
       shouldSave = true;
@@ -1051,6 +1052,11 @@ export function getSettings(ctx) {
     settings.requireFullDescriptionUpdates = requireFullDescriptionUpdates;
     shouldSave = true;
   }
+  const lukerMultiAgentManualOnly = settings.lukerMultiAgentManualOnly !== false;
+  if (settings.lukerMultiAgentManualOnly !== lukerMultiAgentManualOnly) {
+    settings.lukerMultiAgentManualOnly = lukerMultiAgentManualOnly;
+    shouldSave = true;
+  }
   if (!settings.registryDescriptionGuides || typeof settings.registryDescriptionGuides !== 'object') {
     settings.registryDescriptionGuides = cloneValue(DEFAULT_REGISTRY_DESCRIPTION_GUIDES);
     shouldSave = true;
@@ -1080,7 +1086,7 @@ export async function hydrateChatStateFromHost(ctx, settings) {
   const chatKey = await resolveHostChatId(ctx);
   const localState = settings.chatStates[chatKey];
   if (localState && !isChatStateEffectivelyEmpty(localState)) return false;
-  const storedState = await loadHostChatState();
+  const storedState = await loadHostChatState(ctx);
   if (!storedState || isChatStateEffectivelyEmpty(storedState)) return false;
   settings.chatStates[chatKey] = storedState;
   saveHostSettings(ctx);

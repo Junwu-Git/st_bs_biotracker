@@ -25,7 +25,7 @@ import {
 } from './state.js';
 import { getDerivedTypeMetabolismExemptions } from './race_config.js';
 import { LABOR_STAGES, PREGNANCY_STAGES } from './stage_config.js';
-import { canLoadHostWorldInfo, getHostChat, loadHostWorldInfo, refreshHostChatView } from './host.js';
+import { canLoadHostWorldInfo, getHostAgentRunBarrier, getHostChat, getHostKind, loadHostWorldInfo, refreshHostChatView } from './host.js';
 
 export const POLL_RUNTIME_KEY = '__bs_biotracker_poll__';
 export const RUN_RUNTIME_KEY = '__bs_biotracker_running__';
@@ -719,6 +719,39 @@ export async function runTracker(ctx, deps, reason = 'manual') {
     deps.renderStatusPanel(ctx);
     deps.updateMainFlowPrompt?.(ctx);
     return { skipped: true, reason: 'no_registered_targets' };
+  }
+  if (reason === 'poll' && getHostKind() === 'luker' && settings.lukerMultiAgentManualOnly !== false) {
+    chatState.lastRawResult = {
+      message: 'Luker 多智能体安全模式已开启，自动追踪暂停；请在编排完成后手动分析。',
+      tool_calls: [],
+    };
+    chatState.lastOperationLogs = [];
+    saveSettings(ctx);
+    deps.renderStatusPanel(ctx);
+    return { skipped: true, reason: 'luker_multi_agent_manual' };
+  }
+  if (reason === 'poll') {
+    const agentBarrier = await getHostAgentRunBarrier(ctx, lastMessage);
+    if (agentBarrier.state === 'pending') {
+      chatState.lastRawResult = {
+        message: `TauriTavern Agent run ${agentBarrier.runId} 尚未完成，自动追踪将等待最终提交。`,
+        tool_calls: [],
+      };
+      chatState.lastOperationLogs = [];
+      saveSettings(ctx);
+      deps.renderStatusPanel(ctx);
+      return { skipped: true, reason: 'agent_run_pending' };
+    }
+    if (agentBarrier.state === 'aborted') {
+      chatState.lastRawResult = {
+        message: `TauriTavern Agent run ${agentBarrier.runId} 已取消或失败，未自动追踪该提交；可手动分析。`,
+        tool_calls: [],
+      };
+      chatState.lastOperationLogs = [];
+      saveSettings(ctx);
+      deps.renderStatusPanel(ctx);
+      return { skipped: true, reason: 'agent_run_aborted' };
+    }
   }
   if (reason === 'poll' && !isAfterAiMessageSettled(ctx, settings, chatState)) {
     return { skipped: true, reason: 'message_not_settled' };

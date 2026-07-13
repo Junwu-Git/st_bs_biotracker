@@ -12,6 +12,7 @@ import { buildRegistrySystemPrompt, buildWardrobePrepSystemPrompt, normalizeBree
 function resetGlobals() {
   delete globalThis.__TAURITAVERN__;
   delete globalThis.__TAURITAVERN_MAIN_READY__;
+  delete globalThis.Luker;
   delete globalThis.SillyTavern;
   delete globalThis.ST_API;
   delete globalThis.openai_settings;
@@ -63,6 +64,47 @@ test('TauriTavern uses stableId and per-chat store without persisting chatStates
   state.saveSettings(ctx);
   await new Promise((resolve) => setTimeout(resolve, 350));
   assert.equal(saved?.chatState?.characters?.Alice?.initialized, true);
+});
+
+test('Luker uses its chat sidecar without persisting chatStates globally', async () => {
+  resetGlobals();
+  let saved = null;
+  const ctx = {
+    chatId: 'luker-chat',
+    extensionSettings: {},
+    saveSettingsDebounced() {},
+    async getChatState(namespace) {
+      assert.equal(namespace, 'bs-biotracker');
+      return { version: 1, chatState: { characters: { Alice: { initialized: true } }, snapshots: [] } };
+    },
+    async updateChatState(namespace, updater) {
+      assert.equal(namespace, 'bs-biotracker');
+      saved = await updater({});
+    },
+  };
+  globalThis.Luker = { getContext: () => ctx };
+  const settings = state.getSettings(ctx);
+  assert.equal(host.getHostKind(), 'luker');
+  assert.equal(Object.prototype.propertyIsEnumerable.call(settings, 'chatStates'), false);
+  assert.equal(await state.hydrateChatStateFromHost(ctx, settings), true);
+  state.saveSettings(ctx);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(saved?.chatState?.characters?.Alice?.initialized, true);
+});
+
+test('TauriTavern agent barrier waits for completed runs', async () => {
+  resetGlobals();
+  let events = [{ type: 'model_completed' }];
+  globalThis.__TAURITAVERN__ = {
+    ready: Promise.resolve(),
+    api: { agent: { readEvents: async ({ runId }) => { assert.equal(runId, 'agent-1'); return { events }; } } },
+  };
+  const message = { extra: { tauritavern: { agent: { runId: 'agent-1' } } } };
+  assert.equal((await host.getHostAgentRunBarrier({}, message)).state, 'pending');
+  events = [{ type: 'chat_commit_completed' }, { type: 'run_completed' }];
+  assert.equal((await host.getHostAgentRunBarrier({}, message)).state, 'completed');
+  events = [{ type: 'run_failed' }];
+  assert.equal((await host.getHostAgentRunBarrier({}, message)).state, 'aborted');
 });
 
 test('TauriTavern history view preserves absolute message indexes', async () => {
@@ -178,6 +220,7 @@ test('tracker token budget defaults to 4096 and is clamped', () => {
   settings.trackerTokenBudget = 999999;
   assert.equal(state.getSettings(ctx).trackerTokenBudget, 100000);
   assert.equal(settings.requireFullDescriptionUpdates, false);
+  assert.equal(settings.lukerMultiAgentManualOnly, true);
 });
 
 test('full description update mode adds the strict tracker instruction', () => {
@@ -225,6 +268,18 @@ test('wardrobe and psychology tools reject targets without their opt-in state', 
     name: 'bsUpdatePsychology',
     arguments: { female: 'Alice', options: { mens: { mastery: 1 } } },
   }).applied, false);
+});
+
+test('the first description update can initialize a blank registered field', () => {
+  const chatState = state.createEmptyChatState();
+  chatState.characters.Alice = state.createDefaultFemaleState('Alice');
+  chatState.characters.Alice.initialized = true;
+  const result = applyToolCall(chatState, {
+    name: 'bsSetDescription',
+    arguments: { female: 'Alice', options: { pregnantDescription: '胎况|已着床，等待后续观察;;' } },
+  });
+  assert.equal(result.applied, true);
+  assert.equal(chatState.characters.Alice.profile.descriptions.pregnantDescription, '胎况|已着床，等待后续观察;;');
 });
 
 test('breeding inference accepts psychology-wrapped stage profiles', () => {

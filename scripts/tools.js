@@ -3479,6 +3479,18 @@ function mergeDescriptionText(currentText, patchText) {
   if (patch.error) return { ok: false, value: String(currentText || ''), error: `patch description is malformed: ${patch.error}` };
   if (patch.entries.length === 0) return { ok: true, value: '' };
 
+  // Registration is allowed to leave a description field blank. In that
+  // state there is no schema to merge against yet, so the first tracker
+  // update must be able to establish its fields (for example, a pregnancy
+  // description after a debug injection). Once a field has content, keep
+  // the normal strict schema guard below.
+  if (current.entries.length === 0) {
+    return {
+      ok: true,
+      value: patch.entries.map((entry) => `${entry.name}|${entry.value};;`).join(''),
+    };
+  }
+
   const allowedNames = new Set(current.entries.map((entry) => entry.name));
   const unknownNames = patch.entries.map((entry) => entry.name).filter((name) => !allowedNames.has(name));
   if (unknownNames.length > 0) {

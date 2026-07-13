@@ -89,6 +89,8 @@ const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
 const FLOATING_SPHERE_DRAG_THRESHOLD = 8;
+const FLOATING_SPHERE_LONG_PRESS_MS = 650;
+const TAURI_MENU_RECOVERY_RETRY_COUNT = 40;
 const CLOCK_RUNTIME_KEY = '__bs_biotracker_clock__';
 const BOOTSTRAP_RUNTIME_KEY = '__bs_biotracker_bootstrap__';
 const CHAT_CHANGED_HANDLER_KEY = '__bs_biotracker_chat_changed_handler__';
@@ -4311,6 +4313,7 @@ function applySettingsToForm(ctx) {
   setValue('bs-bt-context-size', settings.contextSize);
   setValue('bs-bt-tracker-token-budget', settings.trackerTokenBudget);
   setValue('bs-bt-require-full-description-updates', settings.requireFullDescriptionUpdates);
+  setValue('bs-bt-luker-multi-agent-manual-only', settings.lukerMultiAgentManualOnly);
   setValue('bs-bt-diary-recent-limit', settings.diaryRecentLimit);
   setValue('bs-bt-targets', settings.targetNames);
   setValue('bs-bt-tracker-worldbook-mode', normalizeWorldbookMode(settings.trackerWorldbookMode));
@@ -4888,6 +4891,7 @@ function readSettingsFromForm(ctx) {
   settings.contextSize = Math.max(2, Number(getValue('bs-bt-context-size')) || 12);
   settings.trackerTokenBudget = Math.max(500, Math.min(100000, Math.floor(Number(getValue('bs-bt-tracker-token-budget')) || 4096)));
   settings.requireFullDescriptionUpdates = Boolean(document.getElementById('bs-bt-require-full-description-updates')?.checked);
+  settings.lukerMultiAgentManualOnly = Boolean(document.getElementById('bs-bt-luker-multi-agent-manual-only')?.checked);
   settings.diaryRecentLimit = Math.max(0, Math.min(20, Math.floor(Number(getValue('bs-bt-diary-recent-limit')) || 0)));
   settings.diaryWritingPrompt = String(getValue('bs-bt-diary-writing-prompt')).trim();
   settings.wardrobePrepPrompt = String(getValue('bs-bt-wardrobe-prep-prompt')).trim();
@@ -5046,8 +5050,33 @@ function initDraggableModal(modal) {
 function initDraggableSphere(sphere, ctx) {
   let dragState = null;
   let hasMoved = false;
+  let longPressTriggered = false;
+  let longPressTimer = null;
   let pointerDownX = 0;
   let pointerDownY = 0;
+
+  const clearLongPressTimer = () => {
+    if (longPressTimer) clearTimeout(longPressTimer);
+    longPressTimer = null;
+  };
+
+  const dismissFloatingSphere = () => {
+    if (getHostKind() === 'tauritavern' && !hasFloatingSphereRecoveryEntry()) {
+      globalThis.toastr?.warning?.('TauriTavern 的扩展菜单入口尚未就绪；为避免无法重新打开，悬浮球不会隐藏。');
+      return;
+    }
+    clearLongPressTimer();
+    dragState = null;
+    longPressTriggered = true;
+    sphere.classList.remove('is-dragging');
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    sphere.classList.add('is-shrinking');
+    setTimeout(() => {
+      sphere.style.display = 'none';
+      sphere.classList.remove('is-shrinking');
+    }, 200);
+  };
 
   const persistFloatingSpherePosition = () => {
     const left = Number.parseFloat(sphere.style.left);
@@ -5066,6 +5095,7 @@ function initDraggableSphere(sphere, ctx) {
     const deltaY = event.clientY - pointerDownY;
     if (!hasMoved && Math.hypot(deltaX, deltaY) >= FLOATING_SPHERE_DRAG_THRESHOLD) {
       hasMoved = true;
+      clearLongPressTimer();
     }
     if (!hasMoved) return;
     const left = event.clientX - dragState.offsetX;
@@ -5075,12 +5105,15 @@ function initDraggableSphere(sphere, ctx) {
 
   const onPointerUp = () => {
     if (!dragState) return;
+    clearLongPressTimer();
     dragState = null;
     sphere.classList.remove('is-dragging');
     window.removeEventListener('pointermove', onPointerMove);
     window.removeEventListener('pointerup', onPointerUp);
 
-    if (hasMoved) {
+    if (longPressTriggered) {
+      longPressTriggered = false;
+    } else if (hasMoved) {
       persistFloatingSpherePosition();
     } else {
       sphere.classList.add('is-shrinking');
@@ -5101,9 +5134,14 @@ function initDraggableSphere(sphere, ctx) {
     pointerDownX = event.clientX;
     pointerDownY = event.clientY;
     hasMoved = false;
+    longPressTriggered = false;
     sphere.classList.add('is-dragging');
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
+    clearLongPressTimer();
+    longPressTimer = setTimeout(() => {
+      if (dragState && !hasMoved) dismissFloatingSphere();
+    }, FLOATING_SPHERE_LONG_PRESS_MS);
     event.preventDefault();
   });
 
@@ -5703,7 +5741,7 @@ async function ensureModal(ctx) {
     globalThis.toastr?.success?.('[BS BioTracker] 当前聊天状态已清除');
   });
   const clearAllChatsButton = document.getElementById('bs-bt-clear-all-chats');
-  if (clearAllChatsButton && getHostKind() === 'tauritavern') clearAllChatsButton.hidden = true;
+  if (clearAllChatsButton && ['tauritavern', 'luker'].includes(getHostKind())) clearAllChatsButton.hidden = true;
   clearAllChatsButton?.addEventListener('click', () => {
     const settings = getSettings(ctx);
     const storedEntries = Object.entries(settings.chatStates || {});
@@ -5876,8 +5914,15 @@ function executeTimeLapse(ctx, args) {
   if (elStatus) elStatus.innerText = `执行成功。\n\n受影响角色数量：${Object.keys(chatState.characters || {}).length}\n流逝时间量：${timeStr.join('')}。`;
 }
 
+function hasFloatingSphereRecoveryEntry() {
+  if (document.getElementById(MENU_ITEM_ID) || document.getElementById(MENU_API_ID)) return true;
+  const menu = document.getElementById('extensionsMenu');
+  if (!menu) return false;
+  return Array.from(menu.children).some((node) => String(node.textContent || '').trim() === 'BS BioTracker');
+}
+
 function createManualMenuItem(ctx) {
-  if (document.getElementById(MENU_ITEM_ID)) return true;
+  if (hasFloatingSphereRecoveryEntry()) return true;
   const menu = document.getElementById('extensionsMenu');
   if (!menu) return false;
   const item = document.createElement('div');
@@ -5906,18 +5951,25 @@ function ensureManualMenuItem(ctx, retries = 20) {
 }
 
 async function registerMenuItem(ctx) {
+  let registered = false;
   try {
-    const registered = await registerHostExtensionMenuItem({
+    registered = await registerHostExtensionMenuItem({
         id: MENU_API_ID,
         label: 'BS BioTracker',
         icon: 'fa-solid fa-person-pregnant',
         onClick: () => toggleModal(ctx),
     });
-    if (registered) return;
   } catch (error) {
     console.warn('[BS BioTracker] host 菜单注册失败，改用手动注入。', error);
   }
-  ensureManualMenuItem(ctx);
+  // TauriTavern retains much of the SillyTavern front end, but its host menu
+  // bridge can resolve before the actual extensions menu is mounted. Keep a
+  // real DOM recovery entry there even if the bridge reports success.
+  if (getHostKind() === 'tauritavern') {
+    ensureManualMenuItem(ctx, TAURI_MENU_RECOVERY_RETRY_COUNT);
+    return;
+  }
+  if (!registered) ensureManualMenuItem(ctx);
 }
 
 async function bootstrap() {
