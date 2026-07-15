@@ -5916,10 +5916,12 @@ function executeTimeLapse(ctx, args) {
 }
 
 function hasFloatingSphereRecoveryEntry() {
-  if (document.getElementById(MENU_ITEM_ID) || document.getElementById(MENU_API_ID)) return true;
+  if (document.getElementById(MENU_ITEM_ID)) return true;
   const menu = document.getElementById('extensionsMenu');
   if (!menu) return false;
-  return Array.from(menu.children).some((node) => String(node.textContent || '').trim() === 'BS BioTracker');
+  return Array.from(menu.children).some((node) => (
+    node.id === MENU_API_ID || String(node.textContent || '').trim() === 'BS BioTracker'
+  ));
 }
 
 function createManualMenuItem(ctx) {
@@ -5985,7 +5987,6 @@ async function registerMenuItem(ctx) {
       console.warn('[BS BioTracker] 等待 TauriTavern 宿主就绪失败。', error);
     }
   }
-  const isTauriTavern = getHostKind() === 'tauritavern';
   let registered = false;
   try {
     registered = await registerHostExtensionMenuItem({
@@ -5997,11 +5998,11 @@ async function registerMenuItem(ctx) {
   } catch (error) {
     console.warn('[BS BioTracker] host 菜单注册失败，改用手动注入。', error);
   }
-  // TauriTavern starts third-party extensions before its wand menu is
-  // necessarily mounted. Observe the actual menu creation instead of relying
-  // on a bounded retry or on a host API success value.
-  if (isTauriTavern) {
-    ensureTauriMenuRecovery(ctx);
+  // TauriTavern can expose the legacy host context before it exposes its
+  // platform marker. Always watch the real wand menu, while only injecting
+  // when it has no actual BioTracker item.
+  ensureTauriMenuRecovery(ctx);
+  if (getHostKind() === 'tauritavern') {
     ensureManualMenuItem(ctx, TAURI_MENU_RECOVERY_RETRY_COUNT);
     return;
   }
