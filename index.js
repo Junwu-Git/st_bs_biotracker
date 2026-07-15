@@ -5742,7 +5742,8 @@ async function ensureModal(ctx) {
     globalThis.toastr?.success?.('[BS BioTracker] 当前聊天状态已清除');
   });
   const clearAllChatsButton = document.getElementById('bs-bt-clear-all-chats');
-  if (clearAllChatsButton && ['tauritavern', 'luker'].includes(getHostKind())) clearAllChatsButton.hidden = true;
+  const clearAllChatsRow = clearAllChatsButton?.closest('.bs-bt-action-row');
+  if (clearAllChatsRow && ['tauritavern', 'luker'].includes(getHostKind())) clearAllChatsRow.hidden = true;
   clearAllChatsButton?.addEventListener('click', () => {
     const settings = getSettings(ctx);
     const storedEntries = Object.entries(settings.chatStates || {});
