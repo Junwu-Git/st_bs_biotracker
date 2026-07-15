@@ -5960,22 +5960,27 @@ function ensureTauriMenuRecovery(ctx) {
     return true;
   };
 
-  if (insertRecoveryEntry()) return;
+  insertRecoveryEntry();
   if (globalThis[TAURI_MENU_RECOVERY_OBSERVER_KEY] || typeof MutationObserver !== 'function' || !document.body) return;
 
   let scheduled = false;
-  const observer = new MutationObserver(() => {
+  const observer = new MutationObserver((mutations) => {
+    const menuChanged = mutations.some((mutation) => {
+      if (mutation.target instanceof Element && mutation.target.id === 'extensionsMenu') return true;
+      return Array.from(mutation.addedNodes).some((node) => (
+        node instanceof Element && (node.id === 'extensionsMenu' || Boolean(node.querySelector?.('#extensionsMenu')))
+      ));
+    });
+    if (!menuChanged) return;
     if (scheduled) return;
     scheduled = true;
     setTimeout(() => {
       scheduled = false;
-      if (!insertRecoveryEntry()) return;
-      observer.disconnect();
-      delete globalThis[TAURI_MENU_RECOVERY_OBSERVER_KEY];
+      insertRecoveryEntry();
     }, 0);
   });
   globalThis[TAURI_MENU_RECOVERY_OBSERVER_KEY] = observer;
-  observer.observe(document.body, { childList: true });
+  observer.observe(document.body, { childList: true, subtree: true });
 }
 
 async function registerMenuItem(ctx) {
@@ -6087,6 +6092,9 @@ globalThis[APP_READY_HANDLER_KEY] = replaceHostEventSubscription(
   globalThis[APP_READY_HANDLER_KEY],
   bootstrap,
 );
-if (!globalThis[APP_READY_HANDLER_KEY]) setTimeout(() => {
+// TauriTavern can finish APP_READY before third-party extensions register
+// their listener. Always keep this idempotent fallback so bootstrap is not
+// skipped when the event has already been emitted.
+setTimeout(() => {
   bootstrap().catch((error) => console.error('[BS BioTracker] bootstrap failed', error));
 }, 1000);
