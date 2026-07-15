@@ -5916,12 +5916,13 @@ function executeTimeLapse(ctx, args) {
 }
 
 function hasFloatingSphereRecoveryEntry() {
-  if (document.getElementById(MENU_ITEM_ID)) return true;
   const menu = document.getElementById('extensionsMenu');
   if (!menu) return false;
-  return Array.from(menu.children).some((node) => (
-    node.id === MENU_API_ID || String(node.textContent || '').trim() === 'BS BioTracker'
-  ));
+  return Array.from(menu.children).some((node) => {
+    const label = String(node.textContent || '').trim();
+    return node.id === MENU_ITEM_ID
+      || ((node.id === MENU_API_ID || label === 'BS BioTracker') && label === 'BS BioTracker');
+  });
 }
 
 function createManualMenuItem(ctx) {
@@ -5984,6 +5985,11 @@ function ensureTauriMenuRecovery(ctx) {
 }
 
 async function registerMenuItem(ctx) {
+  // The real wand menu must not depend on optional host APIs resolving. In
+  // TauriTavern, either readiness or the legacy menu API can remain pending.
+  ensureTauriMenuRecovery(ctx);
+  ensureManualMenuItem(ctx, TAURI_MENU_RECOVERY_RETRY_COUNT);
+
   const tauriReady = globalThis.__TAURITAVERN__?.ready || globalThis.__TAURITAVERN_MAIN_READY__;
   if (tauriReady && typeof tauriReady.then === 'function') {
     try {
@@ -6003,14 +6009,6 @@ async function registerMenuItem(ctx) {
   } catch (error) {
     console.warn('[BS BioTracker] host 菜单注册失败，改用手动注入。', error);
   }
-  // TauriTavern can expose the legacy host context before it exposes its
-  // platform marker. Always watch the real wand menu, while only injecting
-  // when it has no actual BioTracker item.
-  ensureTauriMenuRecovery(ctx);
-  if (getHostKind() === 'tauritavern') {
-    ensureManualMenuItem(ctx, TAURI_MENU_RECOVERY_RETRY_COUNT);
-    return;
-  }
   if (!registered) ensureManualMenuItem(ctx);
 }
 
@@ -6020,7 +6018,14 @@ async function bootstrap() {
   if (globalThis[BOOTSTRAP_RUNTIME_KEY]) return;
   globalThis[BOOTSTRAP_RUNTIME_KEY] = true;
   try {
-    await hydrateChatStateFromHost(ctx, getSettings(ctx));
+    try {
+      await hydrateChatStateFromHost(ctx, getSettings(ctx));
+    } catch (error) {
+      const isTauriLandingScreen = getHostKind() === 'tauritavern'
+        && /failed to resolve active character id/i.test(String(error?.message || error));
+      if (!isTauriLandingScreen) throw error;
+      console.warn('[BS BioTracker] 当前没有活动角色；将在进入聊天后加载追踪状态。');
+    }
     installMainflowRequestCapture();
     await ensureModal(ctx);
     await registerMenuItem(ctx);
@@ -6093,8 +6098,20 @@ globalThis[APP_READY_HANDLER_KEY] = replaceHostEventSubscription(
   bootstrap,
 );
 // TauriTavern can finish APP_READY before third-party extensions register
-// their listener. Always keep this idempotent fallback so bootstrap is not
-// skipped when the event has already been emitted.
-setTimeout(() => {
-  bootstrap().catch((error) => console.error('[BS BioTracker] bootstrap failed', error));
-}, 1000);
+// their listener, and may not expose the compatibility context immediately.
+// Retry only until bootstrap claims the runtime, then stop permanently.
+function scheduleBootstrapFallback(retries = 60) {
+  const attempt = () => {
+    bootstrap()
+      .catch((error) => console.error('[BS BioTracker] bootstrap failed', error))
+      .finally(() => {
+        if (!globalThis[BOOTSTRAP_RUNTIME_KEY] && retries > 0) {
+          retries -= 1;
+          setTimeout(attempt, 500);
+        }
+      });
+  };
+  setTimeout(attempt, 250);
+}
+
+scheduleBootstrapFallback();
