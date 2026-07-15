@@ -91,6 +91,7 @@ const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
 const FLOATING_SPHERE_DRAG_THRESHOLD = 8;
 const FLOATING_SPHERE_LONG_PRESS_MS = 650;
 const TAURI_MENU_RECOVERY_RETRY_COUNT = 40;
+const TAURI_MENU_RECOVERY_OBSERVER_KEY = '__bs_biotracker_tauri_menu_recovery_observer__';
 const CLOCK_RUNTIME_KEY = '__bs_biotracker_clock__';
 const BOOTSTRAP_RUNTIME_KEY = '__bs_biotracker_bootstrap__';
 const CHAT_CHANGED_HANDLER_KEY = '__bs_biotracker_chat_changed_handler__';
@@ -5950,7 +5951,41 @@ function ensureManualMenuItem(ctx, retries = 20) {
   setTimeout(() => ensureManualMenuItem(ctx, retries - 1), 500);
 }
 
+function ensureTauriMenuRecovery(ctx) {
+  const insertRecoveryEntry = () => {
+    if (!createManualMenuItem(ctx)) return false;
+    document.getElementById('extensionsMenuButton')?.style.setProperty('display', 'flex');
+    return true;
+  };
+
+  if (insertRecoveryEntry()) return;
+  if (globalThis[TAURI_MENU_RECOVERY_OBSERVER_KEY] || typeof MutationObserver !== 'function' || !document.body) return;
+
+  let scheduled = false;
+  const observer = new MutationObserver(() => {
+    if (scheduled) return;
+    scheduled = true;
+    setTimeout(() => {
+      scheduled = false;
+      if (!insertRecoveryEntry()) return;
+      observer.disconnect();
+      delete globalThis[TAURI_MENU_RECOVERY_OBSERVER_KEY];
+    }, 0);
+  });
+  globalThis[TAURI_MENU_RECOVERY_OBSERVER_KEY] = observer;
+  observer.observe(document.body, { childList: true });
+}
+
 async function registerMenuItem(ctx) {
+  const tauriReady = globalThis.__TAURITAVERN__?.ready || globalThis.__TAURITAVERN_MAIN_READY__;
+  if (tauriReady && typeof tauriReady.then === 'function') {
+    try {
+      await tauriReady;
+    } catch (error) {
+      console.warn('[BS BioTracker] 等待 TauriTavern 宿主就绪失败。', error);
+    }
+  }
+  const isTauriTavern = getHostKind() === 'tauritavern';
   let registered = false;
   try {
     registered = await registerHostExtensionMenuItem({
@@ -5962,10 +5997,11 @@ async function registerMenuItem(ctx) {
   } catch (error) {
     console.warn('[BS BioTracker] host 菜单注册失败，改用手动注入。', error);
   }
-  // TauriTavern retains much of the SillyTavern front end, but its host menu
-  // bridge can resolve before the actual extensions menu is mounted. Keep a
-  // real DOM recovery entry there even if the bridge reports success.
-  if (getHostKind() === 'tauritavern') {
+  // TauriTavern starts third-party extensions before its wand menu is
+  // necessarily mounted. Observe the actual menu creation instead of relying
+  // on a bounded retry or on a host API success value.
+  if (isTauriTavern) {
+    ensureTauriMenuRecovery(ctx);
     ensureManualMenuItem(ctx, TAURI_MENU_RECOVERY_RETRY_COUNT);
     return;
   }
