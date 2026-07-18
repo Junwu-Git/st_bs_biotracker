@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BioTracker UI Harness</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  body { margin: 0; min-height: 100vh; background: #2b2b33; font-family: sans-serif; color: #ddd; }
+  #harness-info { padding: 12px 16px; font-size: 13px; line-height: 1.6; opacity: .8; }
+</style>
+</head>
+<body>
+<div id="harness-info">
+  <b>BioTracker UI Harness</b>（mock 宿主，非真实 SillyTavern）<br>
+  点击右下角悬浮球打开手机面板。种子角色：艾拉（卵泡期，wearState 敞开，内衣配件）、贝拉（产后恢复，pregFit 生效）。
+</div>
+<script type="module">
+  const CHAT_KEY = 'ui-harness-chat';
+
+  const makeCharacter = (name, overrides = {}) => ({
+    name,
+    initialized: true,
+    updatedAt: Date.now(),
+    profile: {
+      base: {
+        stage: '卵泡期', days: 3, isHere: true, age: 24, race: '人类', derivedType: null,
+        vitality: 80, libido: 20, uterinePressure: 10, psyStress: 30,
+        vitalityLevel: 4, psyStressLevel: 4, eggs: 1, sperms: [],
+        fertilizationDays: 0, latestSexDays: 99,
+        ...overrides.base,
+      },
+      bio: {},
+      metabolism: { excretion: 20, hunger: 30, sleep: 10, milk: 5, odor: 10, companionship: 15, ...overrides.metabolism },
+      descriptions: {
+        normalDescription: '外貌|黑发碧眼，身形修长;;神态|从容微笑;;',
+        pregnantDescription: '',
+        ...overrides.descriptions,
+      },
+      experience: { sexCount: 0, birthCount: 0, records: [] },
+      children: [],
+      diary: [],
+      notify: {},
+      ...overrides.profile,
+    },
+  });
+
+  const chatState = {
+    characters: {
+      艾拉: makeCharacter('艾拉', {
+        profile: {
+          wardrobe: {
+            enabled: true,
+            items: [
+              { id: 1, name: '白色连身裙', note: '及膝雪纺，方领。', slot: 'main', parts: ['连身裙'], masking: 6, support: 4, capacity: 3, convenience: 5 },
+              { id: 2, name: '衬衫牛仔裤', note: '白衬衫配直筒牛仔裤。', slot: 'main', parts: ['白衬衫', '牛仔裤'], masking: 7, support: 5, capacity: 4, convenience: 7 },
+              { id: 3, name: '蕾丝内衣', note: '浅色蕾丝，贴身。', slot: 'accessory', layer: 'inner', masking: 0, support: 2, capacity: 0, convenience: 0 },
+              { id: 4, name: '针织外套', note: '米色开衫。', slot: 'accessory', masking: 2, support: 0, capacity: 0, convenience: 0 },
+            ],
+          },
+          outfit: { mainItemId: 1, accessoryItemIds: [3, 4], temporaryItems: [], wearState: '敞开', pregFit: null },
+        },
+      }),
+      贝拉: makeCharacter('贝拉', {
+        base: { stage: '产后恢复', days: 10, age: 27 },
+        profile: {
+          wardrobe: {
+            enabled: true,
+            items: [
+              { id: 1, name: '孕妇裙', note: '高腰伞形，弹性面料。', slot: 'main', masking: 6, support: 5, capacity: 8, convenience: 6 },
+              { id: 2, name: '哺乳内衣', note: '前开扣。', slot: 'accessory', layer: 'inner', masking: 0, support: 3, capacity: 0, convenience: 0 },
+            ],
+          },
+          outfit: {
+            mainItemId: 1, accessoryItemIds: [2], temporaryItems: [], wearState: '整齐',
+            pregFit: { pregWearPressure: 3.3, gap: { masking: 2.7, support: 4.7, capacity: 4.7, convenience: 2.7 } },
+          },
+        },
+      }),
+    },
+    snapshots: [],
+    lastOperationLogs: [],
+  };
+
+  const ctx = {
+    chatId: CHAT_KEY,
+    characters: [{ name: '艾拉', avatar: 'aila.png', description: '测试角色卡。' }],
+    characterId: 0,
+    name1: '用户',
+    name2: '艾拉',
+    chat: [],
+    extensionSettings: {
+      bs_biotracker: {
+        enabled: true,
+        theme: 'retro',
+        deviceSize: 'phone',
+        fontSize: 'standard',
+        triggerTiming: 'after_ai',
+        targetNames: '',
+        chatStates: { [CHAT_KEY]: chatState },
+      },
+    },
+    saveSettingsDebounced() {},
+    eventSource: { on() {}, off() {}, removeListener() {}, once() {} },
+    event_types: {},
+  };
+
+  globalThis.SillyTavern = { getContext: () => ctx };
+  globalThis.toastr = { success() {}, error() {}, info() {}, warning() {} };
+
+  await import('/index.js');
+
+  // 启动后自动打开手机面板：悬浮球初始隐藏且只认 pointer 事件，这里合成一次点击。
+  const autoOpen = (retries = 40) => {
+    const sphere = document.getElementById('bs-bt-floating-sphere');
+    const modal = document.getElementById('bs-biotracker-modal');
+    if (modal && getComputedStyle(modal).display !== 'none') return;
+    if (!sphere) {
+      if (retries > 0) setTimeout(() => autoOpen(retries - 1), 250);
+      return;
+    }
+    sphere.style.display = 'flex';
+    const rect = sphere.getBoundingClientRect();
+    const cx = rect.x + rect.width / 2;
+    const cy = rect.y + rect.height / 2;
+    sphere.dispatchEvent(new PointerEvent('pointerdown', { clientX: cx, clientY: cy, bubbles: true, pointerId: 1 }));
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: cx, clientY: cy, bubbles: true, pointerId: 1 }));
+    setTimeout(() => {
+      const opened = document.getElementById('bs-biotracker-modal');
+      if ((!opened || getComputedStyle(opened).display === 'none') && retries > 0) autoOpen(retries - 1);
+    }, 500);
+  };
+  setTimeout(() => autoOpen(), 600);
+</script>
+</body>
+</html>
