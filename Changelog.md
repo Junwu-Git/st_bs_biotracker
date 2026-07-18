@@ -1,6 +1,28 @@
 # Changelog
 
 
+## v0.8.5
+
+這版改善換裝追蹤：補上換裝觸發規則與衣著一致性檢查，並讓幕外角色回場當輪即可正確換裝。
+
+### 新增與調整
+
+- 改善换装追踪：追踪提示词加入换装触发规则与「衣着描述必须与 outfit 一致」的检查约束；payload 中的 outfit 附带系统解析的当前穿着摘要 currentWearText（主件 + 配件名），叙事与机械穿着不一致时模型可直接察觉。
+- 幕外角色现在也会发送精简衣柜（仅 id/name/slot）与当前 outfit 摘要，角色回场当轮即可正确调用 bsChangeOutfit 完成换装，不再慢一拍或猜错衣物 id。
+- 衣柜工具支持按名称引用衣物：bsChangeOutfit / bsRemoveWardrobeItem 的衣物参数可传整数 id 或准确名称字符串（含临时衣物与「全裸」）；bsAddWardrobeItem 可省略 id 由系统自动分配下一个整数 id，名称匹配既有衣物时视为更新，不再因字符串 id 被 hash 成大数字而找不到或产生重复衣物。
+- 四维数值改为孕期窗口专属发送：角色不在真妊娠/产兆前驱/产程/产后恢复时，payload 中的衣物瘦身为 id/name/slot/note（note 承担非孕期敘事所需的稳定外观），四维仍完整保存在持久化状态中，进入孕期窗口后自动恢复全量发送。
+- pregFit 窗口扩展到产后恢复：产后衣着压力从产后初期水平随恢复进度线性递减到 0，覆盖体型未回、乳胀消退阶段的衣着冲突敘事；此前产后恢复期间 pregFit 直接为 null。
+- 新增 outfit.wearState 穿着状态短标签（12 字内，默认 整齐）：建议词表 整齐/凌乱/敞开/半褪/撩起/上衣已褪/下装已褪/湿透，也可按情境自造；bsChangeOutfit 可只传 wearState 更新状态，换主件未显式传入时自动重置。「脱了一半」类持续状态从此有机械表达。
+- 主件可附 parts 数组（组成部件名）；配件可附 layer=inner/outer 区分贴身衣物与外搭，备装默认生成 1-2 件贴身衣物配件。仅着内衣可表达为 mainItemId: 0 加 inner 配件；currentWearText 按层次渲染（含「仅着：」「内着」与穿着状态后缀）。
+- bsChangeOutfit 新增增量配件参数 addAccessoryItemIds/removeAccessoryItemIds：穿上鞋、脱下外套等单配件变化不再要求整表重述 accessoryItemIds（实测模型常因此只改 wearState 而漏掉配件穿脱）；覆盖式 accessoryItemIds 保留用于整套重设，两者同传时以覆盖式为准。
+- 明确外层建模规则：毛衣、开衫、外套等可独立穿脱的外层应为 layer=outer 配件而非 main 的 parts，备装与追踪提示词同步约束，并允许追踪把误并入 main 的外层拆成配件；wearState 在主件有 parts 时建议引用部件名消歧（如「毛衣已脱」）。
+- 上下装混搭改为惰性组合：重新搭配时用 bsAddWardrobeItem 铸造新组合主件（parts 列出部件）再换上，不预先枚举组合。
+- 移除 衣着动态/衣着自评 描述子字段：实测与机械穿着脱节，其职责由 wearState 与 currentWearText 承担。备装不再生成与要求这两个字段，既有存档载入时会一次性剥离对应子字段（含繁简变体），衣柜 UI 改为显示主件/状态/配件/贴身。
+- 修复描述缺失：bsSetDescription 收到空字符串补丁时不再清空整个描述栏位（此前模型把“不改”表达成空串会静默抹掉所有子字段）；改为 no-op。
+- 修复妊娠描述死锁：角色进入妊娠相关阶段而 pregnantDescription 为空时，追踪提示词会注入 [pregnantDescription 初始化] 段（含描述规范与点名角色），并在「不要新增描述子字段」规则中开出对应例外；此前追踪模型从未收到孕态描述规范，且被该规则锁死无法建立首批子字段，只有注册页胚胎流程能写入。
+- 新增 tests/wardrobe.test.mjs 与 tests/tracker_pipeline.test.mjs：覆盖衣柜工具行为、id/名称解析、wearState、产后 pregFit、存档剥离，以及 payload 组装 → 系统提示词 → 模拟模型回应 → 全管线套用的灰度链路；tests/ui-harness.html + tests/ui_server.mjs 提供 mock 宿主的前端可视化验证环境。
+- 内部重构：衣柜/穿着的规范化逻辑（衣物字段、id、配件补正上限、临时衣物）统一收敛到新模块 wardrobe_config.js，state.js 与 tools.js 不再各持一份近似实现；状态载入时的衣柜清单现在也会按 id 去重，与工具层行为一致。
+
 ## v0.8.4
 
 這版新增 Luker 宿主相容與多 API／Agent 編排控流，避免中間輸出過早觸發追蹤。

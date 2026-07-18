@@ -305,8 +305,6 @@ function applyWardrobePrep(ctx) {
     return;
   }
   const outfit = parsed?.outfit && typeof parsed.outfit === 'object' ? parsed.outfit : {};
-  let outfitDescription = getWardrobePrepOutfitDescription(parsed);
-  let outfitSelfView = getWardrobePrepOutfitSelfView(parsed);
   const workingState = cloneJsonValue(chatState);
   const workingCharacter = workingState.characters?.[targetName];
   if (!workingCharacter?.profile) {
@@ -317,7 +315,7 @@ function applyWardrobePrep(ctx) {
     enabled: true,
     items: [{ id: 0, name: '全裸', note: '未着衣物。', slot: 'main', masking: 0, support: 0, capacity: 10, convenience: 10 }],
   };
-  workingCharacter.profile.outfit = { mainItemId: 0, accessoryItemIds: [], temporaryItems: [], pregFit: null };
+  workingCharacter.profile.outfit = { mainItemId: 0, accessoryItemIds: [], temporaryItems: [], wearState: '整齐', pregFit: null };
   const logs = [];
   for (const item of items) {
     if (Number(item?.id) === 0 || String(item?.id || '').trim() === 'nude') continue;
@@ -337,24 +335,11 @@ function applyWardrobePrep(ctx) {
     setWardrobePrepStatus(failed.message || '备装失败。', true);
     return;
   }
-  if (!outfitDescription) outfitDescription = buildWardrobePrepFallbackOutfitDescription(items, outfit);
-  if (!outfitSelfView) outfitSelfView = buildWardrobePrepFallbackOutfitSelfView(items, outfit);
-  if (!outfitDescription || !outfitSelfView) {
-    setWardrobePrepStatus('备装 JSON 需要 outfitDescription 与 outfitSelfView。请重新生成或手动补上。', true);
-    return;
-  }
   const preparedCharacter = workingState.characters?.[targetName];
   if (!preparedCharacter?.profile) {
     setWardrobePrepStatus('备装目标状态异常。', true);
     return;
   }
-  let normalDescription = preparedCharacter.profile.descriptions?.normalDescription || '';
-  normalDescription = upsertDescriptionField(normalDescription, '衣着动态', outfitDescription, ['衣着動態', '衣著动态', '衣著動態', '衣着', '衣著', '当前衣着', '當前衣著']);
-  normalDescription = upsertDescriptionField(normalDescription, '衣着自评', outfitSelfView, ['衣著自評', '衣着自評', '衣著自评', '服装自评', '服裝自評']);
-  preparedCharacter.profile.descriptions = {
-    ...(preparedCharacter.profile.descriptions || {}),
-    normalDescription,
-  };
   chatState.characters[targetName] = preparedCharacter;
   recordChatStateSnapshot(ctx, chatState, { reason: 'wardrobe_prep' });
   saveSettings(ctx);
@@ -1997,98 +1982,6 @@ function parseDescriptionBlocks(text) {
     .filter((item) => item !== null);
 }
 
-function getDescriptionFieldContent(text, preferredNames = [], options = {}) {
-  const preferred = new Set(preferredNames.map((name) => String(name || '').trim()).filter(Boolean));
-  const blocks = parseDescriptionBlocks(text);
-  if (preferred.size > 0) {
-    const matched = blocks.find((block) => preferred.has(block.title));
-    if (matched) return matched.content;
-    if (options.fallback === false) return '';
-  }
-  return blocks.length > 0 ? blocks[0].content : String(text || '').trim();
-}
-
-function upsertDescriptionField(text, fieldName, content, aliases = []) {
-  const nextContent = String(content || '').replace(/\s+/g, ' ').trim();
-  if (!nextContent) return String(text || '').trim();
-  const targetName = String(fieldName || '').trim();
-  const aliasSet = new Set([targetName, ...aliases].map((name) => String(name || '').trim()).filter(Boolean));
-  const blocks = parseDescriptionBlocks(text);
-  if (blocks.length === 0) return targetName + '|' + nextContent + ';;';
-  let replaced = false;
-  const nextBlocks = blocks.map((block) => {
-    if (aliasSet.has(block.title)) {
-      replaced = true;
-      return { title: targetName, content: nextContent };
-    }
-    return block;
-  });
-  if (!replaced) nextBlocks.push({ title: targetName, content: nextContent });
-  return nextBlocks.map((block) => block.title + '|' + block.content + ';;').join('');
-}
-
-function getWardrobePrepOutfitDescription(parsed = {}) {
-  const sources = [
-    parsed?.outfitDescription,
-    parsed?.wearDescription,
-    parsed?.descriptions?.normalDescription,
-    parsed?.normalDescription,
-  ];
-  for (const source of sources) {
-    const text = String(source || '').trim();
-    if (!text) continue;
-    return getDescriptionFieldContent(text, ['衣着动态', '衣着動態', '衣著动态', '衣著動態', '衣着', '衣著', '当前衣着', '當前衣著']);
-  }
-  return '';
-}
-
-function getWardrobePrepOutfitSelfView(parsed = {}) {
-  const directSources = [parsed?.outfitSelfView, parsed?.wearSelfView, parsed?.selfView];
-  for (const source of directSources) {
-    const text = String(source || '').trim();
-    if (!text) continue;
-    return getDescriptionFieldContent(text, ['衣着自评', '衣著自評', '衣着自評', '衣著自评', '服装自评', '服裝自評']);
-  }
-  const descriptionSources = [parsed?.descriptions?.normalDescription, parsed?.normalDescription];
-  for (const source of descriptionSources) {
-    const text = String(source || '').trim();
-    if (!text) continue;
-    const matched = getDescriptionFieldContent(text, ['衣着自评', '衣著自評', '衣着自評', '衣著自评', '服装自评', '服裝自評'], { fallback: false });
-    if (matched) return matched;
-  }
-  return '';
-}
-
-function getWardrobePrepCurrentItems(items = [], outfit = {}) {
-  const temporaryItems = Array.isArray(outfit?.temporaryItems) ? outfit.temporaryItems : [];
-  const availableItems = [...items, ...temporaryItems]
-    .filter((item) => item && typeof item === 'object')
-    .map((item) => ({ ...item, id: Number(item.id) }));
-  const mainItemId = Number.isInteger(Number(outfit?.mainItemId)) ? Number(outfit.mainItemId) : 0;
-  const main = mainItemId === 0
-    ? { id: 0, name: '全裸', slot: 'main' }
-    : availableItems.find((item) => item.id === mainItemId && String(item.slot || 'main') === 'main');
-  const accessoryIds = Array.isArray(outfit?.accessoryItemIds) ? outfit.accessoryItemIds.map((id) => Number(id)) : [];
-  const accessories = accessoryIds
-    .map((id) => availableItems.find((item) => item.id === id && String(item.slot || '') === 'accessory'))
-    .filter(Boolean);
-  return { main, accessories };
-}
-
-function buildWardrobePrepFallbackOutfitDescription(items = [], outfit = {}) {
-  const current = getWardrobePrepCurrentItems(items, outfit);
-  const mainName = String(current.main?.name || '全裸').trim();
-  const accessoryNames = current.accessories.map((item) => String(item.name || '').trim()).filter(Boolean);
-  const accessoryText = accessoryNames.length > 0 ? `，搭配${accessoryNames.join('、')}` : '';
-  return `当前以${mainName}作为主件${accessoryText}，遮掩、支撑、容身与便捷表现按衣物四维参与叙事。`;
-}
-
-function buildWardrobePrepFallbackOutfitSelfView(items = [], outfit = {}) {
-  const current = getWardrobePrepCurrentItems(items, outfit);
-  const mainName = String(current.main?.name || '全裸').trim();
-  return `角色暂以${mainName}判断自己的当前穿着与遮掩效果；若合身程度变化，后续叙事会据孕期衣着压力更新感受。`;
-}
-
 function getPsychologyView(profile = {}) {
   const preg = profile?.psychology?.preg || {};
   const mens = profile?.psychology?.mens || {};
@@ -2244,69 +2137,37 @@ function renderWardrobeItemRow(item = {}, options = {}) {
 }
 
 function buildOutfitView(profile = {}) {
-  if (profile?.wardrobe?.enabled !== true) return { enabled: false, main: null, accessories: [], pregFit: null };
+  if (profile?.wardrobe?.enabled !== true) return { enabled: false, main: null, accessories: [], wearState: '', pregFit: null };
   const outfit = profile?.outfit && typeof profile.outfit === 'object' ? profile.outfit : {};
   const main = findOutfitViewItem(profile, outfit.mainItemId, 'main') || findWardrobeViewItem(profile, 0, 'main') || { id: 0, name: '全裸', note: '未着衣物。', slot: 'main' };
   const accessories = Array.isArray(outfit.accessoryItemIds)
     ? outfit.accessoryItemIds.map((id) => findOutfitViewItem(profile, id, 'accessory')).filter(Boolean)
     : [];
-  return { enabled: true, main, accessories, pregFit: outfit.pregFit || null };
+  return { enabled: true, main, accessories, wearState: String(outfit.wearState || '整齐'), pregFit: outfit.pregFit || null };
 }
 
 function getOutfitSummary(outfit = {}) {
   if (!outfit.enabled) return '尚未备装';
-  const names = [outfit.main?.name || '全裸', ...(outfit.accessories || []).map((item) => item.name || item.id)].filter(Boolean);
+  const stateSuffix = outfit.wearState && outfit.wearState !== '整齐' ? `（${outfit.wearState}）` : '';
+  const names = [(outfit.main?.name || '全裸') + stateSuffix, ...(outfit.accessories || []).map((item) => item.name || item.id)].filter(Boolean);
   return names.length > 0 ? names.join(' + ') : '无';
-}
-
-function getDescriptionBlockByNames(blocks = [], names = []) {
-  const nameSet = new Set(names.map((name) => String(name || '').trim()).filter(Boolean));
-  return (Array.isArray(blocks) ? blocks : []).find((block) => nameSet.has(String(block?.title || '').trim())) || null;
-}
-
-function isWardrobeDescriptionBlock(block = {}) {
-  return new Set([
-    '衣着动态', '衣着動態', '衣著动态', '衣著動態',
-    '衣着自评', '衣著自評', '衣着自評', '衣著自评',
-    '衣着', '衣著', '当前衣着', '當前衣著', '服装自评', '服裝自評',
-  ]).has(String(block?.title || '').trim());
 }
 
 function renderWardrobeDescriptionSection(viewModel = {}) {
   const outfitView = viewModel.outfit || {};
-  const blocks = viewModel.description?.normalBlocks || [];
-  const dynamicBlock = getDescriptionBlockByNames(blocks, ['衣着动态', '衣着動態', '衣著动态', '衣著動態', '衣着', '衣著', '当前衣着', '當前衣著']);
-  const selfViewBlock = getDescriptionBlockByNames(blocks, ['衣着自评', '衣著自評', '衣着自評', '衣著自评', '服装自评', '服裝自評']);
-  if (!outfitView.enabled && !dynamicBlock && !selfViewBlock) return '';
-  const accessories = Array.isArray(outfitView.accessories) ? outfitView.accessories : [];
-  const currentHtml = outfitView.enabled
-    ? '<div class="bs-bt-track-meta">'
-      + '<div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">主件</span><span class="bs-bt-track-meta-value">' + escapeHtml(outfitView.main?.name || '全裸') + '</span></div>'
-      + '<div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">配件</span><span class="bs-bt-track-meta-value">' + (accessories.length > 0 ? escapeHtml(accessories.map((item) => item.name || item.id).join('、')) : '无') + '</span></div>'
-      + '</div>'
-    : '<div class="bs-bt-track-description-empty">尚未备装</div>';
-  const descriptionItems = [
-    dynamicBlock ? { title: '动态', content: dynamicBlock.content } : null,
-    selfViewBlock ? { title: '自评', content: selfViewBlock.content } : null,
-  ].filter(Boolean);
-  const detailHtml = descriptionItems.length > 0
-    ? '<div class="bs-bt-track-description-list bs-bt-track-description-list--wardrobe">' + descriptionItems.map((item) => '<div class="bs-bt-track-description-item"><div class="bs-bt-track-description-title">' + escapeHtml(item.title) + '</div><div>' + escapeHtml(item.content || '') + '</div></div>').join('') + '</div>'
-    : '';
-  return '<div class="bs-bt-track-section bs-bt-track-section--wardrobe-description"><div class="bs-bt-track-section-title">衣着</div>' + currentHtml + detailHtml + '</div>';
-}
-
-function renderCurrentOutfitSection(outfitView = {}) {
   if (!outfitView.enabled) return '';
   const accessories = Array.isArray(outfitView.accessories) ? outfitView.accessories : [];
-  return `
-    <div class="bs-bt-track-section">
-      <div class="bs-bt-track-section-title">当前穿着</div>
-      <div class="bs-bt-track-meta">
-        <div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">主件</span><span class="bs-bt-track-meta-value">${escapeHtml(outfitView.main?.name || '全裸')}</span></div>
-        <div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">配件</span><span class="bs-bt-track-meta-value">${accessories.length > 0 ? escapeHtml(accessories.map((item) => item.name || item.id).join('、')) : '无'}</span></div>
-      </div>
-    </div>
-  `;
+  const innerNames = accessories.filter((item) => item?.layer === 'inner').map((item) => item.name || item.id);
+  const outerNames = accessories.filter((item) => item?.layer !== 'inner').map((item) => item.name || item.id);
+  const rows = [
+    '<div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">主件</span><span class="bs-bt-track-meta-value">' + escapeHtml(outfitView.main?.name || '全裸') + '</span></div>',
+    '<div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">状态</span><span class="bs-bt-track-meta-value">' + escapeHtml(outfitView.wearState || '整齐') + '</span></div>',
+    '<div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">配件</span><span class="bs-bt-track-meta-value">' + (outerNames.length > 0 ? escapeHtml(outerNames.join('、')) : '无') + '</span></div>',
+    ...(innerNames.length > 0
+      ? ['<div class="bs-bt-track-meta-row"><span class="bs-bt-track-meta-label">贴身</span><span class="bs-bt-track-meta-value">' + escapeHtml(innerNames.join('、')) + '</span></div>']
+      : []),
+  ];
+  return '<div class="bs-bt-track-section bs-bt-track-section--wardrobe-description"><div class="bs-bt-track-section-title">衣着</div><div class="bs-bt-track-meta">' + rows.join('') + '</div></div>';
 }
 
 function renderWardrobeCharacterList(characters = []) {
@@ -2690,7 +2551,7 @@ function renderTrackOverview(viewModel) {
 }
 
 function renderTrackDescription(viewModel) {
-  const normalBlocks = (Array.isArray(viewModel.description?.normalBlocks) ? viewModel.description.normalBlocks : []).filter((block) => !isWardrobeDescriptionBlock(block));
+  const normalBlocks = Array.isArray(viewModel.description?.normalBlocks) ? viewModel.description.normalBlocks : [];
   return `
     ${renderWardrobeDescriptionSection(viewModel)}
     ${renderDescriptionGroup('基本描述', normalBlocks)}

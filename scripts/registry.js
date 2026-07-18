@@ -356,23 +356,21 @@ export function buildWardrobePrepSystemPrompt(settings, options = {}) {
     'JSON 顶层结构必须是：',
     '{',
     '  "wardrobe": { "items": [] },',
-    '  "outfit": { "mainItemId": 1, "accessoryItemIds": [], "temporaryItems": [] },',
-    '  "outfitDescription": "衣着动态|string;;",',
-    '  "outfitSelfView": "衣着自评|string;;"',
+    '  "outfit": { "mainItemId": 1, "accessoryItemIds": [], "temporaryItems": [] }',
     '}',
     'wardrobe.items 只放长期衣柜，不要放系统保留的 id=0，也不要放病服、借来的外套、旅馆睡衣等临时衣物。',
     '临时衣物如确实是当前穿着，放入 outfit.temporaryItems，并让 outfit.mainItemId 或 accessoryItemIds 指向其中 id；否则 temporaryItems 输出空数组。',
-    '每件衣物必须包含 id/name/note/slot/masking/support/capacity/convenience。',
+    '每件衣物必须包含 id/name/note/slot/masking/support/capacity/convenience；main 主件可附 parts 数组列出组成部件名（如 ["白衬衫","牛仔裤"]，连身装可省略）；accessory 配件可附 layer（inner=贴身内衣等穿在主件之下，outer=外搭，默认 outer）。',
     'note 只写衣物稳定外观与来源：颜色、材质、版型、长短、固定开口、图案、制服/病服/借装来源等。皮肤暴露、开衩、透肤、深领等稳定外观写在 note。禁止写当前穿着反应、角色感受、近期身体变化、怀孕/胀痛/压胸/勒红/变紧/显怀等动态状态；这些由四维、pregFit 与当轮叙事推导。',
     'id 必须使用正整数，从 1 开始递增且不可重复；0 保留给全裸。name 使用中文或角色设定中的自然名称。',
     'slot 只能是 main 或 accessory。main 是可独立穿着的完整基础套装：一般必须把上衣与下着合并为同一个 main（连身裙、连体衣等一体式服装除外），name 与 note 都要同时写出上下身；不得把卫衣/T恤与牛仔裤/裙子拆成彼此互斥的多个 main，也不得把下着塞进 accessory。main 的四维按整套效果评分。accessory 才是可独立叠加在 main 上的外套、鞋履、帽子、饰品、托腹带等配件补正。',
+    '可独立穿脱的外层（毛衣、开衫、外套、罩衫、披肩等罩在基础套装外面的衣物）不要并入 main 或写进 parts，应拆成 layer=outer 的 accessory，这样剧情中单独脱掉时才有机械表达；main 只保留脱掉外层后仍成立的基础层。',
     '四维数值范围 -10 到 10：masking=掩盖身体曲线、孕肚、胸腹变化的程度；support=对胸、腹、腰、重心的承托程度，高表示托得住但可能偏束，低表示松散；capacity=容许体型变化的程度；convenience=行动、穿脱、如厕、哺乳或排解需求的方便程度。',
     '主件通常使用 0 到 10；配件单项只能 -3 到 3，通常只影响 1-2 个最相关维度，其他维度必须填 0，避免把配件写成整套服装。',
     '配件例：外套可提高 masking；托腹带可提高 support 或 capacity；高跟鞋可降低 convenience；鞋履通常不应大幅提高 support，除非 note 明确是矫正/固定用途。',
+    '配件中通常应包含 1-2 件 layer=inner 的贴身衣物（如内衣），其四维补正同样遵守 -3 到 3 的配件规则。',
     'outfit.mainItemId 必须是 wardrobe.items 或 outfit.temporaryItems 中 slot=main 的 id；若无法判断当前穿着，选择最日常的一件主件。',
     'outfit.accessoryItemIds 只能包含 slot=accessory 的 id；未知则空数组。',
-    'outfitDescription 必须输出 normalDescription 的衣着动态子字段，格式固定为：衣着动态|当前穿着动态描述;;。它只描述 outfit 在角色身上的当前客观/半客观状态、遮掩/支撑/容身/便捷表现；可参考孕态与四维，但不要写长期自我评价，也不要改写 wardrobe.items.note。',
-    'outfitSelfView 必须输出 normalDescription 的衣着自评子字段，格式固定为：衣着自评|角色对当前穿着、遮掩效果、合身程度或暴露风险的主观看法;;。自评更新频率较慢，应像角色认知或习惯判断，不要写成每轮都需要变化的即时动作。',
     '[用户额外备装提示]',
     userPrompt || '无',
   ].join('\n');
@@ -384,10 +382,6 @@ function sanitizeWardrobePrepResult(result) {
   if (items.length <= 0) throw new Error('备装推演缺少 wardrobe.items');
   const outfit = result?.outfit && typeof result.outfit === 'object' && !Array.isArray(result.outfit) ? result.outfit : null;
   if (!outfit) throw new Error('备装推演缺少 outfit');
-  const outfitDescription = String(result?.outfitDescription || result?.wearDescription || result?.descriptions?.normalDescription || result?.normalDescription || '').trim();
-  const outfitSelfView = String(result?.outfitSelfView || result?.wearSelfView || result?.selfView || '').trim();
-  if (!outfitDescription) throw new Error('备装推演缺少 outfitDescription');
-  if (!outfitSelfView) throw new Error('备装推演缺少 outfitSelfView');
   return {
     wardrobe: { items },
     outfit: {
@@ -395,8 +389,6 @@ function sanitizeWardrobePrepResult(result) {
       accessoryItemIds: Array.isArray(outfit.accessoryItemIds) ? outfit.accessoryItemIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id >= 0) : [],
       temporaryItems: Array.isArray(outfit.temporaryItems) ? outfit.temporaryItems : [],
     },
-    outfitDescription,
-    outfitSelfView,
   };
 }
 

@@ -2,6 +2,7 @@ import { PSY_MENS_FIELDS, PSY_PREG_FIELDS } from './registry_psy_config.js';
 import { buildEmbryoTypeLorePrompt } from './embryo_prompt_context.js';
 import { buildRacePhysiologyPrompt } from './race_prompt_context.js';
 import { getDerivedTypeFluxProfile } from './race_config.js';
+import { LABOR_STAGES, PREGNANCY_STAGES } from './stage_config.js';
 
 function collectRelevantFluxNames(payload = {}) {
   const found = [];
@@ -154,18 +155,26 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '',
   '[wardrobe / outfit]',
   '- wardrobe 是角色衣柜，包含 items；outfit 是当前穿着。主流敘事通常只需要关注在场角色的 outfit。',
-  '- 衣物 item 字段：id/name/note/slot/masking/support/capacity/convenience。id 使用整数；默认主件 id=0 表示全裸，不要加入 wardrobe.items。note 只写衣物稳定外观与来源：颜色、材质、版型、长短、固定开口、图案、制服/病服/借装来源等；皮肤暴露、开衩、透肤、深领等稳定外观写在 note。禁止写当前穿着反应、角色感受、近期身体变化、怀孕/胀痛/压胸/勒红/变紧/显怀等动态状态；这些由四维、pregFit 与当轮叙事推导。slot=main 为一次只能穿一件的完整基础套装：一般将上衣与下着合并为同一 main（连身裙、连体衣除外），不得拆成彼此互斥的 main，也不得把下着放入 accessory；四维按整套评分。slot=accessory 为可叠加的外套、鞋履、帽子、饰品或功能配件补正。配件单项只能 -3 到 3，通常只影响 1-2 个最相关维度，其他维度填 0。',
+  '- 衣物 item 字段：id/name/note/slot/masking/support/capacity/convenience。id 使用整数；默认主件 id=0 表示全裸，不要加入 wardrobe.items。note 只写衣物稳定外观与来源：颜色、材质、版型、长短、固定开口、图案、制服/病服/借装来源等；皮肤暴露、开衩、透肤、深领等稳定外观写在 note。禁止写当前穿着反应、角色感受、近期身体变化、怀孕/胀痛/压胸/勒红/变紧/显怀等动态状态；这些由四维、pregFit 与当轮叙事推导。slot=main 为一次只能穿一件的完整基础套装：一般将上衣与下着合并为同一 main（连身裙、连体衣除外），不得拆成彼此互斥的 main，也不得把下着放入 accessory；四维按整套评分。main 可附 parts 数组列出组成部件名（如 ["白衬衫","牛仔裤"]）。slot=accessory 为可叠加的外套、鞋履、帽子、饰品、贴身内衣或功能配件补正；配件可附 layer（inner=贴身内衣等穿在主件之下，outer=外搭，默认 outer）。配件单项只能 -3 到 3，通常只影响 1-2 个最相关维度，其他维度填 0。',
+  '- 剧情中重新搭配上下装（如白衬衫改配短裙）时，不要修改原主件，应用 bsAddWardrobeItem 铸造新的组合主件（parts 列出部件）再用 bsChangeOutfit 换上；组合只需在实际穿过时创建。',
+  '- outfit.wearState 为当前穿着状态短标签（12 字内），默认 整齐。建议词表：整齐/凌乱/敞开/半褪/撩起/上衣已褪/下装已褪/湿透，也可按情境自造同粒度短标签；主件有 parts 时优先引用部件名消歧，如「毛衣已脱」「裙摆撩起」。剧情中穿着完整度或整洁度变化时，用 bsChangeOutfit 只传 wearState 即可更新；换主件时未显式传入会自动重置为整齐。仅着内衣可表达为 mainItemId: 0 加 inner 配件。',
+  '- 可独立穿脱的外层（毛衣、开衫、外套等）应是 layer=outer 的配件而不是 main 的一部分；若发现某主件把外层并入了 parts，可用 bsAddWardrobeItem 把外层拆成新配件并更新该主件。',
   '- 四维含义：masking=掩盖身体曲线、孕肚、胸腹变化的程度，不等于皮肤裸露程度，露肤、开衩、透肤等稳定外观由 note 描述；support=对胸、腹、腰、重心的承托程度；capacity=容许体型变化的程度；convenience=行动、穿脱、如厕、哺乳或排解需求的方便程度。',
-  '- 可用 bsAddWardrobeItem 添加/更新长期衣柜衣物，bsRemoveWardrobeItem 删除长期衣柜衣物，bsChangeOutfit 更换当前主件和配件列表。bsChangeOutfit 是覆盖式换装：mainItemId 是换装后的唯一主件；accessoryItemIds 是换装后仍穿戴的完整配件列表。要脱掉某配件，就传不包含该 id 的新列表；脱掉所有配件传 accessoryItemIds: []；全裸传 mainItemId: 0 且 accessoryItemIds: []。',
+  '- 可用 bsAddWardrobeItem 添加/更新长期衣柜衣物，bsRemoveWardrobeItem 删除长期衣柜衣物，bsChangeOutfit 更换当前主件和配件。穿上或脱下个别配件（穿鞋、戴外套、脱袜等）优先用增量参数：addAccessoryItemIds 穿上、removeAccessoryItemIds 脱下，在当前配件基础上生效，不需要重述其他配件。accessoryItemIds 是覆盖式完整列表，用于整套重设：脱掉所有配件传 accessoryItemIds: []；全裸传 mainItemId: 0 且 accessoryItemIds: []。wearState 只是状态标签，不会改变穿了哪些衣物。',
   '- 临时衣物（如病服、借来的外套、旅馆睡衣）不要加入 wardrobe；在 bsChangeOutfit 传 temporaryItems，并让 mainItemId/accessoryItemIds 指向其中 id。换回衣柜服装时传 temporaryItems: [] 清除临时衣物。',
-  '- outfit.pregFit 只在真实妊娠、产兆前驱或产程中存在；非妊娠时为 null。pregFit.pregWearPressure 为孕期衣着压力，gap 为四维余裕：masking/support/capacity/convenience。gap 低于 0 表示该维度已被孕期变化压过。',
+  '- 衣物引用规则：调用衣柜工具时优先传整数 id；若不确定 id，可传准确的衣物名称字符串，系统会按名称解析。bsAddWardrobeItem 新增衣物可省略 id，系统会自动分配下一个整数 id，不要自造大数字 id。',
+  '- 换装触发规则：只要 recent_messages 中出现穿上、脱下、更衣、借穿、被脱除、淋湿、衣衫不整、洗浴后重新着装等衣着或穿着状态变化，就必须调用 bsChangeOutfit，使 outfit 与当前叙事一致：换主件传 mainItemId；穿脱个别配件传 addAccessoryItemIds/removeAccessoryItemIds；仅状态变化传 wearState。不要用 wearState 或描述文字代替配件穿脱。',
+  '- outfit.currentWearText 是系统解析出的当前穿着摘要（主件 + 穿着状态 + 配件与贴身衣物），仅供比对阅读，不要写回。每轮应将它与最近叙事对照：不符时必须同轮调用 bsChangeOutfit 修正。衣着的当前状态由 outfit 机械字段唯一承担，不要在 descriptions 中维护衣着子字段。',
+  '- 幕外(offscreen)角色也会附带精简 wardrobe.items（仅 id/name/slot/layer）与当前 outfit 摘要。角色重新登场时，若衣着应有变化（如换了日常服、外出服），应在调用 bsSetCharacterPresence 的同一轮用 bsChangeOutfit 完成回场换装。',
+  '- 四维数值只在孕期窗口（真实妊娠/产兆前驱/产程/产后恢复）发送并参与 pregFit 计算；窗口外 payload 中的衣物只有 id/name/slot/note/parts/layer，非孕期敘事请依 note 的稳定外观描述。四维仍保存在系统中，bsAddWardrobeItem 新增或更新衣物时仍必须给出完整四维。',
+  '- outfit.pregFit 只在真实妊娠、产兆前驱、产程或产后恢复中存在；其余阶段为 null。pregFit.pregWearPressure 为孕期衣着压力，产后恢复期间会随恢复进度从产后初期水平递减到 0；gap 为四维余裕：masking/support/capacity/convenience。gap 低于 0 表示该维度已被孕期变化压过。',
   '- gap 表示衣物该维度扣除孕期压力后的余裕。一般 gap 约 3 以上表示仍有余裕；0 到 2 表示开始吃紧；-1 到 -3 表示明显冲突；-4 以下表示该维度严重失效。按具体维度叙述：masking 失效是轮廓、孕肚或胸腹变化难藏；support 失效是承托不足、下坠、晃动或重心负担外溢；capacity 失效是版型固定、尺寸死、腰腹胸臀被迫撑紧或扣合困难；convenience 失效是行动、穿脱、如厕或排解需求明显受阻。不要把 gap 数值直接写进叙事，除非是调试说明。',
   '',
   '[descriptions]',
   '- normalDescription / pregnantDescription 为文字描述栏位。',
   '- 两者格式固定为：字段名|描述内容;;字段名|描述内容;;...字段名|描述内容;;',
   '- 使用 bsSetDescription 前，必须逐一检查该描述栏位全部既有子字段；未传入的子字段会保留旧值，且仅代表它已检查并确认完全不变。不得为了简短而省略受本轮剧情、姿势、衣着、表情、身体状态或环境影响的字段。',
-  '- 不要新增角色原本没有的描述子字段；只能更新 existing_state 中该角色该 descriptions 已存在的字段名。',
+  '- 不要新增角色原本没有的描述子字段；只能更新 existing_state 中该角色该 descriptions 已存在的字段名。唯一例外：当本提示词包含 [pregnantDescription 初始化] 段时，可为其中点名角色的空 pregnantDescription 建立规范内的首批子字段。',
   '- 不要改写成自然段，不要省略字段名，不要把 ;; 或 | 换成别的分隔方式。',
   '',
   '[notify]',
@@ -210,6 +219,24 @@ function buildTrackerMetabolismGuide(payload = null) {
     : baseGuide;
 }
 
+// 妊娠相关阶段中 pregnantDescription 仍为空的在场角色：需要注入初始化规范，
+// 否则「不要新增描述子字段」规则会把空栏位永久锁死。
+const PREGNANT_DESCRIPTION_STAGES = new Set([...PREGNANCY_STAGES, '产兆前驱', ...LABOR_STAGES, '产后恢复', '假孕期']);
+
+function collectPregnantDescriptionInitNames(payload = {}) {
+  const names = [];
+  const existingState = payload?.existing_state;
+  if (!existingState || typeof existingState !== 'object') return names;
+  for (const [key, item] of Object.entries(existingState)) {
+    if (item?.offscreen === true) continue;
+    const stage = String(item?.profile?.base?.stage || '');
+    if (!PREGNANT_DESCRIPTION_STAGES.has(stage)) continue;
+    if (String(item?.profile?.descriptions?.pregnantDescription || '').trim()) continue;
+    names.push(String(item?.name || key));
+  }
+  return names;
+}
+
 export function buildTrackerSystemPrompt(basePrompt = '', descriptionGuides = null, payload = null) {
   const diaryEnabled = payload?.diary_enabled !== false;
   const metabolismGuide = buildTrackerMetabolismGuide(payload);
@@ -250,18 +277,17 @@ export function buildTrackerSystemPrompt(basePrompt = '', descriptionGuides = nu
       '- 若调用 bsSetDescription，先逐字段检查；所有受本轮影响的既有字段必须一并更新。省略只允许用于已确认完全不变的字段。',
     ].join('\n'));
 
-  if (descriptionGuides) {
+  const pregnantInitNames = collectPregnantDescriptionInitNames(payload);
+  const pregnantGuide = String(descriptionGuides?.pregnantDescription || '').trim();
+  if (pregnantInitNames.length > 0 && pregnantGuide) {
     parts.push([
-      '[descriptions 填写规范]',
-      '- normalDescription 默认必须填写。',
-      '- pregnantDescription 只有当角色处于妊娠相关阶段或假孕时才需要填写，否则必须留空或不返回。',
-      '- 请务必按照预设的字段名与 |、;; 分隔符进行填写（参考下方规范），不可擅自使用自然段或缺少字段名。',
+      '[pregnantDescription 初始化]',
+      `- 角色 ${pregnantInitNames.join('、')} 已进入妊娠相关阶段，但 pregnantDescription 仍为空。`,
+      '- 这是「不要新增描述子字段」规则的唯一例外：请尽快用 bsSetDescription 按下方规范为该角色建立首批 pregnantDescription 子字段，只建立规范中列出的字段名。',
+      '- 格式仍为：字段名|描述内容;;字段名|描述内容;;，不可用自然段，不可省略字段名。',
       '',
-      '【normalDescription 规范】',
-      String(descriptionGuides.normalDescription || '').trim(),
-      '',
-      '【pregnantDescription 规范 (仅妊娠/假孕时填写)】',
-      String(descriptionGuides.pregnantDescription || '').trim(),
+      '【pregnantDescription 规范】',
+      pregnantGuide,
     ].join('\n'));
   }
 

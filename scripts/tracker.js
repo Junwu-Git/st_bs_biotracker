@@ -1,5 +1,6 @@
 import { callOpenAICompatible } from './api.js';
 import { buildMainFlowStatePrompt, buildTrackerSystemPrompt } from './tracker_prompt_context.js';
+import { DEFAULT_WEAR_STATE, sanitizeWearState } from './wardrobe_config.js';
 import { applyToolCallsResult, TOOL_DEFINITIONS } from './tools.js';
 import {
   buildRecentMessages,
@@ -173,6 +174,66 @@ function getPromptFacingLaborState(base = {}, pregnant = {}) {
   };
 }
 
+function getOutfitCurrentWearText(profile) {
+  const wardrobe = profile?.wardrobe;
+  const outfit = profile?.outfit;
+  if (!wardrobe?.enabled || !outfit || typeof outfit !== 'object') return '';
+  const availableItems = [
+    ...(Array.isArray(wardrobe.items) ? wardrobe.items : []),
+    ...(Array.isArray(outfit.temporaryItems) ? outfit.temporaryItems : []),
+  ];
+  const findItem = (id) => availableItems.find((entry) => entry?.id === id) || null;
+  const itemName = (id) => {
+    const found = findItem(id);
+    if (found?.name) return String(found.name);
+    return id === 0 ? '全裸' : `未知衣物#${id}`;
+  };
+  const mainId = outfit.mainItemId ?? 0;
+  const wearState = sanitizeWearState(outfit.wearState);
+  const stateSuffix = wearState !== DEFAULT_WEAR_STATE ? `（${wearState}）` : '';
+  const accessoryIds = Array.isArray(outfit.accessoryItemIds) ? outfit.accessoryItemIds : [];
+  const innerNames = [];
+  const outerNames = [];
+  for (const id of accessoryIds) {
+    (findItem(id)?.layer === 'inner' ? innerNames : outerNames).push(itemName(id));
+  }
+  if (mainId === 0 && (innerNames.length > 0 || outerNames.length > 0)) {
+    return `仅着：${[...innerNames, ...outerNames].join(' + ')}${stateSuffix}`;
+  }
+  const base = [itemName(mainId) + stateSuffix, ...outerNames].join(' + ');
+  return innerNames.length > 0 ? `${base}（内着：${innerNames.join('、')}）` : base;
+}
+
+function buildSlimWardrobeItem(entry) {
+  return {
+    id: entry?.id,
+    name: entry?.name,
+    slot: entry?.slot,
+    ...(entry?.layer ? { layer: entry.layer } : {}),
+  };
+}
+
+// 四维数值只在孕期窗口（真妊娠/产兆前驱/产程/产后恢复）有机械消费者（pregFit）；
+// 窗口外的 payload 衣物瘦身为 id/name/slot/note，四维仍保存在持久化状态中。
+function isWearFitWindowActive(base = {}) {
+  const stage = String(base?.stage || '');
+  return PREGNANCY_STAGES.includes(stage)
+    || stage === '产兆前驱'
+    || LABOR_STAGES.includes(stage)
+    || stage === '产后恢复';
+}
+
+function buildNarrativeWardrobeItem(entry) {
+  return {
+    id: entry?.id,
+    name: entry?.name,
+    slot: entry?.slot,
+    note: entry?.note,
+    ...(Array.isArray(entry?.parts) && entry.parts.length > 0 ? { parts: entry.parts } : {}),
+    ...(entry?.layer ? { layer: entry.layer } : {}),
+  };
+}
+
 function buildPromptFacingCharacterState(item, diaryLimit = 0) {
   const next = cloneValue(item);
   const profile = next?.profile || {};
@@ -240,6 +301,16 @@ function buildPromptFacingCharacterState(item, diaryLimit = 0) {
     };
   }
 
+  if (profile.wardrobe?.enabled && profile.outfit && typeof profile.outfit === 'object') {
+    profile.outfit.currentWearText = getOutfitCurrentWearText(profile);
+    if (!isWearFitWindowActive(base)) {
+      profile.wardrobe.items = (Array.isArray(profile.wardrobe.items) ? profile.wardrobe.items : []).map(buildNarrativeWardrobeItem);
+      if (Array.isArray(profile.outfit.temporaryItems)) {
+        profile.outfit.temporaryItems = profile.outfit.temporaryItems.map((entry) => ({ ...buildNarrativeWardrobeItem(entry), source: entry?.source }));
+      }
+    }
+  }
+
   delete profile.bio;
   delete profile.immune;
   delete profile.cooldown;
@@ -281,6 +352,21 @@ function buildOffscreenCharacterState(item, diaryLimit = 0) {
           ...getPromptFacingLaborState(base, pregnant),
           fetusesCount: hasFetuses ? pregnant.fetuses.length : 0,
           ...getPromptFacingMetabolismSymptoms(pregnant),
+        },
+      } : {}),
+      ...(profile.wardrobe?.enabled ? {
+        wardrobe: {
+          enabled: true,
+          items: (Array.isArray(profile.wardrobe.items) ? profile.wardrobe.items : []).map(buildSlimWardrobeItem),
+        },
+        outfit: {
+          mainItemId: profile.outfit?.mainItemId ?? 0,
+          accessoryItemIds: Array.isArray(profile.outfit?.accessoryItemIds) ? [...profile.outfit.accessoryItemIds] : [],
+          wearState: sanitizeWearState(profile.outfit?.wearState),
+          ...(Array.isArray(profile.outfit?.temporaryItems) && profile.outfit.temporaryItems.length > 0
+            ? { temporaryItems: profile.outfit.temporaryItems.map(buildSlimWardrobeItem) }
+            : {}),
+          currentWearText: getOutfitCurrentWearText(profile),
         },
       } : {}),
       diary: getRecentDiaryEntries(profile, diaryLimit),
@@ -662,7 +748,7 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
   chatState.lastRunAt = Date.now();
   chatState.lastAttemptedSignature = buildSignature(ctx, messageIndex + 1);
   saveSettings(ctx);
-  const systemPrompt = buildTrackerSystemPrompt(settings.systemPrompt || DEFAULT_SYSTEM_PROMPT, null, payload);
+  const systemPrompt = buildTrackerSystemPrompt(settings.systemPrompt || DEFAULT_SYSTEM_PROMPT, settings.registryDescriptionGuides || null, payload);
   recordTrackerRequestDebug(systemPrompt, payload);
   const rawResult = await callOpenAICompatible(
     settings,
