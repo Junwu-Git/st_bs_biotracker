@@ -95,3 +95,66 @@ test('callOpenAICompatible sends chat completions through the SillyTavern backen
   assert.deepEqual(body.response_format, { type: 'json_object' });
   assert.equal(Array.isArray(body.messages), true);
 });
+
+test('fetchModelList falls back to direct access when the SillyTavern proxy returns 403', async () => {
+  const calls = [];
+  installBrowserHost(async (url, options) => {
+    calls.push({ url, options });
+    if (url === '/api/backends/chat-completions/status') {
+      return {
+        ok: false,
+        status: 403,
+        async text() {
+          return '<!DOCTYPE html><pre>Forbidden</pre>';
+        },
+      };
+    }
+    assert.equal(url, 'https://relay.example.test/v1/models');
+    return jsonResponse({ data: [{ id: 'relay-model' }] });
+  });
+
+  const models = await fetchModelList({
+    apiUrl: 'https://relay.example.test/v1',
+    apiKey: 'relay-key',
+  });
+
+  assert.deepEqual(models, ['relay-model']);
+  assert.deepEqual(calls.map((call) => call.url), [
+    '/api/backends/chat-completions/status',
+    'https://relay.example.test/v1/models',
+  ]);
+  assert.equal(calls[1].options.headers.Authorization, 'Bearer relay-key');
+});
+
+test('callOpenAICompatible falls back to direct access when the SillyTavern proxy returns 403', async () => {
+  const calls = [];
+  installBrowserHost(async (url, options) => {
+    calls.push({ url, options });
+    if (url === '/api/backends/chat-completions/generate') {
+      return {
+        ok: false,
+        status: 403,
+        async text() {
+          return '<!DOCTYPE html><pre>Forbidden</pre>';
+        },
+      };
+    }
+    assert.equal(url, 'https://relay.example.test/v1/chat/completions');
+    return jsonResponse({
+      choices: [{ message: { content: JSON.stringify({ operations: [] }) } }],
+    });
+  });
+
+  const result = await callOpenAICompatible({
+    apiUrl: 'https://relay.example.test/v1',
+    apiKey: 'relay-key',
+    model: 'relay-model',
+  }, { recent_messages: [] }, 'Return JSON.');
+
+  assert.deepEqual(result, { operations: [] });
+  assert.deepEqual(calls.map((call) => call.url), [
+    '/api/backends/chat-completions/generate',
+    'https://relay.example.test/v1/chat/completions',
+  ]);
+  assert.equal(calls[1].options.headers.Authorization, 'Bearer relay-key');
+});

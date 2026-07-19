@@ -100,8 +100,10 @@ function shouldUseHostProxy(url) {
   return isBrowserRuntime() && isCrossOriginUrl(url);
 }
 
-function isMissingHostProxy(responseText, status) {
-  return status === 404
+function shouldFallbackFromHostProxy(responseText, status) {
+  return status === 401
+    || status === 403
+    || status === 404
     || status === 405
     || /cannot\s+post|not\s+found|no\s+route|ENOENT/i.test(String(responseText || ''));
 }
@@ -500,19 +502,15 @@ async function requestChatCompletion(apiBase, settings, body) {
       let response;
       let responseText;
       if (useHostProxy) {
+        let proxyError = null;
         try {
           ({ response, responseText } = await requestHostProxyChatCompletion(apiBase, settings, requestBody));
-          if (!response.ok && isMissingHostProxy(responseText, response.status)) {
-            transport = 'direct-after-proxy-miss';
-            ({ response, responseText } = await fetchText(url, {
-              method: 'POST',
-              headers: getAuthHeaders(settings),
-              body: requestText,
-            }));
-          }
-        } catch (proxyError) {
-          transport = 'direct-after-proxy-error';
-          logApiDebug(`proxy_error:${attempt}`, { proxyError });
+        } catch (error) {
+          proxyError = error;
+          logApiDebug(`proxy_error:${attempt}`, { proxyError: error });
+        }
+        if (proxyError || (!response.ok && shouldFallbackFromHostProxy(responseText, response.status))) {
+          transport = proxyError ? 'direct-after-proxy-error' : `direct-after-proxy-${response.status}`;
           ({ response, responseText } = await fetchText(url, {
             method: 'POST',
             headers: getAuthHeaders(settings),
@@ -626,15 +624,15 @@ export async function fetchModelList(settings) {
   let transport = useHostProxy ? 'host-proxy' : 'direct';
   try {
     if (useHostProxy) {
+      let proxyError = null;
       try {
         ({ response, responseText } = await requestHostProxyModelList(apiBase, settings));
-        if (!response.ok && isMissingHostProxy(responseText, response.status)) {
-          transport = 'direct-after-proxy-miss';
-          ({ response, responseText } = await fetchText(url, { method: 'GET', headers: getAuthHeaders(settings) }));
-        }
-      } catch (proxyError) {
-        transport = 'direct-after-proxy-error';
-        console.warn('[BS BioTracker] host proxy model list failed, trying direct', proxyError);
+      } catch (error) {
+        proxyError = error;
+        console.warn('[BS BioTracker] host proxy model list failed, trying direct', error);
+      }
+      if (proxyError || (!response.ok && shouldFallbackFromHostProxy(responseText, response.status))) {
+        transport = proxyError ? 'direct-after-proxy-error' : `direct-after-proxy-${response.status}`;
         ({ response, responseText } = await fetchText(url, { method: 'GET', headers: getAuthHeaders(settings) }));
       }
     } else {
