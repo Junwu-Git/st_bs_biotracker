@@ -9,6 +9,7 @@ import {
   PSY_PREG_BOOL_FIELDS,
 } from './registry_psy_config.js';
 import { LABOR_STAGES, MENSTRUAL_STAGES, MENSTRUAL_STAGE_DAYS, PREGNANCY_STAGE_DAYS, PREGNANCY_STAGES } from './stage_config.js';
+import { normalizeNextSkillId, normalizeSkillCatalog, normalizeSkillHistory, normalizeSkillList, normalizeTalentList } from './skill_config.js';
 import {
   createDefaultWardrobeItem,
   normalizeTemporaryOutfitItems,
@@ -137,6 +138,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   trackerGlobalWorldbookIncludeNames: '',
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   registryCustomNotes: '',
+  registrySkillPrompt: '',
   registryDescriptionGuides: DEFAULT_REGISTRY_DESCRIPTION_GUIDES,
   racePhysiologyOverrides: {},
   derivedTypeOverrides: {},
@@ -292,6 +294,39 @@ export function normalizeCharacterPsychologyState(characterState) {
   if (!characterState || typeof characterState !== 'object') return characterState;
   if (!characterState.profile || typeof characterState.profile !== 'object') return characterState;
   characterState.profile.psychology = normalizePsychologyState(characterState.profile.psychology);
+  characterState.profile.skills = normalizeSkillList(characterState.profile.skills);
+  characterState.profile.talents = normalizeTalentList(characterState.profile.talents);
+  characterState.profile.skillHistory = normalizeSkillHistory(characterState.profile.skillHistory);
+  if (characterState.profile.childSource && typeof characterState.profile.childSource === 'object' && !Array.isArray(characterState.profile.childSource)) {
+    const motherName = String(characterState.profile.childSource.motherName || '').trim();
+    const childIndex = Number(characterState.profile.childSource.childIndex);
+    if (motherName && Number.isInteger(childIndex) && childIndex >= 0) {
+      const normalizedChildSource = {
+        motherName,
+        childIndex,
+      };
+      if (Array.isArray(characterState.profile.childSource.inheritedTalents)) {
+        normalizedChildSource.inheritedTalents = normalizeTalentList(characterState.profile.childSource.inheritedTalents);
+      }
+      characterState.profile.childSource = normalizedChildSource;
+    } else {
+      delete characterState.profile.childSource;
+    }
+  }
+  if (Array.isArray(characterState.profile.children)) {
+    characterState.profile.children = characterState.profile.children.map((child) => {
+      const next = { ...child, talents: normalizeTalentList(child?.talents ?? child?.inheritedTalents) };
+      delete next.inheritedTalents;
+      return next;
+    });
+  }
+  if (Array.isArray(characterState.profile.pregnant?.fetuses)) {
+    characterState.profile.pregnant.fetuses = characterState.profile.pregnant.fetuses.map((fetus) => {
+      const next = { ...fetus, talents: normalizeTalentList(fetus?.talents ?? fetus?.inheritedTalents) };
+      delete next.inheritedTalents;
+      return next;
+    });
+  }
   if (characterState.profile.wardrobe?.enabled) {
     characterState.profile.wardrobe = normalizeWardrobeState(characterState.profile.wardrobe);
     characterState.profile.outfit = normalizeOutfitState(characterState.profile.outfit, characterState.profile.wardrobe);
@@ -622,6 +657,7 @@ function sanitizeFetusList(value) {
         const next = sanitizeNumber(item[field], rule);
         if (next !== null) fetus[field] = next;
       }
+      fetus.talents = normalizeTalentList(item.talents ?? item.inheritedTalents);
       return fetus;
     });
 }
@@ -637,6 +673,10 @@ function sanitizeChildrenList(value) {
       race: sanitizeString(item.race) ?? null,
       derivedType: sanitizeString(item.derivedType) ?? null,
       age: sanitizeNumber(item.age, { min: 0, max: 9999 }) ?? null,
+      birthWeightRatio: sanitizeNumber(item.birthWeightRatio, { min: 0.33, max: 3.0 }) ?? null,
+      birthAffinity: sanitizeNumber(item.birthAffinity, { min: -50, max: 50 }) ?? null,
+      registeredAs: sanitizeString(item.registeredAs) ?? null,
+      talents: normalizeTalentList(item.talents ?? item.inheritedTalents),
     }));
 }
 
@@ -735,6 +775,9 @@ function sanitizeProfilePatch(profilePatch) {
     },
   );
   const children = sanitizeChildrenList(profilePatch.children);
+  const skills = normalizeSkillList(profilePatch.skills);
+  const talents = normalizeTalentList(profilePatch.talents);
+  const skillHistory = normalizeSkillHistory(profilePatch.skillHistory);
   const bio = sanitizeObjectPatch(
     profilePatch.bio,
     [
@@ -806,6 +849,9 @@ function sanitizeProfilePatch(profilePatch) {
   }
   if (experience) result.experience = experience;
   if (children) result.children = children;
+  if (profilePatch.skills !== undefined) result.skills = skills;
+  if (profilePatch.talents !== undefined) result.talents = talents;
+  if (profilePatch.skillHistory !== undefined) result.skillHistory = skillHistory;
   if (bio) result.bio = bio;
   if (mens || pregPsy) result.psychology = {};
   if (mens) result.psychology.mens = mens;
@@ -829,6 +875,8 @@ export function createEmptyChatState() {
     lastRunAt: 0,
     sceneSummary: '',
     minutesPassed: 0,
+    skillCatalog: [],
+    nextSkillId: 1,
     characters: {},
     lastRawResult: null,
     lastOperationLogs: [],
@@ -904,6 +952,9 @@ export function createDefaultFemaleState(name = '') {
         stageProfiles: {},
       },
       children: [],
+      skills: [],
+      talents: [],
+      skillHistory: [],
       diary: [],
       bio: {
         menstrualLengthRatio: 1.0,
@@ -1066,6 +1117,12 @@ export function getChatState(ctx, settings) {
   if (!settings.chatStates[chatKey]) settings.chatStates[chatKey] = createEmptyChatState();
   const chatState = settings.chatStates[chatKey];
   let shouldSave = false;
+  const normalizedSkillCatalog = normalizeSkillCatalog(chatState.skillCatalog);
+  if (JSON.stringify(chatState.skillCatalog || []) !== JSON.stringify(normalizedSkillCatalog)) shouldSave = true;
+  chatState.skillCatalog = normalizedSkillCatalog;
+  const normalizedNextSkillId = normalizeNextSkillId(chatState.skillCatalog, chatState.nextSkillId);
+  if (chatState.nextSkillId !== normalizedNextSkillId) shouldSave = true;
+  chatState.nextSkillId = normalizedNextSkillId;
   if (!Array.isArray(chatState.snapshots)) chatState.snapshots = [];
   if (!Array.isArray(chatState.lastOperationLogs)) chatState.lastOperationLogs = [];
   const sanitizedCurrentPayload = sanitizeSnapshotPayload(chatState);
@@ -1110,10 +1167,12 @@ export function getChatState(ctx, settings) {
 export function isChatStateEffectivelyEmpty(chatState) {
   if (!chatState || typeof chatState !== 'object') return true;
   const hasCharacters = Object.keys(chatState.characters || {}).length > 0;
+  const hasSkillCatalog = Array.isArray(chatState.skillCatalog) && chatState.skillCatalog.length > 0;
+  const hasConsumedSkillIds = Number(chatState.nextSkillId) > 1;
   const hasSnapshots = Array.isArray(chatState.snapshots) && chatState.snapshots.length > 0;
   const hasSceneSummary = Boolean(String(chatState.sceneSummary || '').trim());
   const hasMinutesPassed = Number(chatState.minutesPassed) > 0;
-  return !(hasCharacters || hasSnapshots || hasSceneSummary || hasMinutesPassed);
+  return !(hasCharacters || hasSkillCatalog || hasConsumedSkillIds || hasSnapshots || hasSceneSummary || hasMinutesPassed);
 }
 
 export function inheritChatStateFromMatchingChat(ctx, settings) {
@@ -1458,6 +1517,9 @@ function createSnapshotCharacterBaseline(name = '') {
         stageProfiles: {},
       },
       children: [],
+      skills: [],
+      talents: [],
+      skillHistory: [],
       diary: [],
       bio: {
         menstrualLengthRatio: 1.0,
@@ -1567,6 +1629,8 @@ function exportChatStateSnapshotPayload(chatState) {
   return {
     snapshotSchema: 'packed_v2',
     charactersFormat: 'default_delta_v1',
+    skillCatalog: normalizeSkillCatalog(chatState.skillCatalog),
+    nextSkillId: normalizeNextSkillId(chatState.skillCatalog, chatState.nextSkillId),
     lastAttemptedSignature: sanitizeStoredSignature(chatState.lastAttemptedSignature),
     lastProcessedSignature: sanitizeStoredSignature(chatState.lastProcessedSignature),
     lastRunAt: chatState.lastRunAt || 0,
@@ -1638,6 +1702,7 @@ export function summarizeOperationLogs(value) {
       applied: Boolean(item?.applied),
       message: String(item?.message || '').slice(0, MAX_RAW_RESULT_TEXT_LENGTH),
     };
+    if (item?.notify && typeof item.notify === 'object') log.notify = summarizeSnapshotDebugValue(item.notify);
     const args = normalizeSnapshotToolArguments(item?.arguments);
     if (args !== undefined) log.arguments = args;
     return log;
@@ -1646,6 +1711,8 @@ export function summarizeOperationLogs(value) {
 
 function sanitizeSnapshotPayload(payload) {
   const next = cloneValue(payload || createEmptyChatState());
+  next.skillCatalog = normalizeSkillCatalog(next.skillCatalog);
+  next.nextSkillId = normalizeNextSkillId(next.skillCatalog, next.nextSkillId);
   next.lastAttemptedSignature = sanitizeStoredSignature(next.lastAttemptedSignature);
   next.lastProcessedSignature = sanitizeStoredSignature(next.lastProcessedSignature);
   next.lastRawResult = summarizeRawResult(next.lastRawResult);
@@ -1900,6 +1967,8 @@ export function restoreChatStateFromSnapshot(chatState, snapshot) {
   chatState.lastRunAt = payload.lastRunAt || 0;
   chatState.sceneSummary = payload.sceneSummary || '';
   chatState.minutesPassed = payload.minutesPassed || 0;
+  if (payload.skillCatalog !== undefined) chatState.skillCatalog = normalizeSkillCatalog(payload.skillCatalog);
+  if (payload.nextSkillId !== undefined) chatState.nextSkillId = normalizeNextSkillId(chatState.skillCatalog, payload.nextSkillId);
   chatState.characters = unpackSnapshotCharacters(payload.characters, payload.charactersFormat || '');
   chatState.lastRawResult = payload.lastRawResult || null;
   chatState.lastOperationLogs = Array.isArray(payload.lastOperationLogs) ? payload.lastOperationLogs : [];

@@ -38,6 +38,9 @@
         ...overrides.descriptions,
       },
       experience: { sexCount: 0, birthCount: 0, records: [] },
+      skills: [],
+      talents: [],
+      skillHistory: [],
       children: [],
       diary: [],
       notify: {},
@@ -46,9 +49,19 @@
   });
 
   const chatState = {
+    skillCatalog: [
+      { id: 1, name: '剑术', description: '使用长剑进行攻防的实战技巧。' },
+      { id: 2, name: '魔力感知', description: '辨识周遭魔力流动的能力。' },
+    ],
+    nextSkillId: 3,
     characters: {
       艾拉: makeCharacter('艾拉', {
         profile: {
+          skills: [{ skillId: 1, level: 3, exp: 120 }],
+          talents: [{ skillId: 2, level: 1, exp: 30 }],
+          skillHistory: [{
+            skillId: 1, fromLevel: 1, toLevel: 3, reason: '在连续实战中掌握了新的剑术节奏。', source: 'story', timestamp: Date.now() - 3600000,
+          }],
           wardrobe: {
             enabled: true,
             items: [

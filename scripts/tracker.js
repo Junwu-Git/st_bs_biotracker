@@ -370,6 +370,9 @@ function buildOffscreenCharacterState(item, diaryLimit = 0) {
         },
       } : {}),
       diary: getRecentDiaryEntries(profile, diaryLimit),
+      skills: Array.isArray(profile.skills) ? profile.skills : [],
+      talents: Array.isArray(profile.talents) ? profile.talents : [],
+      skillHistory: Array.isArray(profile.skillHistory) ? profile.skillHistory.slice(-10) : [],
       notify: Object.values(notify).some((value) => String(value || '').trim()) ? notify : undefined,
     },
   };
@@ -591,6 +594,7 @@ export function buildTrackerPayload(ctx, settings, reason = 'manual', endIndexEx
     character_worldbook: payloadWorldBook,
     mainflow_context_snapshot: mainflowContextSnapshot,
     tracked_females: getRegisteredTargetNames(ctx, settings, chatState),
+    skill_catalog: Array.isArray(chatState.skillCatalog) ? chatState.skillCatalog : [],
     existing_state: buildTrackerStateView(existingState, settings),
     available_tools: getTrackerToolDefinitions(settings, existingState),
     diary_enabled: diaryEnabled,

@@ -41,6 +41,14 @@ import {
   saveSettings,
 } from './state.js';
 import { canLoadHostWorldInfo, getHostWorldBook, loadHostWorldInfo } from './host.js';
+import {
+  normalizeNextSkillId,
+  normalizeSkillCatalog,
+  normalizeSkillList,
+  normalizeTalentList,
+  registerSkillDefinition,
+  resolveSkillDefinition,
+} from './skill_config.js';
 
 const DEBUG_LAST_REGISTRY_REQUEST_KEY = '__bs_biotracker_debug_last_registry_request__';
 const DEBUG_LAST_REGISTRY_RESULT_KEY = '__bs_biotracker_debug_last_registry_result__';
@@ -263,9 +271,10 @@ function recordBreedingInferenceResultDebug(result, error = null) {
 }
 
 export function buildBreedingInferenceSystemPrompt(settings, options = {}) {
-  const customNotes = String(options.customNotes || settings?.registryCustomNotes || '').trim();
+  const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings?.registryCustomNotes || '')).trim();
   const declaredRace = String(options.declaredRace || '').trim();
   const breedingInferencePrompt = String(options.breedingInferencePrompt || '').trim();
+  const sourceChild = options.sourceChildContext?.child || null;
   const psyMensLines = Object.entries(PSY_MENS_FIELDS).map(([key, value]) => `- mens.${key}_value: ${value.definition}`);
   const psyMensBoolLines = Object.entries(PSY_MENS_BOOL_FIELDS).map(([key, value]) => `- mens.${key}: ${value.definition}`);
   const psyPregLines = Object.entries(PSY_PREG_FIELDS).map(([key, value]) => `- preg.${key}_value: ${value.definition}`);
@@ -280,6 +289,7 @@ export function buildBreedingInferenceSystemPrompt(settings, options = {}) {
     '启用 mens 时，必须同时推演 isChaste 与 hasContraception；启用 preg 时，必须同时推演 knowsFatherSource 与 hasProfessionalPrenatalCare。',
     '数值范围为 0-100。0 是极端封闭/否认/失控，50 是普通中性，100 是极端掌控/执迷/展现。不要使用 100+，注册阶段只给 0-100 起始点。',
     declaredRace ? `用户已声明角色种族倾向：${declaredRace}` : '',
+    sourceChild ? '本次角色来源为已出生孩子。payload.source_child 是其固定出生资料与既有天赋；必须用来判断长期人格、母子关系及成长背景，不得改写其种族或天赋。' : '',
     customNotes ? `角色补充设定：${customNotes}` : '',
     breedingInferencePrompt ? `额外推演提示：${breedingInferencePrompt}` : '',
     'mens 字段定义：',
@@ -484,7 +494,7 @@ function getPsychologyStageProfileLabelLeaks(stageProfiles) {
 
 async function buildRegistryPayload(ctx, settings, chatState, options = {}) {
   const targetName = String(options.targetName || '').trim();
-  const customNotes = String(options.customNotes || settings.registryCustomNotes || '').trim();
+  const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings.registryCustomNotes || '')).trim();
   const declaredRace = String(options.declaredRace || '').trim();
   if (!targetName) throw new Error('runRegistry 需要 targetName');
   const currentCharacter = getCharacterCard(ctx);
@@ -498,6 +508,28 @@ async function buildRegistryPayload(ctx, settings, chatState, options = {}) {
   );
   const payloadWorldBook = characterWorldBook;
   const payloadGlobalWorldbooks = await getFilteredGlobalWorldbooks(ctx, settings, recentMessages);
+  const sourceChild = options.sourceChildContext
+    ? {
+      mother: options.sourceChildContext.motherName,
+      childIndex: options.sourceChildContext.childIndex,
+      name: options.sourceChildContext.child?.name ?? null,
+      fathers: options.sourceChildContext.child?.fathers ?? null,
+      gender: options.sourceChildContext.child?.gender ?? null,
+      race: options.sourceChildContext.child?.race ?? null,
+      derivedType: options.sourceChildContext.child?.derivedType ?? null,
+      age: options.sourceChildContext.child?.age ?? null,
+      birthWeightRatio: options.sourceChildContext.child?.birthWeightRatio ?? null,
+      birthAffinity: options.sourceChildContext.child?.birthAffinity ?? null,
+      talents: normalizeTalentList(options.sourceChildContext.child?.talents).map((talent) => {
+        const definition = resolveSkillDefinition(chatState.skillCatalog, talent.skillId);
+        return {
+          ...talent,
+          name: definition?.name || `未知技能 #${talent.skillId}`,
+          description: definition?.description || '',
+        };
+      }),
+    }
+    : null;
   return {
     reason: options.reason || 'manual_registry',
     chat_id: getChatKey(ctx),
@@ -514,6 +546,7 @@ async function buildRegistryPayload(ctx, settings, chatState, options = {}) {
     recent_messages: recentMessages,
     custom_notes: customNotes,
     declared_race: declaredRace || null,
+    source_child: sourceChild,
     user_instruction: String(options.userInstruction || '').trim(),
   };
 }
@@ -525,7 +558,7 @@ export async function runRegistryWardrobeInference(ctx, options = {}) {
   if (!requestedTargetName) throw new Error('备装推演需要 targetName');
   const targetName = resolveRegisteredCharacterName(chatState, requestedTargetName);
   if (!targetName) throw new Error(`备装推演需要已注册角色：${requestedTargetName}`);
-  const customNotes = String(options.customNotes || settings.registryCustomNotes || '').trim();
+  const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings.registryCustomNotes || '')).trim();
   const declaredRace = String(options.declaredRace || '').trim();
   const wardrobePrepPrompt = String(options.wardrobePrepPrompt || settings.wardrobePrepPrompt || '').trim();
   const wardrobePrepMainCount = Math.max(1, Math.min(12, Math.floor(Number(options.wardrobePrepMainCount ?? settings.wardrobePrepMainCount ?? 3) || 3)));
@@ -587,8 +620,13 @@ export async function runRegistryDiaryInference(ctx, options = {}) {
 export async function runRegistryBreedingInference(ctx, options = {}) {
   const settings = getSettings(ctx);
   const chatState = getChatState(ctx, settings);
-  const customNotes = String(options.customNotes || settings.registryCustomNotes || '').trim();
-  const declaredRace = String(options.declaredRace || '').trim();
+  const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings.registryCustomNotes || '')).trim();
+  const requestedSource = options.sourceChild || null;
+  const sourceChildContext = requestedSource ? resolveRegistryChildSource(chatState, requestedSource) : null;
+  if (requestedSource && !sourceChildContext) throw new Error('找不到选择的孩子来源，请重新选择。');
+  const declaredRace = sourceChildContext
+    ? `${sourceChildContext.child.derivedType ? `[${sourceChildContext.child.derivedType}]` : ''}${String(sourceChildContext.child.race || '未知')}`
+    : String(options.declaredRace || '').trim();
   const breedingInferencePrompt = String(options.breedingInferencePrompt || '').trim();
   const payload = await buildRegistryPayload(ctx, settings, chatState, {
     ...options,
@@ -596,6 +634,7 @@ export async function runRegistryBreedingInference(ctx, options = {}) {
     customNotes,
     declaredRace,
     breedingInferencePrompt,
+    sourceChildContext,
     userInstruction: breedingInferencePrompt,
   });
   payload.breeding_inference_prompt = breedingInferencePrompt;
@@ -604,6 +643,7 @@ export async function runRegistryBreedingInference(ctx, options = {}) {
     customNotes,
     declaredRace,
     breedingInferencePrompt,
+    sourceChildContext,
   });
 }
 
@@ -615,8 +655,9 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     ...(settings?.registryDescriptionGuides || {}),
     ...(options.descriptionGuides || {}),
   };
-  const customNotes = String(options.customNotes || settings?.registryCustomNotes || '').trim();
+  const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings?.registryCustomNotes || '')).trim();
   const declaredRace = String(options.declaredRace || '').trim();
+  const sourceChild = options.payload?.source_child || null;
   const embryoTypeLorePrompt = buildEmbryoTypeLorePrompt(options.payload || {}, { includeAllIfEmpty: true });
   const racePhysiologyPrompt = buildRegistryRacePhysiologyPrompt(options.payload || {});
   const psyMensLines = Object.entries(PSY_MENS_FIELDS).flatMap(([key, value]) => [
@@ -634,6 +675,7 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '你是 AIRP 女性角色注册初始化器。',
     '只在用户明确要求注册指定角色时工作，不得擅自新增其他角色。',
     '根据角色卡、用户要求、已有资料，输出角色初始化 JSON。',
+    sourceChild ? '本次注册来源为已有角色的孩子。payload.source_child 是固定事实：base.race 必须沿用其 race／derivedType；其 talents 会由系统确定性继承。你只能参考这些天赋塑造初始化内容，不得删除、改名、换向或重算天赋。' : '',
     includeBreedingPsychology
       ? 'payload.breeding_inference 是已确认的繁育推演。必须优先把它当作繁育心理初稿，再结合角色资料校正，不要无故忽略。'
       : '本次未启用繁育心理推演：不要输出、补全或推断任何繁育阶段人格字段，保留角色卡原有的阶段人设与表现。',
@@ -912,6 +954,10 @@ function sanitizeChildren(value) {
         race: parsed.race || null,
         derivedType: item.derivedType ?? parsed.derivedType ?? null,
         age: item.age ?? null,
+        birthWeightRatio: Number.isFinite(Number(item.birthWeightRatio)) ? clampNumber(item.birthWeightRatio, 0.33, 3.0, 1.0) : null,
+        birthAffinity: Number.isFinite(Number(item.birthAffinity)) ? clampNumber(item.birthAffinity, -50, 50, 0) : null,
+        registeredAs: item.registeredAs ?? null,
+        talents: normalizeTalentList(item.talents ?? item.inheritedTalents),
       };
     });
 }
@@ -952,6 +998,7 @@ function sanitizePregnant(value) {
           weight: Number.isFinite(Number(item.weight)) ? clampNumber(item.weight, 0.33, 3.0, 1.0) : undefined,
           tendencyAngle: Number.isFinite(Number(item.tendencyAngle)) ? clampNumber(item.tendencyAngle, 0, 360, 0) : undefined,
           affinity: Number.isFinite(Number(item.affinity)) ? clampNumber(item.affinity, -50, 50, 0) : undefined,
+          talents: normalizeTalentList(item.talents ?? item.inheritedTalents),
         };
       })
     : [];
@@ -1235,6 +1282,8 @@ export function applyRegistryResult(chatState, result, { allowBreedingPsychology
         ...(sanitizedProfile.experience || {}),
       },
       diary: sanitizedProfile.diary ?? base.profile.diary,
+      skills: normalizeSkillList(base.profile.skills),
+      talents: normalizeTalentList(base.profile.talents),
       psychology: nextPsychology,
       descriptions: {
         ...base.profile.descriptions,
@@ -1273,6 +1322,171 @@ export function applyRegistryResult(chatState, result, { allowBreedingPsychology
   }
   chatState.characters[name] = syncCharacterStageFromProfile(normalizeCharacterPsychologyState(nextCharacter));
   return chatState.characters[name];
+}
+
+export function buildRegistrySkillSystemPrompt(options = {}) {
+  const skillPrompt = String(options.skillPrompt || '').trim();
+  const inheritedTalentsLocked = Boolean(options.inheritedTalentsLocked);
+  return [
+    '你是 AIRP 角色初始技能与天赋配置器。只处理 payload.target_character。',
+    '根据角色卡、世界书、最近对话、已注册角色状态及用户提示，生成可供用户确认的初始技能／天赋 JSON。',
+    '先查阅 payload.skill_catalog。语义适合的技能必须复用其精确 name 或 id，不得用近义词建立重复技能。',
+    '只有现有图鉴确实无法表达所需技能时，才能放入 skillDefinitions；每个新定义必须同时提供 name 与明确说明技能范围的 description。',
+    'initialSkills 与 initialTalents 的 skill 必须使用图鉴中的精确 name/id，或本次 skillDefinitions 中的新技能精确 name。',
+    '技能 level 为 1-10。天赋 level 为 -10 到 10：正数为擅长，负数为苦手，0 为尚未形成。',
+    '技能与天赋共用经验曲线 requiredExp(level)=100*level*level；Lv0 形成擅长／苦手 Lv1 均需 100 EXP。',
+    inheritedTalentsLocked ? 'payload.existing_skill_setup.talents 是孩子出生后保留的既有天赋，属于固定继承内容。必须参考它们配置技能，不得在 initialTalents 中输出同一技能的不同等级、方向或经验。' : '',
+    '没有充分依据的项目不要添加；不得把性格、身体状态或一次性事件滥列为技能。',
+    skillPrompt ? '严格参考 payload.initial_skill_prompt 的额外要求。' : '用户没有提供额外要求，请仅依现有角色资料谨慎判断。',
+    '只输出 JSON，不要输出解释或 Markdown。结构必须是：',
+    '{',
+    '  "skillDefinitions": [{"name":"string","description":"string"}],',
+    '  "initialSkills": [{"skill":"技能精确名称或ID","level":1,"exp":0}],',
+    '  "initialTalents": [{"skill":"技能精确名称或ID","level":0,"exp":0}]',
+    '}',
+    '没有项目的数组也必须输出为空数组。',
+  ].join('\n');
+}
+
+function sanitizeRegistrySkillInferenceResult(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('技能／天赋生成结果必须是 JSON 对象');
+  const fields = ['skillDefinitions', 'initialSkills', 'initialTalents'];
+  for (const field of fields) {
+    if (result[field] !== undefined && !Array.isArray(result[field])) throw new Error(`${field} 必须是数组`);
+  }
+  return {
+    skillDefinitions: Array.isArray(result.skillDefinitions) ? result.skillDefinitions : [],
+    initialSkills: Array.isArray(result.initialSkills) ? result.initialSkills : [],
+    initialTalents: Array.isArray(result.initialTalents) ? result.initialTalents : [],
+  };
+}
+
+export async function runRegistrySkillInference(ctx, options = {}) {
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const requestedTargetName = String(options.targetName || '').trim();
+  if (!requestedTargetName) throw new Error('技能／天赋生成需要 targetName');
+  const targetName = resolveRegisteredCharacterName(chatState, requestedTargetName);
+  if (!targetName) throw new Error(`技能／天赋生成需要已注册角色：${requestedTargetName}`);
+  const skillPrompt = String(options.skillPrompt !== undefined ? options.skillPrompt : (settings.registrySkillPrompt || '')).trim();
+  const payload = await buildRegistryPayload(ctx, settings, chatState, {
+    ...options,
+    targetName,
+    customNotes: '',
+    reason: 'skill_talent_inference',
+    userInstruction: skillPrompt,
+  });
+  payload.initial_skill_prompt = skillPrompt;
+  payload.skill_catalog = normalizeSkillCatalog(chatState.skillCatalog);
+  payload.existing_skill_setup = {
+    skills: normalizeSkillList(chatState.characters[targetName]?.profile?.skills),
+    talents: normalizeTalentList(chatState.characters[targetName]?.profile?.talents),
+  };
+  const inheritedTalentsLocked = Boolean(chatState.characters[targetName]?.profile?.childSource);
+  payload.inherited_talents_locked = inheritedTalentsLocked;
+  const systemPrompt = options.skillSystemPrompt || buildRegistrySkillSystemPrompt({ skillPrompt, inheritedTalentsLocked });
+  const result = await callOpenAICompatible(settings, payload, systemPrompt);
+  return sanitizeRegistrySkillInferenceResult(result);
+}
+
+export function normalizeInitialSkillTalentConfig(config, catalog) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return { skills: [], talents: [] };
+  const resolveId = (entry) => {
+    const reference = entry?.skillId ?? entry?.skill ?? entry?.name;
+    const definition = resolveSkillDefinition(catalog, reference);
+    if (!definition) throw new Error(`技能图鉴中找不到：${String(reference || '(空白)')}`);
+    return definition.id;
+  };
+  const skills = normalizeSkillList((Array.isArray(config.skills) ? config.skills : []).map((entry) => ({
+    skillId: resolveId(entry),
+    level: entry?.level,
+    exp: entry?.exp,
+  })));
+  const talents = normalizeTalentList((Array.isArray(config.talents) ? config.talents : []).map((entry) => ({
+    skillId: resolveId(entry),
+    level: entry?.level,
+    exp: entry?.exp,
+  })));
+  return { skills, talents };
+}
+
+export function applyInitialSkillTalentConfig(chatState, targetName, config) {
+  const name = String(targetName || '').trim();
+  const current = chatState.characters?.[name];
+  if (!name || !current) throw new Error(`找不到已注册角色：${name || '(空白)'}`);
+  const normalized = normalizeInitialSkillTalentConfig(config, chatState.skillCatalog);
+  const next = {
+    ...current,
+    profile: {
+      ...(current.profile || {}),
+      skills: normalized.skills,
+      talents: normalized.talents,
+    },
+    updatedAt: Date.now(),
+  };
+  chatState.characters[name] = normalizeCharacterPsychologyState(next);
+  return chatState.characters[name];
+}
+
+export function applyRegistrySkillSetup(chatState, targetName, result) {
+  const name = String(targetName || '').trim();
+  if (!name || !chatState.characters?.[name]) throw new Error(`找不到已注册角色：${name || '(空白)'}`);
+  const workingState = {
+    ...chatState,
+    characters: { ...(chatState.characters || {}) },
+    skillCatalog: normalizeSkillCatalog(chatState.skillCatalog),
+    nextSkillId: normalizeNextSkillId(chatState.skillCatalog, chatState.nextSkillId),
+  };
+  const definitions = result?.skillDefinitions ?? [];
+  const initialSkills = result?.initialSkills ?? [];
+  const initialTalents = result?.initialTalents ?? [];
+  if (!Array.isArray(definitions)) throw new Error('注册结果的 skillDefinitions 必须是数组');
+  if (!Array.isArray(initialSkills)) throw new Error('注册结果的 initialSkills 必须是数组');
+  if (!Array.isArray(initialTalents)) throw new Error('注册结果的 initialTalents 必须是数组');
+  if (definitions.length > 20) throw new Error('单次注册最多可新增 20 项技能定义');
+  for (const definition of definitions) {
+    if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
+      throw new Error('skillDefinitions 每一项都必须是对象');
+    }
+    const registered = registerSkillDefinition(
+      workingState.skillCatalog,
+      definition,
+      workingState.nextSkillId,
+    );
+    if (!registered.ok) throw new Error(registered.message || '新增技能定义失败');
+    workingState.skillCatalog = registered.catalog;
+    workingState.nextSkillId = registered.nextSkillId;
+  }
+  const childSource = workingState.characters[name]?.profile?.childSource;
+  const resolvedChildSource = childSource ? resolveRegistryChildSource(workingState, childSource) : null;
+  const inheritedTalentSource = Array.isArray(childSource?.inheritedTalents)
+    ? childSource.inheritedTalents
+    : (resolvedChildSource?.child?.talents ?? workingState.characters[name]?.profile?.talents);
+  const inheritedTalents = normalizeTalentList(inheritedTalentSource);
+  let character = applyInitialSkillTalentConfig(workingState, name, {
+    skills: initialSkills,
+    talents: initialTalents,
+  });
+  if (childSource) {
+    character.profile.childSource = {
+      motherName: String(childSource.motherName || '').trim(),
+      childIndex: Number(childSource.childIndex),
+      inheritedTalents,
+    };
+  }
+  if (inheritedTalents.length > 0) {
+    const inheritedIds = new Set(inheritedTalents.map((entry) => entry.skillId));
+    character.profile.talents = normalizeTalentList([
+      ...character.profile.talents.filter((entry) => !inheritedIds.has(entry.skillId)),
+      ...inheritedTalents,
+    ]);
+    workingState.characters[name] = character;
+  }
+
+  chatState.skillCatalog = workingState.skillCatalog;
+  chatState.nextSkillId = workingState.nextSkillId;
+  chatState.characters[name] = character;
+  return character;
 }
 
 export function applyBreedingInferenceResult(chatState, targetName, inference) {
@@ -1333,15 +1547,54 @@ export function applyRegistryBreedingInference(ctx, options = {}) {
   return character;
 }
 
+export function resolveRegistryChildSource(chatState, source = {}) {
+  const motherName = String(source?.motherName || '').trim();
+  const childIndex = Number(source?.childIndex);
+  if (!motherName || !Number.isInteger(childIndex) || childIndex < 0) return null;
+  const mother = chatState?.characters?.[motherName];
+  const children = Array.isArray(mother?.profile?.children) ? mother.profile.children : [];
+  const child = children[childIndex];
+  return child && typeof child === 'object' ? { motherName, childIndex, mother, child } : null;
+}
+
+export function applyRegistryChildInheritance(chatState, targetName, source = {}) {
+  const resolved = resolveRegistryChildSource(chatState, source);
+  const name = String(targetName || '').trim();
+  const character = chatState?.characters?.[name];
+  if (!resolved) throw new Error('找不到选择的孩子来源。');
+  if (!character?.profile) throw new Error(`找不到已注册角色：${name || '(空白)'}`);
+  character.profile.base = character.profile.base && typeof character.profile.base === 'object' ? character.profile.base : {};
+  character.profile.base.race = String(resolved.child.race || '未知');
+  if (resolved.child.derivedType) character.profile.base.derivedType = String(resolved.child.derivedType);
+  else delete character.profile.base.derivedType;
+  character.profile.talents = normalizeTalentList(resolved.child.talents);
+  character.profile.childSource = {
+    motherName: resolved.motherName,
+    childIndex: resolved.childIndex,
+    inheritedTalents: normalizeTalentList(resolved.child.talents),
+  };
+  resolved.child.registeredAs = name;
+  character.updatedAt = Date.now();
+  return { character, source: resolved };
+}
+
 export async function runRegistry(ctx, options = {}) {
   const settings = getSettings(ctx);
   const chatState = getChatState(ctx, settings);
   const targetName = String(options.targetName || '').trim();
-  const customNotes = String(options.customNotes || settings.registryCustomNotes || '').trim();
-  const declaredRace = String(options.declaredRace || '').trim();
+  const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings.registryCustomNotes || '')).trim();
   if (!targetName) throw new Error('runRegistry 需要 targetName');
+  const requestedSource = options.sourceChild || null;
+  const sourceChildContext = requestedSource ? resolveRegistryChildSource(chatState, requestedSource) : null;
+  if (requestedSource && !sourceChildContext) throw new Error('找不到选择的孩子来源，请重新选择。');
+  if (sourceChildContext?.child?.registeredAs) throw new Error(`这个孩子已经注册为 ${sourceChildContext.child.registeredAs}。`);
+  if (sourceChildContext && chatState.characters[targetName]) throw new Error(`角色名 ${targetName} 已被使用，不能覆盖为孩子角色。`);
+  const fixedChildRace = sourceChildContext
+    ? `${sourceChildContext.child.derivedType ? `[${sourceChildContext.child.derivedType}]` : ''}${String(sourceChildContext.child.race || '未知')}`
+    : '';
+  const declaredRace = fixedChildRace || String(options.declaredRace || '').trim();
   const includeBreedingPsychology = Boolean(options.breedingInference);
-  const payload = await buildRegistryPayload(ctx, settings, chatState, { ...options, customNotes, declaredRace });
+  const payload = await buildRegistryPayload(ctx, settings, chatState, { ...options, customNotes, declaredRace, sourceChildContext });
   payload.breeding_psychology_enabled = includeBreedingPsychology;
   if (includeBreedingPsychology) payload.breeding_inference = options.breedingInference;
   try {
@@ -1389,8 +1642,19 @@ export async function runRegistry(ctx, options = {}) {
         result.profile.psychology.stageProfiles = options.breedingInference.stageProfiles;
       }
     }
+    if (sourceChildContext?.child?.registeredAs) throw new Error(`这个孩子已经注册为 ${sourceChildContext.child.registeredAs}。`);
+    if (sourceChildContext && chatState.characters[targetName]) throw new Error(`角色名 ${targetName} 已在注册请求期间被使用。`);
+    if (sourceChildContext && result && typeof result === 'object' && !Array.isArray(result)) {
+      result.name = targetName;
+      result.profile = result.profile && typeof result.profile === 'object' && !Array.isArray(result.profile) ? result.profile : {};
+      result.profile.base = result.profile.base && typeof result.profile.base === 'object' && !Array.isArray(result.profile.base) ? result.profile.base : {};
+      result.profile.base.race = String(sourceChildContext.child.race || '未知');
+      if (sourceChildContext.child.derivedType) result.profile.base.derivedType = String(sourceChildContext.child.derivedType);
+      else delete result.profile.base.derivedType;
+    }
     recordRegistryResultDebug(result);
-    const character = applyRegistryResult(chatState, result, { allowBreedingPsychology: includeBreedingPsychology });
+    let character = applyRegistryResult(chatState, result, { allowBreedingPsychology: includeBreedingPsychology });
+    if (sourceChildContext) character = applyRegistryChildInheritance(chatState, targetName, requestedSource).character;
     recordChatStateSnapshot(ctx, chatState, { reason: 'registry' });
     saveSettings(ctx);
     return character;

@@ -1,5 +1,15 @@
 import { fetchModelList } from './scripts/api.js';
-import { applyRegistryBreedingInference, runRegistry, runRegistryBreedingInference, runRegistryDiaryInference, runRegistryWardrobeInference } from './scripts/registry.js';
+import {
+  applyInitialSkillTalentConfig,
+  applyRegistryBreedingInference,
+  applyRegistrySkillSetup,
+  resolveRegistryChildSource,
+  runRegistry,
+  runRegistryBreedingInference,
+  runRegistryDiaryInference,
+  runRegistrySkillInference,
+  runRegistryWardrobeInference,
+} from './scripts/registry.js';
 import {
   AMORPHOUS_RACES,
   DERIVED_TYPE_FLUX_PROFILES,
@@ -37,6 +47,7 @@ import { buildMainFlowPrompt, resetPoller, runTracker } from './scripts/tracker.
 import { applyToolCall } from './scripts/tools.js';
 import { getEmbryoTypeReferenceText } from './scripts/embryo_prompt_context.js';
 import { buildSingleRacePhysiologyText } from './scripts/race_prompt_context.js';
+import { appendSkillHistory, getTalentLabel, normalizeTalentList, removeSkillDefinition, requiredExp, resolveSkillDefinition } from './scripts/skill_config.js';
 import {
   canLoadHostWorldInfo,
   getHostChatCompletionSettings,
@@ -106,6 +117,8 @@ const MAINFLOW_CONTEXT_SNAPSHOT_KEY = '__bs_biotracker_mainflow_context_snapshot
 const DEBUG_LAST_MAINFLOW_SNAPSHOT_KEY = '__bs_biotracker_debug_last_mainflow_snapshot__';
 const FETCH_CAPTURE_READY_KEY = '__bs_biotracker_fetch_capture_ready__';
 let registryBreedingInferenceDraft = null;
+let registerManualRaceDraft = '人类';
+let selectedRegisterChildSourceKey = '';
 const ORIGINAL_FETCH_KEY = '__bs_biotracker_original_fetch__';
 const MAX_MAINFLOW_SNAPSHOT_MESSAGES = 48;
 const VITALITY_CAPS = { 1: 50, 2: 75, 3: 100, 4: 125, 5: 150, 6: 175, 7: 200 };
@@ -117,6 +130,8 @@ let selectedTrackName = '';
 let selectedTrackSubpage = 'overview';
 let selectedTrackCardIndexes = {};
 let selectedWardrobeName = '';
+let selectedWardrobeSubpage = 'characters';
+let selectedSkillDefinitionId = 0;
 let selectedRaceEncyclopedia = '';
 let selectedDerivedEncyclopedia = '';
 let racePhysiologyEditorOpen = false;
@@ -158,6 +173,11 @@ let debugGestationModifierDraft = {
 let debugFetalActivityDraft = {
   owner: '',
   text: '',
+};
+let debugFetalTalentDraft = {
+  owner: '',
+  fetusIndex: 0,
+  skillId: 0,
 };
 
 const RACE_PALETTE_GROUPS = [
@@ -213,7 +233,7 @@ function setRegisterStatus(message, isError = false) {
 
 function setRegisterTab(tab) {
   const requested = String(tab || 'inference');
-  const next = ['inference', 'registry', 'wardrobe', 'diary'].includes(requested) ? requested : 'inference';
+  const next = ['inference', 'registry', 'wardrobe', 'diary', 'skills'].includes(requested) ? requested : 'inference';
   document.querySelectorAll('#bs-bt-register-tabs [data-register-tab]').forEach((node) => {
     node.classList.toggle('is-active', String(node.getAttribute('data-register-tab') || '') === next);
   });
@@ -222,6 +242,269 @@ function setRegisterTab(tab) {
     node.classList.toggle('is-active', active);
     node.hidden = !active;
   });
+}
+
+function setSkillCatalogStatus(message, isError = false) {
+  const node = document.getElementById('bs-bt-skill-catalog-status');
+  if (!node) return;
+  node.textContent = String(message || '');
+  node.dataset.state = isError ? 'error' : 'normal';
+}
+
+function setRegisterSkillStatus(message, isError = false) {
+  const node = document.getElementById('bs-bt-register-skill-status');
+  if (!node) return;
+  node.textContent = String(message || '');
+  node.dataset.state = isError ? 'error' : 'normal';
+}
+
+function getSkillDefinitionDisplay(catalog, skillId) {
+  return resolveSkillDefinition(catalog, skillId) || { id: Number(skillId) || 0, name: `未知技能 #${skillId}`, description: '' };
+}
+
+function collectSkillDefinitionHolders(chatState, skillId) {
+  const holders = [];
+  for (const [characterName, character] of Object.entries(chatState.characters || {})) {
+    const profile = character?.profile || {};
+    for (const skill of (Array.isArray(profile.skills) ? profile.skills : [])) {
+      if (Number(skill?.skillId) === skillId) holders.push(`${characterName}：技能 Lv${skill.level}`);
+    }
+    for (const talent of (Array.isArray(profile.talents) ? profile.talents : [])) {
+      if (Number(talent?.skillId) === skillId) holders.push(`${characterName}：${getTalentLabel(talent)}`);
+    }
+    for (const event of (Array.isArray(profile.skillHistory) ? profile.skillHistory : [])) {
+      if (Number(event?.skillId) === skillId) {
+        holders.push(`${characterName}：技能 history Lv${event.fromLevel}→Lv${event.toLevel}`);
+      }
+    }
+    for (const [index, fetus] of (Array.isArray(profile.pregnant?.fetuses) ? profile.pregnant.fetuses : []).entries()) {
+      for (const talent of (Array.isArray(fetus?.talents) ? fetus.talents : [])) {
+        if (Number(talent?.skillId) === skillId) holders.push(`${characterName}胎儿${index + 1}：${getTalentLabel(talent)}`);
+      }
+    }
+    for (const [index, child] of (Array.isArray(profile.children) ? profile.children : []).entries()) {
+      for (const talent of (Array.isArray(child?.talents) ? child.talents : [])) {
+        if (Number(talent?.skillId) === skillId) holders.push(`${child?.name || `${characterName}的孩子${index + 1}`}：${getTalentLabel(talent)}`);
+      }
+    }
+  }
+  return holders;
+}
+
+function deleteSkillDefinitionFromCatalog(ctx, skillId) {
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const definition = resolveSkillDefinition(chatState.skillCatalog, skillId);
+  if (!definition) {
+    setSkillCatalogStatus('找不到要删除的技能定义。', true);
+    renderSkillCatalogPage(ctx);
+    return;
+  }
+  const holders = collectSkillDefinitionHolders(chatState, definition.id);
+  if (holders.length > 0) {
+    setSkillCatalogStatus(`无法删除「${definition.name}」：${holders.join('；')}`, true);
+    renderSkillCatalogPage(ctx);
+    return;
+  }
+  if (globalThis.confirm && !globalThis.confirm(`确定删除技能定义「${definition.name}」？`)) return;
+  const result = removeSkillDefinition(chatState.skillCatalog, definition.id);
+  if (!result.ok) {
+    setSkillCatalogStatus(result.message, true);
+    return;
+  }
+  chatState.skillCatalog = result.catalog;
+  if (selectedSkillDefinitionId === definition.id) selectedSkillDefinitionId = 0;
+  recordChatStateSnapshot(ctx, chatState, { reason: 'manual_skill_definition_delete' });
+  saveSettings(ctx);
+  renderSkillCatalogPage(ctx);
+  updateMainFlowPrompt(ctx);
+  setSkillCatalogStatus(result.message);
+}
+
+function renderSkillCatalogPage(ctx) {
+  const container = document.getElementById('bs-bt-skill-catalog-list');
+  if (!container) return;
+  const chatState = getChatState(ctx, getSettings(ctx));
+  const catalog = Array.isArray(chatState.skillCatalog) ? chatState.skillCatalog : [];
+  const overview = document.getElementById('bs-bt-skill-catalog-overview');
+  const detail = document.getElementById('bs-bt-skill-definition-detail');
+  const selectedDefinition = resolveSkillDefinition(catalog, selectedSkillDefinitionId);
+  if (selectedSkillDefinitionId && !selectedDefinition) selectedSkillDefinitionId = 0;
+  if (overview) overview.hidden = Boolean(selectedDefinition);
+  if (detail) detail.hidden = !selectedDefinition;
+  if (catalog.length === 0) {
+    container.innerHTML = '<div class="bs-bt-track-description-empty">当前技能图鉴为空。可在下方手动新增；追踪模型也会在剧情需要时登记新技能。</div>';
+  } else {
+    container.innerHTML = catalog.map((definition) => {
+      const holders = collectSkillDefinitionHolders(chatState, definition.id);
+      return `<article class="bs-bt-skill-card bs-bt-skill-card--interactive" data-skill-definition-open="${escapeHtml(definition.id)}" role="button" tabindex="0" aria-label="打开技能 ${escapeHtml(definition.name)}">
+        <div class="bs-bt-skill-card__header">
+          <div class="bs-bt-skill-card__title">#${escapeHtml(definition.id)} ${escapeHtml(definition.name)}</div>
+          <button type="button" class="bs-bt-skill-card__delete" data-skill-definition-delete="${escapeHtml(definition.id)}" aria-label="删除技能 ${escapeHtml(definition.name)}" title="${holders.length > 0 ? '此技能仍在使用中，无法删除' : '删除此技能'}"${holders.length > 0 ? ' disabled' : ''}>×</button>
+        </div>
+      </article>`;
+    }).join('');
+  }
+  if (selectedDefinition) renderSkillDefinitionDetail(chatState, selectedDefinition);
+}
+
+function renderSkillDefinitionDetail(chatState, definition) {
+  const container = document.getElementById('bs-bt-skill-detail-characters');
+  if (!container) return;
+  const title = document.getElementById('bs-bt-skill-detail-title');
+  const description = document.getElementById('bs-bt-skill-detail-description');
+  if (title) title.textContent = `#${definition.id} ${definition.name}`;
+  if (description) description.textContent = definition.description;
+  const names = Object.keys(chatState.characters || {}).sort((left, right) => left.localeCompare(right));
+  if (names.length === 0) {
+    container.innerHTML = '<div class="bs-bt-track-description-empty">尚无注册角色。</div>';
+    return;
+  }
+  const renderEntry = (characterName, kind, entry) => {
+    const isTalent = kind === 'talent';
+    const entryLabel = isTalent ? '天赋' : '技能';
+    const exists = Boolean(entry);
+    return `<div class="bs-bt-character-skill-row" data-character-skill-row="${kind}:${definition.id}">
+      <span class="bs-bt-character-skill-name">${entryLabel}</span>
+      <label>Lv <input class="text_pole" type="number" data-character-skill-level min="${isTalent ? -10 : 0}" max="10" step="1" value="${escapeHtml(exists ? entry.level : 0)}"></label>
+      <label>EXP <input class="text_pole" type="number" data-character-skill-exp min="${isTalent ? -1000000 : 0}" max="1000000" step="1" value="${escapeHtml(exists ? entry.exp : 0)}"></label>
+    </div>`;
+  };
+  container.innerHTML = names.map((characterName) => {
+    const profile = chatState.characters[characterName]?.profile || {};
+    const skill = (Array.isArray(profile.skills) ? profile.skills : []).find((entry) => Number(entry.skillId) === definition.id);
+    const talent = (Array.isArray(profile.talents) ? profile.talents : []).find((entry) => Number(entry.skillId) === definition.id);
+    const history = (Array.isArray(profile.skillHistory) ? profile.skillHistory : [])
+      .map((entry, index) => ({ entry, index }))
+      .filter(({ entry }) => Number(entry.skillId) === definition.id)
+      .slice()
+      .reverse();
+    const historyHtml = history.length > 0
+      ? history.map(({ entry }) => {
+        return `<li><span>Lv${escapeHtml(entry.fromLevel)} → Lv${escapeHtml(entry.toLevel)}</span><span>${escapeHtml(entry.reason)}</span></li>`;
+      }).join('')
+      : '<li class="bs-bt-track-description-empty">尚无升等记录。</li>';
+    return `<article class="bs-bt-skill-character-card" data-character-skill-character="${escapeHtml(characterName)}">
+      <div class="bs-bt-skill-character-card__name">${escapeHtml(characterName)}</div>
+      ${renderEntry(characterName, 'skill', skill)}
+      ${renderEntry(characterName, 'talent', talent)}
+      <details class="bs-bt-skill-history">
+        <summary>技能 history（${history.length}）</summary>
+        <ul>${historyHtml}</ul>
+      </details>
+    </article>`;
+  }).join('');
+}
+
+function applyManualCharacterSkillChange(ctx, characterName, mutation, reason) {
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const selectedName = String(characterName || '').trim();
+  const character = chatState.characters?.[selectedName];
+  if (!character) throw new Error('找不到已选择角色。');
+  const config = {
+    skills: (Array.isArray(character.profile?.skills) ? character.profile.skills : []).map((entry) => ({ ...entry })),
+    talents: (Array.isArray(character.profile?.talents) ? character.profile.talents : []).map((entry) => ({ ...entry })),
+  };
+  const previousLevels = new Map(config.skills.map((entry) => [Number(entry.skillId), Number(entry.level) || 0]));
+  mutation(config);
+  const updatedCharacter = applyInitialSkillTalentConfig(chatState, selectedName, config);
+  for (const skill of (Array.isArray(updatedCharacter.profile?.skills) ? updatedCharacter.profile.skills : [])) {
+    const fromLevel = previousLevels.get(Number(skill.skillId)) || 0;
+    if (skill.level <= fromLevel) continue;
+    const definition = getSkillDefinitionDisplay(chatState.skillCatalog, skill.skillId);
+    updatedCharacter.profile.skillHistory = appendSkillHistory(updatedCharacter.profile.skillHistory, {
+      skillId: skill.skillId,
+      fromLevel,
+      toLevel: skill.level,
+      reason: '使用者在技能页手动调整',
+      source: 'manual',
+      timestamp: Date.now(),
+    });
+    globalThis.toastr?.info?.(
+      fromLevel === 0
+        ? `${selectedName}取得了技能「${definition.name}」${skill.level > 1 ? ` Lv${skill.level}` : ''}`
+        : `${selectedName}的「${definition.name}」由 Lv${fromLevel}调整至 Lv${skill.level}`,
+      '[BS BioTracker]',
+    );
+  }
+  recordChatStateSnapshot(ctx, chatState, { reason });
+  saveSettings(ctx);
+  renderSkillCatalogPage(ctx);
+  renderStatusPanel(ctx);
+  renderFullStatePage(ctx);
+  updateMainFlowPrompt(ctx);
+}
+
+async function generateRegistrySkillSetup(ctx, button = null) {
+  const values = getRegisterFormValues();
+  if (!values.targetName) {
+    setRegisterSkillStatus('请先输入已注册角色名。', true);
+    return;
+  }
+  readSettingsFromForm(ctx);
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const targetName = resolveRegisteredCharacterName(chatState, values.targetName);
+  if (!targetName) {
+    setRegisterSkillStatus(`尚未找到已注册角色：${values.targetName}。请先完成角色注册。`, true);
+    return;
+  }
+  const originalText = button?.textContent;
+  if (button) {
+    button.disabled = true;
+    button.textContent = '生成中...';
+  }
+  setRegisterSkillStatus(`正在为 ${targetName} 生成初始技能／天赋...`);
+  try {
+    const result = await runRegistrySkillInference(ctx, {
+      targetName,
+      skillPrompt: values.skillPrompt,
+    });
+    const editor = document.getElementById('bs-bt-register-skill-result');
+    if (editor) editor.value = JSON.stringify(result, null, 2);
+    setRegisterSkillStatus('生成完成。可以修改下方 JSON，确认后再写入。');
+  } catch (error) {
+    const message = String(error?.message || error);
+    setRegisterSkillStatus(message, true);
+    globalThis.toastr?.error?.(message, '[BS BioTracker]');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText || '生成技能／天赋';
+    }
+  }
+}
+
+function writeRegistrySkillSetup(ctx) {
+  const values = getRegisterFormValues();
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const targetName = resolveRegisteredCharacterName(chatState, values.targetName);
+  if (!targetName) {
+    setRegisterSkillStatus(`尚未找到已注册角色：${values.targetName || '(空白)'}。请先完成角色注册。`, true);
+    return;
+  }
+  let parsed;
+  try {
+    const raw = String(document.getElementById('bs-bt-register-skill-result')?.value || '').trim();
+    if (!raw) throw new Error('请先生成技能／天赋，或填写要写入的 JSON。');
+    parsed = JSON.parse(raw);
+    const character = applyRegistrySkillSetup(chatState, targetName, parsed);
+    recordChatStateSnapshot(ctx, chatState, { reason: 'registry_initial_skills' });
+    saveSettings(ctx);
+    resetPoller(ctx, trackerDeps);
+    renderStatusPanel(ctx);
+    renderFullStatePage(ctx);
+    renderSkillCatalogPage(ctx);
+    updateMainFlowPrompt(ctx);
+    setRegisterSkillStatus(`已写入 ${character.name}：${character.profile.skills.length} 项技能、${character.profile.talents.length} 项天赋。`);
+    globalThis.toastr?.success?.(`[BS BioTracker] 已写入 ${character.name} 的技能／天赋`);
+  } catch (error) {
+    const message = String(error?.message || error);
+    setRegisterSkillStatus(message, true);
+    globalThis.toastr?.error?.(message, '[BS BioTracker]');
+  }
 }
 
 
@@ -258,7 +541,7 @@ async function runWardrobePrepInference(ctx, button = null) {
   }
   setWardrobePrepStatus(`正在为 ${targetName} 生成衣柜 JSON...`);
   try {
-    const result = await runRegistryWardrobeInference(ctx, { ...values, targetName, wardrobePrepPrompt, wardrobePrepMainCount, wardrobePrepAccessoryCount });
+    const result = await runRegistryWardrobeInference(ctx, { ...values, customNotes: '', skillPrompt: '', targetName, wardrobePrepPrompt, wardrobePrepMainCount, wardrobePrepAccessoryCount });
     const editor = document.getElementById('bs-bt-wardrobe-prep-json');
     if (editor) editor.value = JSON.stringify(result, null, 2);
     setWardrobePrepStatus('备装生成完成。可以手动微调 JSON，再套用备装。');
@@ -374,7 +657,7 @@ async function generateRegistryDiary(ctx, button = null) {
   }
   setDiaryStatus(`正在为 ${values.targetName} 生成日记...`);
   try {
-    const result = await runRegistryDiaryInference(ctx, { ...values, requestedDate, diaryWritingPrompt });
+    const result = await runRegistryDiaryInference(ctx, { ...values, customNotes: '', skillPrompt: '', requestedDate, diaryWritingPrompt });
     const editor = document.getElementById('bs-bt-diary-result');
     if (editor) editor.value = JSON.stringify(result, null, 2);
     setDiaryStatus('生成完成。可修改日期与正文后再写入。');
@@ -422,12 +705,106 @@ function applyRegistryDiary(ctx) {
   globalThis.toastr?.success?.(`[BS BioTracker] 已写入 ${targetName} 的日记`);
 }
 
+function encodeRegisterChildSource(motherName, childIndex) {
+  return `${encodeURIComponent(String(motherName || '').trim())}:${Number(childIndex)}`;
+}
+
+function decodeRegisterChildSource(value) {
+  const text = String(value || '');
+  const separator = text.lastIndexOf(':');
+  if (separator <= 0) return null;
+  const motherName = decodeURIComponent(text.slice(0, separator));
+  const childIndex = Number(text.slice(separator + 1));
+  return motherName && Number.isInteger(childIndex) && childIndex >= 0 ? { motherName, childIndex } : null;
+}
+
+function getSelectedRegisterChildSource(ctx) {
+  const sourceKey = String(document.getElementById('bs-bt-register-source')?.value || '');
+  const source = decodeRegisterChildSource(sourceKey);
+  if (!source) return null;
+  return resolveRegistryChildSource(getChatState(ctx, getSettings(ctx)), source);
+}
+
+function syncRegisterChildSourceFields(ctx) {
+  const sourceSelect = document.getElementById('bs-bt-register-source');
+  const raceInput = document.getElementById('bs-bt-register-race');
+  const nameInput = document.getElementById('bs-bt-register-name');
+  const summary = document.getElementById('bs-bt-register-source-summary');
+  const pickerButton = document.querySelector('[data-race-picker-target="bs-bt-register-race"]');
+  const nextKey = String(sourceSelect?.value || '');
+  const source = getSelectedRegisterChildSource(ctx);
+  if (nextKey && !source) {
+    if (sourceSelect) sourceSelect.value = '';
+    selectedRegisterChildSourceKey = '';
+    if (raceInput) {
+      raceInput.readOnly = false;
+      raceInput.value = registerManualRaceDraft || '人类';
+    }
+    if (pickerButton instanceof HTMLButtonElement) pickerButton.disabled = false;
+    if (summary) summary.textContent = '孩子来源已失效，请重新选择。';
+    return;
+  }
+  if (!source) {
+    if (selectedRegisterChildSourceKey && raceInput) raceInput.value = registerManualRaceDraft || '人类';
+    selectedRegisterChildSourceKey = '';
+    if (raceInput) raceInput.readOnly = false;
+    if (pickerButton instanceof HTMLButtonElement) pickerButton.disabled = false;
+    if (summary) summary.textContent = '直接注册新角色。';
+    return;
+  }
+  if (!selectedRegisterChildSourceKey && raceInput) registerManualRaceDraft = String(raceInput.value || '人类');
+  selectedRegisterChildSourceKey = nextKey;
+  const child = source.child;
+  if (nameInput && child.name) nameInput.value = String(child.name);
+  if (raceInput) {
+    raceInput.value = formatRaceLabel(child.race, child.derivedType);
+    raceInput.readOnly = true;
+  }
+  if (pickerButton instanceof HTMLButtonElement) pickerButton.disabled = true;
+  closeRacePalettePopover();
+  refreshRegisterRacePalette();
+  if (summary) {
+    const talentNames = (Array.isArray(child.talents) ? child.talents : []).map((talent) => {
+      const definition = getSkillDefinitionDisplay(getChatState(ctx, getSettings(ctx)).skillCatalog, talent.skillId);
+      return `${definition.name}（${getTalentLabel(talent)}）`;
+    });
+    const birthInfo = [
+      Number.isFinite(Number(child.birthWeightRatio)) ? `出生胎重倍率 ${formatFixedDisplay(child.birthWeightRatio, 2)}` : '',
+      Number.isFinite(Number(child.birthAffinity)) ? `出生亲和 ${formatIntegerDisplay(child.birthAffinity)}` : '',
+    ].filter(Boolean);
+    summary.textContent = `${source.motherName}的孩子 ${source.childIndex + 1}；${[...birthInfo, `天赋：${talentNames.join('、') || '无'}`].join('；')}`;
+  }
+}
+
+function renderRegisterChildSourceOptions(ctx) {
+  const select = document.getElementById('bs-bt-register-source');
+  if (!select) return;
+  const chatState = getChatState(ctx, getSettings(ctx));
+  const options = ['<option value="">新角色</option>'];
+  for (const [motherName, mother] of Object.entries(chatState.characters || {})) {
+    const children = Array.isArray(mother?.profile?.children) ? mother.profile.children : [];
+    children.forEach((child, childIndex) => {
+      if (child?.registeredAs) return;
+      const key = encodeRegisterChildSource(motherName, childIndex);
+      const childName = String(child?.name || '').trim() || `未命名孩子 ${childIndex + 1}`;
+      options.push(`<option value="${escapeHtml(key)}">${escapeHtml(motherName)} → ${escapeHtml(childName)}</option>`);
+    });
+  }
+  select.innerHTML = options.join('');
+  select.value = Array.from(select.options).some((option) => option.value === selectedRegisterChildSourceKey) ? selectedRegisterChildSourceKey : '';
+  syncRegisterChildSourceFields(ctx);
+}
+
 function getRegisterFormValues() {
+  const sourceChildKey = String(document.getElementById('bs-bt-register-source')?.value || '');
   return {
     targetName: String(document.getElementById('bs-bt-register-name')?.value || '').trim(),
     declaredRace: String(document.getElementById('bs-bt-register-race')?.value || '').trim(),
     customNotes: String(document.getElementById('bs-bt-register-custom-notes')?.value || '').trim(),
     breedingInferencePrompt: String(document.getElementById('bs-bt-breeding-inference-prompt')?.value || '').trim(),
+    skillPrompt: String(document.getElementById('bs-bt-register-skill-prompt')?.value || '').trim(),
+    sourceChildKey,
+    sourceChild: decodeRegisterChildSource(sourceChildKey),
   };
 }
 
@@ -458,6 +835,7 @@ function getApplicableBreedingInferenceDraft(values) {
   if (draft.declaredRace !== values.declaredRace) return null;
   if (draft.customNotes !== values.customNotes) return null;
   if (draft.breedingInferencePrompt !== values.breedingInferencePrompt) return null;
+  if (draft.sourceChildKey !== values.sourceChildKey) return null;
   const editor = document.getElementById('bs-bt-breeding-inference-status');
   const raw = String((editor && 'value' in editor ? editor.value : editor?.textContent) || '').trim();
   if (!raw || raw === '尚未执行繁育推演。直接注册不会生成繁育心理人设。') return draft.result;
@@ -850,10 +1228,12 @@ function updateBatteryIndicator(settings = null) {
   const width = Math.round(16 * chargeRatio);
   fill.setAttribute('width', String(width));
   icons.dataset.batteryState = usageRatio >= 1 ? 'critical' : usageRatio >= 0.75 ? 'low' : usageRatio >= 0.45 ? 'mid' : 'high';
-  icons.setAttribute('aria-label', input.text
+  const tooltipText = input.text
     ? `BioTracker 主流注入 ${formatTokenEstimate(tokenCount, source !== 'host tokenizer')} / ${budget.toLocaleString()} token（${source}）；仅作注意力预算警示`
-    : `尚无追踪请求；注意力预算 ${budget.toLocaleString()} token`);
-  icons.title = icons.getAttribute('aria-label');
+    : `尚无追踪请求；注意力预算 ${budget.toLocaleString()} token`;
+  icons.setAttribute('aria-label', tooltipText);
+  icons.dataset.tooltip = tooltipText;
+  icons.removeAttribute('title');
   if (input.text && !usingCachedCount) queueHostTokenCount(input, settings);
 }
 
@@ -2127,12 +2507,15 @@ function getWardrobeItemKind(item = {}) {
 
 function renderWardrobeItemRow(item = {}, options = {}) {
   return `
-    <button class="bs-bt-wardrobe-row${options.current ? ' is-current' : ''}" type="button" data-wardrobe-item-id="${escapeHtml(item.id)}">
-      <span class="bs-bt-wardrobe-row-main">
-        <span class="bs-bt-wardrobe-row-title">${escapeHtml(item.name || item.id || '未命名')}</span>
-        ${item.note ? `<span class="bs-bt-wardrobe-row-note">${escapeHtml(item.note)}</span>` : ''}
-      </span>
-    </button>
+    <div class="bs-bt-wardrobe-row-wrap">
+      <button class="bs-bt-wardrobe-row${options.current ? ' is-current' : ''}" type="button" data-wardrobe-item-id="${escapeHtml(item.id)}">
+        <span class="bs-bt-wardrobe-row-main">
+          <span class="bs-bt-wardrobe-row-title">${escapeHtml(item.name || item.id || '未命名')}</span>
+          ${item.note ? `<span class="bs-bt-wardrobe-row-note">${escapeHtml(item.note)}</span>` : ''}
+        </span>
+      </button>
+      <button class="bs-bt-wardrobe-row-delete" type="button" data-wardrobe-item-delete="${escapeHtml(item.id)}" aria-label="删除衣物 ${escapeHtml(item.name || item.id || '未命名')}" title="删除衣物">×</button>
+    </div>
   `;
 }
 
@@ -2171,7 +2554,7 @@ function renderWardrobeDescriptionSection(viewModel = {}) {
 }
 
 function renderWardrobeCharacterList(characters = []) {
-  return characters.filter((character) => character?.profile?.wardrobe?.enabled === true).map((character) => {
+  return characters.map((character) => {
     const profile = character?.profile || {};
     const outfit = buildOutfitView(profile);
     const items = getWardrobeItems(profile).filter((item) => Number(item?.id) !== 0);
@@ -2191,6 +2574,14 @@ function renderWardrobeCharacterList(characters = []) {
 
 function renderWardrobeCharacterPage(character) {
   const profile = character?.profile || {};
+  if (profile?.wardrobe?.enabled !== true) {
+    return `<div class="bs-bt-wardrobe-character">
+      <div class="bs-bt-wardrobe-character-title"><button class="menu_button" type="button" data-wardrobe-back>返回衣柜</button></div>
+      <div class="bs-bt-wardrobe-page-title">${escapeHtml(character?.name || '未命名')}</div>
+      <div class="bs-bt-track-description-empty">此角色尚未备装。可建立空衣柜后手动新增衣物，或在「注册 → 备装」使用 AI 生成整套衣柜。</div>
+      <button class="menu_button" type="button" data-wardrobe-initialize>建立空衣柜</button>
+    </div>`;
+  }
   const outfit = buildOutfitView(profile);
   const pressure = Number(outfit?.pregFit?.pregWearPressure);
   const pressureTag = Number.isFinite(pressure) ? '<span class="bs-bt-wardrobe-pressure-tag">孕衣压 ' + escapeHtml(formatFixedDisplay(pressure, 1)) + '</span>' : '';
@@ -2214,33 +2605,95 @@ function renderWardrobeCharacterPage(character) {
         <div class="bs-bt-wardrobe-current-head"><div class="bs-bt-wardrobe-group-title">当前穿着</div>${pressureTag}</div>
         <div class="bs-bt-wardrobe-summary"><b>主件</b>${escapeHtml(outfit.main?.name || '全裸')}</div>
         <div class="bs-bt-wardrobe-summary"><b>配件</b>${escapeHtml((outfit.accessories || []).length > 0 ? outfit.accessories.map((item) => item.name || item.id).join('、') : '无')}</div>
+        <div class="bs-bt-wardrobe-outfit-editor">
+          <label>主件<select id="bs-bt-wardrobe-outfit-main" class="text_pole">
+            <option value="0"${Number(outfit.main?.id) === 0 ? ' selected' : ''}>全裸</option>
+            ${mainItems.map((item) => `<option value="${escapeHtml(item.id)}"${Number(outfit.main?.id) === Number(item.id) ? ' selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}
+          </select></label>
+          <label>状态<input id="bs-bt-wardrobe-outfit-state" class="text_pole" type="text" maxlength="12" value="${escapeHtml(outfit.wearState || '整齐')}"></label>
+          <div class="bs-bt-wardrobe-accessory-checks">${accessoryItems.length > 0 ? accessoryItems.map((item) => `<label><input type="checkbox" data-wardrobe-outfit-accessory="${escapeHtml(item.id)}"${currentIds.has(item.id) ? ' checked' : ''}> ${escapeHtml(item.name)}</label>`).join('') : '无配件'}</div>
+          <button class="menu_button" type="button" data-wardrobe-outfit-apply>套用当前穿着</button>
+        </div>
       </div>
       ${profile?.wardrobe?.enabled === true ? `${renderGroup('主件', mainItems)}${renderGroup('配件', accessoryItems)}` : '<div class="bs-bt-track-description-empty">尚未备装。</div>'}
+      <div id="bs-bt-wardrobe-manual-status" class="bs-bt-inline-status"></div>
     </div>
   `;
+}
+
+function renderWardrobeAddPage(characters = []) {
+  const options = characters.map((character) => `<option value="${escapeHtml(character?.name || '')}">${escapeHtml(character?.name || '未命名')}</option>`).join('');
+  return `<div class="bs-bt-wardrobe-add-form">
+    <label>名称<input id="bs-bt-wardrobe-item-name" class="text_pole" type="text"></label>
+    <label>类型<select id="bs-bt-wardrobe-item-slot" class="text_pole"><option value="main">主件</option><option value="accessory">配件</option></select></label>
+    <label id="bs-bt-wardrobe-item-layer-field" data-wardrobe-type-field="accessory" hidden>层级<select id="bs-bt-wardrobe-item-layer" class="text_pole"><option value="outer">外层</option><option value="inner">贴身</option></select></label>
+    <label class="bs-bt-wardrobe-editor-wide">稳定描述<textarea id="bs-bt-wardrobe-item-note" class="text_pole bs-bt-textarea" rows="3"></textarea></label>
+    <label id="bs-bt-wardrobe-item-parts-field" class="bs-bt-wardrobe-editor-wide" data-wardrobe-type-field="main">组成部件（逗号分隔）<input id="bs-bt-wardrobe-item-parts" class="text_pole" type="text"></label>
+    ${Object.entries(WARDROBE_DIMENSION_LABELS).map(([key, label]) => `<label>${escapeHtml(label)}<input id="bs-bt-wardrobe-item-${key}" class="text_pole" type="number" min="-10" max="10" step="1" value="0"></label>`).join('')}
+    <label class="bs-bt-wardrobe-editor-wide">分配给角色<select id="bs-bt-wardrobe-item-character" class="text_pole"${characters.length === 0 ? ' disabled' : ''}>${options || '<option value="">尚无注册角色</option>'}</select></label>
+    <button class="menu_button bs-bt-wardrobe-editor-wide" type="button" data-wardrobe-item-save${characters.length === 0 ? ' disabled' : ''}>新增衣物</button>
+    <div id="bs-bt-wardrobe-add-status" class="bs-bt-inline-status bs-bt-wardrobe-editor-wide"></div>
+  </div>`;
+}
+
+function initializeEmptyWardrobe(character) {
+  if (!character?.profile || character.profile.wardrobe?.enabled === true) return false;
+  character.profile.wardrobe = {
+    enabled: true,
+    items: [{ id: 0, name: '全裸', note: '未着衣物。', slot: 'main', masking: 0, support: 0, capacity: 10, convenience: 10 }],
+  };
+  character.profile.outfit = { mainItemId: 0, accessoryItemIds: [], temporaryItems: [], wearState: '整齐', pregFit: null };
+  character.updatedAt = Date.now();
+  return true;
+}
+
+function updateWardrobeAddTypeFields() {
+  const slot = String(document.getElementById('bs-bt-wardrobe-item-slot')?.value || 'main');
+  const layerField = document.getElementById('bs-bt-wardrobe-item-layer-field');
+  const partsField = document.getElementById('bs-bt-wardrobe-item-parts-field');
+  if (layerField) layerField.hidden = slot !== 'accessory';
+  if (partsField) partsField.hidden = slot !== 'main';
+}
+
+function applyManualWardrobeTool(ctx, toolCall, reason) {
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const result = applyToolCall(chatState, toolCall);
+  if (!result.applied) throw new Error(result.message);
+  recordChatStateSnapshot(ctx, chatState, { reason });
+  saveSettings(ctx);
+  renderWardrobePage(ctx);
+  renderStatusPanel(ctx);
+  renderFullStatePage(ctx);
+  updateMainFlowPrompt(ctx);
+  return result;
 }
 
 function renderWardrobePage(ctx) {
   const settings = getSettings(ctx);
   const chatState = getChatState(ctx, settings);
   const container = document.getElementById('bs-bt-wardrobe-list');
-  if (!container) return;
+  const addPage = document.getElementById('bs-bt-wardrobe-add-page');
+  const charactersPage = document.getElementById('bs-bt-wardrobe-characters-page');
+  if (!container || !addPage || !charactersPage) return;
   const characters = Object.values(chatState.characters || {});
+  const showAddPage = selectedWardrobeSubpage === 'add';
+  charactersPage.hidden = showAddPage;
+  addPage.hidden = !showAddPage;
+  document.querySelectorAll('#bs-bt-wardrobe-tabs [data-wardrobe-tab]').forEach((node) => {
+    node.classList.toggle('is-active', String(node.getAttribute('data-wardrobe-tab') || '') === selectedWardrobeSubpage);
+  });
+  addPage.innerHTML = renderWardrobeAddPage(characters);
+  if (showAddPage) return;
   if (characters.length === 0) {
     selectedWardrobeName = '';
     container.innerHTML = '<div class="bs-bt-track-description-empty">尚无注册角色。</div>';
     return;
   }
-  const preparedCharacters = characters.filter((character) => character?.profile?.wardrobe?.enabled === true);
-  if (preparedCharacters.length === 0) {
-    selectedWardrobeName = '';
-    container.innerHTML = '<div class="bs-bt-track-description-empty">尚无已备装角色。请先在「注册 → 备装」生成并套用衣柜。</div>';
-    return;
-  }
-  const selected = preparedCharacters.find((character) => character?.name === selectedWardrobeName);
+  const selected = characters.find((character) => character?.name === selectedWardrobeName);
   if (!selected) {
     selectedWardrobeName = '';
-    container.innerHTML = renderWardrobeCharacterList(preparedCharacters);
+    container.innerHTML = renderWardrobeCharacterList(characters);
     return;
   }
   container.innerHTML = renderWardrobeCharacterPage(selected);
@@ -2287,6 +2740,27 @@ function showWardrobeItemBubble(ctx, characterName, itemId, anchor) {
 function buildTrackCharacterViewModel(character) {
   const runtimeCtx = getContextSafe();
   const runtimeSettings = runtimeCtx ? getSettings(runtimeCtx) : null;
+  const runtimeChatState = runtimeCtx && runtimeSettings ? getChatState(runtimeCtx, runtimeSettings) : null;
+  const skillCatalog = Array.isArray(runtimeChatState?.skillCatalog) ? runtimeChatState.skillCatalog : [];
+  const enrichSkill = (skill) => {
+    const definition = getSkillDefinitionDisplay(skillCatalog, skill?.skillId);
+    return {
+      ...skill,
+      name: definition.name,
+      description: definition.description,
+      requiredExp: Number(skill?.level) >= 10 ? 0 : requiredExp(skill?.level),
+    };
+  };
+  const enrichTalent = (talent) => {
+    const definition = getSkillDefinitionDisplay(skillCatalog, talent?.skillId);
+    return {
+      ...talent,
+      name: definition.name,
+      description: definition.description,
+      label: getTalentLabel(talent),
+      requiredExp: Math.abs(Number(talent?.level)) >= 10 ? 0 : requiredExp(Math.max(1, Math.abs(Number(talent?.level) || 0))),
+    };
+  };
   const diaryEnabled = Math.max(0, Math.min(20, Math.floor(Number(runtimeSettings?.diaryRecentLimit) || 0))) > 0;
   const profile = character?.profile || {};
   const base = profile.base || {};
@@ -2346,7 +2820,10 @@ function buildTrackCharacterViewModel(character) {
       prodromalRemainingHours: Number(pregnant.prodromalRemainingHours) || 0,
       prodromalDelayProgressHours: Number(pregnant.prodromalDelayProgressHours) || 0,
       amnionDurability: Number(pregnant.amnionDurability) || 0,
-      fetuses: Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [],
+      fetuses: Array.isArray(pregnant.fetuses) ? pregnant.fetuses.map((fetus) => ({
+        ...fetus,
+        talents: (Array.isArray(fetus?.talents) ? fetus.talents : []).map(enrichTalent),
+      })) : [],
       pregnantBlocks: parseDescriptionBlocks(descriptions.pregnantDescription),
       showPregnantFields: isPregnantStage(stage),
       showLaborFields: LABOR_STAGES.includes(stage),
@@ -2370,7 +2847,16 @@ function buildTrackCharacterViewModel(character) {
         ['手术产', `${Number(experience.surgicalBirthExperience) || 0}次`],
         ['流产/堕胎', `${Number(experience.miscarriageExperience) || 0}次`],
       ],
-      children: Array.isArray(profile.children) ? profile.children : [],
+      children: Array.isArray(profile.children) ? profile.children.map((child) => ({
+        ...child,
+        talents: (Array.isArray(child?.talents) ? child.talents : []).map(enrichTalent),
+      })) : [],
+      skills: (Array.isArray(profile.skills) ? profile.skills : []).map(enrichSkill),
+      talents: (Array.isArray(profile.talents) ? profile.talents : []).map(enrichTalent),
+      skillHistory: (Array.isArray(profile.skillHistory) ? profile.skillHistory : []).map((event) => ({
+        ...event,
+        skillName: getSkillDefinitionDisplay(skillCatalog, event.skillId).name,
+      })),
     },
     diary: {
       enabled: diaryEnabled,
@@ -2641,6 +3127,7 @@ function renderTrackPregnancy(viewModel) {
                 <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">体重倍率</span><span class="bs-bt-track-list-value">${escapeHtml(formatFixedDisplay(item?.weight, 2))}</span></div>
                 <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">胎位角</span><span class="bs-bt-track-list-value">${escapeHtml(`${formatIntegerDisplay(item?.tendencyAngle)}°`)}</span></div>
                 <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">亲和</span><span class="bs-bt-track-list-value">${escapeHtml(formatIntegerDisplay(item?.affinity))}</span></div>
+                <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">胎儿天赋</span><span class="bs-bt-track-list-value">${escapeHtml((Array.isArray(item?.talents) ? item.talents : []).map((talent) => `${talent.name}：${talent.label} (${talent.exp >= 0 ? '+' : ''}${talent.exp} EXP)`).join('、') || '无')}</span></div>
               </div>`,
         '当前无妊娠胎儿资料',
         'fetuses',
@@ -2666,6 +3153,40 @@ function renderTrackExperience(viewModel) {
       </div>
     </div>
     ${renderCardCarouselSection(
+      '技能',
+      viewModel.experience.skills,
+      (item) => `<div class="bs-bt-track-card">
+        <div class="bs-bt-track-card-title">${escapeHtml(item?.name || '未命名技能')} · Lv${escapeHtml(formatIntegerDisplay(item?.level))}</div>
+        <div class="bs-bt-track-card-note">${escapeHtml(item?.description || '暂无说明')}</div>
+        <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">经验</span><span class="bs-bt-track-list-value">${escapeHtml(item?.requiredExp ? `${item.exp}/${item.requiredExp}` : 'MAX')}</span></div>
+      </div>`,
+      '当前无技能记录',
+      'skills',
+    )}
+    ${renderCardCarouselSection(
+      '先天天赋',
+      viewModel.experience.talents,
+      (item) => `<div class="bs-bt-track-card">
+        <div class="bs-bt-track-card-title">${escapeHtml(item?.name || '未命名天赋')} · ${escapeHtml(item?.label || '尚未形成')}</div>
+        <div class="bs-bt-track-card-note">${escapeHtml(item?.description || '暂无说明')}</div>
+        <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">方向经验</span><span class="bs-bt-track-list-value">${escapeHtml(item?.requiredExp ? `${item.exp >= 0 ? '+' : ''}${item.exp}/${item.requiredExp}` : 'MAX')}</span></div>
+      </div>`,
+      '当前无先天天赋',
+      'talents',
+    )}
+    ${renderCardCarouselSection(
+      '技能成长记录',
+      viewModel.experience.skillHistory,
+      (item) => `<div class="bs-bt-track-card">
+        <div class="bs-bt-track-card-title">${escapeHtml(item?.skillName || '未知技能')} · Lv${escapeHtml(item?.fromLevel)} → Lv${escapeHtml(item?.toLevel)}</div>
+        <div class="bs-bt-track-card-note">${escapeHtml(item?.reason || '')}</div>
+        <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">来源</span><span class="bs-bt-track-list-value">${item?.source === 'manual' ? '手动调整' : '故事成长'}</span></div>
+        <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">记录时间</span><span class="bs-bt-track-list-value">${escapeHtml(item?.timestamp ? new Date(item.timestamp).toLocaleString() : '未知')}</span></div>
+      </div>`,
+      '当前无技能成长记录',
+      'skill-history',
+    )}
+    ${renderCardCarouselSection(
       '孩子记录',
         viewModel.experience.children,
         (item, index) => `<div class="bs-bt-track-card">
@@ -2674,6 +3195,7 @@ function renderTrackExperience(viewModel) {
           <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">性别</span><span class="bs-bt-track-list-value">${escapeHtml(item?.gender || '未知')}</span></div>
           <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">种族</span><span class="bs-bt-track-list-value">${escapeHtml(formatRaceLabel(item?.race, item?.derivedType))}</span></div>
           <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">年龄</span><span class="bs-bt-track-list-value">${escapeHtml(formatIntegerDisplay(item?.age))}</span></div>
+          <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">待注册天赋</span><span class="bs-bt-track-list-value">${escapeHtml((Array.isArray(item?.talents) ? item.talents : []).map((talent) => `${talent.name}：${talent.label}`).join('、') || '无')}</span></div>
         </div>`,
         '当前无孩子记录',
       'children',
@@ -2699,7 +3221,7 @@ function renderTrackDiary(viewModel) {
   `;
 }
 
-function renderTrackDebug(viewModel) {
+function renderTrackDebug(viewModel, fetalTalentHtml = '') {
   const immune = viewModel.debug?.immune || {};
   const isHere = viewModel.debug?.isHere !== false;
   const counts = viewModel.debug?.counts || {};
@@ -2895,6 +3417,7 @@ function renderTrackDebug(viewModel) {
       </fieldset>
       <div class="bs-bt-track-debug-hint">${canTriggerFetalActivity ? '内容会追加写入 secondly，作为下一段故事可自然承接的胎儿活动事件。' : '只有已有胎儿且仍在妊娠或产程中的角色可以触发。'}</div>
     </div>
+    ${fetalTalentHtml}
     <div class="bs-bt-track-section" style="margin-top: 10px;">
       <div class="bs-bt-track-section-title">妊娠变速效果</div>
       <fieldset class="bs-bt-track-debug-form">
@@ -3876,6 +4399,9 @@ function validateManualCharacterState(next, currentName) {
     if (profile[path] !== undefined && !isPlainObject(profile[path])) errors.push(`profile.${path} 必须是对象。`);
   }
   if (profile.children !== undefined && !Array.isArray(profile.children)) errors.push('profile.children 必须是数组。');
+  if (profile.skills !== undefined && !Array.isArray(profile.skills)) errors.push('profile.skills 必须是数组。');
+  if (profile.talents !== undefined && !Array.isArray(profile.talents)) errors.push('profile.talents 必须是数组。');
+  if (profile.skillHistory !== undefined && !Array.isArray(profile.skillHistory)) errors.push('profile.skillHistory 必须是数组。');
   if (profile.base?.sperms !== undefined && !Array.isArray(profile.base.sperms)) errors.push('profile.base.sperms 必须是数组。');
   if (profile.pregnant?.fetuses !== undefined && !Array.isArray(profile.pregnant.fetuses)) errors.push('profile.pregnant.fetuses 必须是数组。');
   if (profile.base?.stage !== undefined && typeof profile.base.stage !== 'string') errors.push('profile.base.stage 必须是文字。');
@@ -4009,12 +4535,151 @@ function unregisterCharacter(ctx, name) {
     return;
   }
   delete chatState.characters[name];
+  for (const character of Object.values(chatState.characters || {})) {
+    for (const child of (Array.isArray(character?.profile?.children) ? character.profile.children : [])) {
+      if (String(child?.registeredAs || '') === name) delete child.registeredAs;
+    }
+  }
   recordChatStateSnapshot(ctx, chatState, { reason: 'unregister' });
   saveSettings(ctx);
   renderStatusPanel(ctx);
   renderFullStatePage(ctx);
   updateMainFlowPrompt(ctx);
   globalThis.toastr?.success?.(`[BS BioTracker] 已注销 ${name}`);
+}
+
+function getFetalTalentDebugSelection(chatState, character) {
+  const fetuses = Array.isArray(character?.profile?.pregnant?.fetuses) ? character.profile.pregnant.fetuses : [];
+  const catalog = Array.isArray(chatState?.skillCatalog) ? chatState.skillCatalog : [];
+  const draftActive = debugFetalTalentDraft.owner === character?.name;
+  const fetusIndex = Math.max(0, Math.min(fetuses.length - 1, draftActive ? Number(debugFetalTalentDraft.fetusIndex) || 0 : 0));
+  const requestedSkillId = draftActive ? Number(debugFetalTalentDraft.skillId) || 0 : 0;
+  const skillId = catalog.some((definition) => Number(definition.id) === requestedSkillId)
+    ? requestedSkillId
+    : Number(catalog[0]?.id) || 0;
+  const fetus = fetuses[fetusIndex] || null;
+  const talent = (Array.isArray(fetus?.talents) ? fetus.talents : []).find((entry) => Number(entry?.skillId) === skillId) || null;
+  return { fetuses, catalog, fetusIndex, skillId, fetus, talent };
+}
+
+function renderFetalTalentDebugEditor(chatState, character) {
+  const selection = getFetalTalentDebugSelection(chatState, character);
+  if (selection.fetuses.length === 0) {
+    return `<div class="bs-bt-track-section bs-bt-fetal-talent-editor" data-fetal-talent-editor>
+      <div class="bs-bt-track-section-title">胎儿天赋调整</div>
+      <div class="bs-bt-track-description-empty">当前角色没有胎儿资料。</div>
+    </div>`;
+  }
+  if (selection.catalog.length === 0) {
+    return `<div class="bs-bt-track-section bs-bt-fetal-talent-editor" data-fetal-talent-editor>
+      <div class="bs-bt-track-section-title">胎儿天赋调整</div>
+      <div class="bs-bt-track-description-empty">全局技能图鉴为空，请先登记技能定义。</div>
+    </div>`;
+  }
+  const fetusOptions = selection.fetuses.map((fetus, index) => {
+    const details = [fetus?.gender, fetus?.race].map((value) => String(value || '').trim()).filter(Boolean).join('／');
+    return `<option value="${index}"${index === selection.fetusIndex ? ' selected' : ''}>胎儿 ${index + 1}${details ? `（${escapeHtml(details)}）` : ''}</option>`;
+  }).join('');
+  const skillOptions = selection.catalog.map((definition) => `<option value="${escapeHtml(definition.id)}"${Number(definition.id) === selection.skillId ? ' selected' : ''}>#${escapeHtml(definition.id)} ${escapeHtml(definition.name)}</option>`).join('');
+  const talents = Array.isArray(selection.fetus?.talents) ? selection.fetus.talents : [];
+  const talentList = talents.length > 0
+    ? talents.map((entry) => {
+      const definition = getSkillDefinitionDisplay(selection.catalog, entry.skillId);
+      return `<div class="bs-bt-fetal-talent-current-row"><span>#${escapeHtml(entry.skillId)} ${escapeHtml(definition.name)}</span><span>${escapeHtml(getTalentLabel(entry))} · EXP ${escapeHtml(entry.exp)}</span></div>`;
+    }).join('')
+    : '<div class="bs-bt-track-description-empty">该胎儿尚无天赋。</div>';
+  return `<div class="bs-bt-track-section bs-bt-fetal-talent-editor" data-fetal-talent-editor>
+    <div class="bs-bt-track-section-title">胎儿天赋调整</div>
+    <div class="bs-bt-fetal-talent-current">${talentList}</div>
+    <div class="bs-bt-track-debug-form">
+      <label class="bs-bt-track-debug-field"><span class="bs-bt-track-debug-label">胎儿</span><select id="bs-bt-debug-fetal-talent-fetus" class="text_pole">${fetusOptions}</select></label>
+      <label class="bs-bt-track-debug-field"><span class="bs-bt-track-debug-label">天赋</span><select id="bs-bt-debug-fetal-talent-skill" class="text_pole">${skillOptions}</select></label>
+      <div class="bs-bt-fetal-talent-values">
+        <label class="bs-bt-track-debug-field"><span class="bs-bt-track-debug-label">Lv（负数为苦手）</span><input id="bs-bt-debug-fetal-talent-level" class="text_pole" type="number" min="-10" max="10" step="1" value="${escapeHtml(selection.talent?.level ?? 0)}"></label>
+        <label class="bs-bt-track-debug-field"><span class="bs-bt-track-debug-label">EXP（正擅长／负苦手）</span><input id="bs-bt-debug-fetal-talent-exp" class="text_pole" type="number" min="-1000000" max="1000000" step="1" value="${escapeHtml(selection.talent?.exp ?? 0)}"></label>
+      </div>
+      <div class="bs-bt-fetal-talent-actions">
+        <button type="button" class="menu_button" data-fetal-talent-save>写入天赋</button>
+        <button type="button" class="menu_button" data-fetal-talent-delete${selection.talent ? '' : ' disabled'}>删除天赋</button>
+      </div>
+      <div id="bs-bt-debug-fetal-talent-status" class="bs-bt-inline-status">${selection.talent ? escapeHtml(`当前：${getTalentLabel(selection.talent)}`) : '当前尚未持有此天赋。'}</div>
+    </div>
+  </div>`;
+}
+
+function applyFetalTalentDebugChange(ctx, action) {
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const character = chatState.characters?.[selectedFullStateName];
+  if (!character) throw new Error('找不到当前角色。');
+  const fetusIndex = Number(document.getElementById('bs-bt-debug-fetal-talent-fetus')?.value);
+  const skillId = Number(document.getElementById('bs-bt-debug-fetal-talent-skill')?.value);
+  const fetuses = Array.isArray(character.profile?.pregnant?.fetuses) ? character.profile.pregnant.fetuses : [];
+  const fetus = Number.isInteger(fetusIndex) ? fetuses[fetusIndex] : null;
+  const definition = resolveSkillDefinition(chatState.skillCatalog, skillId);
+  if (!fetus) throw new Error('找不到指定胎儿。');
+  if (!definition) throw new Error('找不到指定的全局技能定义。');
+  const currentTalents = normalizeTalentList(fetus.talents);
+  if (action === 'delete') {
+    if (!currentTalents.some((entry) => entry.skillId === definition.id)) throw new Error('该胎儿尚未持有此天赋。');
+    fetus.talents = currentTalents.filter((entry) => entry.skillId !== definition.id);
+  } else {
+    const level = Number(document.getElementById('bs-bt-debug-fetal-talent-level')?.value);
+    const exp = Number(document.getElementById('bs-bt-debug-fetal-talent-exp')?.value);
+    if (!Number.isInteger(level) || level < -10 || level > 10) throw new Error('天赋等级必须是 -10 到 10 的整数。');
+    if (!Number.isInteger(exp) || exp < -1000000 || exp > 1000000) throw new Error('天赋 EXP 必须是范围内的整数。');
+    const normalized = normalizeTalentList([{ skillId: definition.id, level, exp }])[0];
+    if (!normalized) throw new Error('无法建立天赋资料。');
+    fetus.talents = normalizeTalentList([...currentTalents.filter((entry) => entry.skillId !== definition.id), normalized]);
+  }
+  character.updatedAt = Date.now();
+  debugFetalTalentDraft = { owner: character.name, fetusIndex, skillId: definition.id };
+  recordChatStateSnapshot(ctx, chatState, { reason: action === 'delete' ? 'manual_fetal_talent_delete' : 'manual_fetal_talent_update' });
+  saveSettings(ctx);
+  renderStatusPanel(ctx);
+  renderSkillCatalogPage(ctx);
+  renderFullStatePage(ctx);
+  updateMainFlowPrompt(ctx);
+  resetPoller(ctx, trackerDeps);
+  const message = action === 'delete'
+    ? `已删除胎儿 ${fetusIndex + 1} 的「${definition.name}」天赋。`
+    : `已写入胎儿 ${fetusIndex + 1} 的「${definition.name}」天赋。`;
+  const status = document.getElementById('bs-bt-debug-fetal-talent-status');
+  if (status) status.textContent = message;
+  globalThis.toastr?.success?.(message, '[BS BioTracker]');
+}
+
+function bindFetalTalentDebugControls(ctx, panel) {
+  panel.querySelectorAll('#bs-bt-debug-fetal-talent-fetus, #bs-bt-debug-fetal-talent-skill').forEach((node) => {
+    node.addEventListener('change', () => {
+      debugFetalTalentDraft = {
+        owner: selectedFullStateName,
+        fetusIndex: Number(panel.querySelector('#bs-bt-debug-fetal-talent-fetus')?.value) || 0,
+        skillId: Number(panel.querySelector('#bs-bt-debug-fetal-talent-skill')?.value) || 0,
+      };
+      renderFullStatePage(ctx);
+    });
+  });
+  panel.querySelector('[data-fetal-talent-save]')?.addEventListener('click', () => {
+    try {
+      applyFetalTalentDebugChange(ctx, 'save');
+    } catch (error) {
+      const message = String(error?.message || error);
+      const status = document.getElementById('bs-bt-debug-fetal-talent-status');
+      if (status) status.textContent = message;
+      globalThis.toastr?.error?.(message, '[BS BioTracker]');
+    }
+  });
+  panel.querySelector('[data-fetal-talent-delete]')?.addEventListener('click', () => {
+    try {
+      applyFetalTalentDebugChange(ctx, 'delete');
+    } catch (error) {
+      const message = String(error?.message || error);
+      const status = document.getElementById('bs-bt-debug-fetal-talent-status');
+      if (status) status.textContent = message;
+      globalThis.toastr?.error?.(message, '[BS BioTracker]');
+    }
+  });
 }
 
 function renderFullStatePage(ctx) {
@@ -4058,7 +4723,8 @@ function renderFullStatePage(ctx) {
     output.value = getFullStateEditorText(current);
     setFullStateEditStatus('可直接编辑 JSON，应用前会检查格式与基础结构。');
     if (debugPanel) {
-      debugPanel.innerHTML = renderTrackDebug(buildTrackCharacterViewModel(current));
+      debugPanel.innerHTML = renderTrackDebug(buildTrackCharacterViewModel(current), renderFetalTalentDebugEditor(chatState, current));
+      bindFetalTalentDebugControls(ctx, debugPanel);
       bindDebugPanelControls(ctx, debugPanel, () => renderFullStatePage(ctx));
     }
   } else {
@@ -4135,21 +4801,21 @@ function setView(view) {
   const root = document.getElementById(PANEL_ID);
   if (!root) return;
   const normalizedView = view === 'time-lapse' ? 'full-state' : view;
-  const next = ['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'race-encyclopedia', 'tracker-preset', 'wardrobe'].includes(normalizedView) ? normalizedView : 'home';
+  const next = ['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'race-encyclopedia', 'tracker-preset', 'wardrobe', 'skill-catalog'].includes(normalizedView) ? normalizedView : 'home';
   root.dataset.view = next;
   try {
     globalThis.localStorage?.setItem(LAST_VIEW_STORAGE_KEY, next);
   } catch {}
   document.querySelectorAll('#bs-biotracker-settings .bs-bt-view').forEach((node) => node.classList.toggle('is-active', node.dataset.view === next));
   const title = document.getElementById('bs-bt-title');
-  if (title) title.textContent = next === 'theme' ? 'THEME' : next === 'system' ? 'SYSTEM' : next === 'register' ? 'REGISTRY' : next === 'worldbook-filter' ? 'WORLDBOOK' : next === 'track-list' ? 'TRACK LIST' : next === 'track-char' ? 'TRACK CHAR' : next === 'full-state' ? 'FULL STATE' : next === 'race-encyclopedia' ? 'RACE DATA' : next === 'tracker-preset' ? 'PRESET' : next === 'wardrobe' ? 'WARDROBE' : 'HOME';
+  if (title) title.textContent = next === 'theme' ? 'THEME' : next === 'system' ? 'SYSTEM' : next === 'register' ? 'REGISTRY' : next === 'worldbook-filter' ? 'WORLDBOOK' : next === 'track-list' ? 'TRACK LIST' : next === 'track-char' ? 'TRACK CHAR' : next === 'full-state' ? 'FULL STATE' : next === 'race-encyclopedia' ? 'RACE DATA' : next === 'tracker-preset' ? 'PRESET' : next === 'wardrobe' ? 'WARDROBE' : next === 'skill-catalog' ? 'SKILLS' : 'HOME';
 }
 
 function getLastPagerView() {
   try {
     const value = String(globalThis.localStorage?.getItem(LAST_VIEW_STORAGE_KEY) || '').trim();
     if (value === 'time-lapse') return 'full-state';
-    if (['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'race-encyclopedia', 'tracker-preset', 'wardrobe'].includes(value)) {
+    if (['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'race-encyclopedia', 'tracker-preset', 'wardrobe', 'skill-catalog'].includes(value)) {
       return value;
     }
   } catch {}
@@ -4181,6 +4847,7 @@ function applySettingsToForm(ctx) {
   setValue('bs-bt-tracker-worldbook-mode', normalizeWorldbookMode(settings.trackerWorldbookMode));
   setValue('bs-bt-system-prompt', settings.systemPrompt);
   setValue('bs-bt-register-custom-notes', settings.registryCustomNotes);
+  setValue('bs-bt-register-skill-prompt', settings.registrySkillPrompt);
   setValue('bs-bt-registry-normal-description', settings.registryDescriptionGuides?.normalDescription);
   setValue('bs-bt-registry-pregnant-description', settings.registryDescriptionGuides?.pregnantDescription);
   setValue('bs-bt-diary-writing-prompt', settings.diaryWritingPrompt);
@@ -4203,8 +4870,10 @@ function applySettingsToForm(ctx) {
   applyTheme(settings);
   renderStatusPanel(ctx);
   renderFullStatePage(ctx);
+  renderSkillCatalogPage(ctx);
   renderRaceEncyclopediaPage(ctx);
   refreshRegisterRacePalette();
+  renderRegisterChildSourceOptions(ctx);
   syncTrackerPresetSelectionUi(ctx);
   setView(getLastPagerView());
 }
@@ -4769,6 +5438,7 @@ function readSettingsFromForm(ctx) {
   else settings.trackerGlobalWorldbookExcludeNames = globalFilterNames;
   settings.systemPrompt = String(getValue('bs-bt-system-prompt')).trim() || DEFAULT_SYSTEM_PROMPT;
   settings.registryCustomNotes = String(getValue('bs-bt-register-custom-notes')).trim();
+  settings.registrySkillPrompt = String(getValue('bs-bt-register-skill-prompt')).trim();
   settings.registryDescriptionGuides = {
     normalDescription: String(getValue('bs-bt-registry-normal-description')).trim(),
     pregnantDescription: String(getValue('bs-bt-registry-pregnant-description')).trim(),
@@ -5117,6 +5787,8 @@ async function ensureModal(ctx) {
       }
       if (nextView === 'race-encyclopedia') renderRaceEncyclopediaPage(ctx);
       if (nextView === 'wardrobe') renderWardrobePage(ctx);
+      if (nextView === 'skill-catalog') renderSkillCatalogPage(ctx);
+      if (nextView === 'register') renderRegisterChildSourceOptions(ctx);
       if (nextView === 'tracker-preset') {
         await refreshTrackerPresetPage(ctx).catch((error) => {
           console.error('[BS BioTracker] refreshTrackerPresetPage failed', error);
@@ -5125,7 +5797,18 @@ async function ensureModal(ctx) {
       setView(nextView);
     }),
   );
+  document.querySelectorAll('#bs-bt-wardrobe-tabs [data-wardrobe-tab]').forEach((node) => {
+    node.addEventListener('click', () => {
+      selectedWardrobeSubpage = String(node.getAttribute('data-wardrobe-tab') || '') === 'add' ? 'add' : 'characters';
+      renderWardrobePage(ctx);
+    });
+  });
   const wardrobeList = document.getElementById('bs-bt-wardrobe-list');
+  const wardrobeAddPage = document.getElementById('bs-bt-wardrobe-add-page');
+  wardrobeAddPage?.addEventListener('change', (event) => {
+    const target = event.target;
+    if (target instanceof Element && target.matches('#bs-bt-wardrobe-item-slot')) updateWardrobeAddTypeFields();
+  });
   wardrobeList?.addEventListener('click', (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
@@ -5133,15 +5816,104 @@ async function ensureModal(ctx) {
     if (characterButton) {
       const characterName = String(characterButton.getAttribute('data-wardrobe-character') || '');
       const character = getChatState(ctx, getSettings(ctx)).characters?.[characterName];
-      if (character?.profile?.wardrobe?.enabled === true) {
+      if (character) {
         selectedWardrobeName = characterName;
         renderWardrobePage(ctx);
       }
       return;
     }
+    if (target.closest('[data-wardrobe-initialize]') && selectedWardrobeName) {
+      const settings = getSettings(ctx);
+      const chatState = getChatState(ctx, settings);
+      const character = chatState.characters?.[selectedWardrobeName];
+      if (!character?.profile) return;
+      initializeEmptyWardrobe(character);
+      recordChatStateSnapshot(ctx, chatState, { reason: 'manual_wardrobe_initialize' });
+      saveSettings(ctx);
+      renderWardrobePage(ctx);
+      renderStatusPanel(ctx);
+      renderFullStatePage(ctx);
+      updateMainFlowPrompt(ctx);
+      globalThis.toastr?.success?.(`已为 ${selectedWardrobeName} 建立空衣柜。`, '[BS BioTracker]');
+      return;
+    }
     if (target.closest('[data-wardrobe-back]')) {
       selectedWardrobeName = '';
       renderWardrobePage(ctx);
+      return;
+    }
+    const deleteButton = target.closest('[data-wardrobe-item-delete]');
+    if (deleteButton && selectedWardrobeName) {
+      const itemId = Number(deleteButton.getAttribute('data-wardrobe-item-delete'));
+      const character = getChatState(ctx, getSettings(ctx)).characters?.[selectedWardrobeName];
+      const item = findWardrobeViewItem(character?.profile, itemId);
+      if (!item) return;
+      if (globalThis.confirm && !globalThis.confirm(`确定从 ${selectedWardrobeName} 的衣柜删除「${item.name}」？`)) return;
+      try {
+        const result = applyManualWardrobeTool(ctx, {
+          name: 'bsRemoveWardrobeItem', arguments: { female: selectedWardrobeName, itemId },
+        }, 'manual_wardrobe_item_delete');
+        globalThis.toastr?.success?.(result.message, '[BS BioTracker]');
+      } catch (error) {
+        globalThis.toastr?.error?.(String(error?.message || error), '[BS BioTracker]');
+      }
+      return;
+    }
+    if (target.closest('[data-wardrobe-outfit-apply]') && selectedWardrobeName) {
+      try {
+        const accessoryItemIds = Array.from(wardrobeList.querySelectorAll('[data-wardrobe-outfit-accessory]:checked'))
+          .map((node) => Number(node.getAttribute('data-wardrobe-outfit-accessory')))
+          .filter(Number.isInteger);
+        const result = applyManualWardrobeTool(ctx, {
+          name: 'bsChangeOutfit',
+          arguments: {
+            female: selectedWardrobeName,
+            mainItemId: Number(document.getElementById('bs-bt-wardrobe-outfit-main')?.value || 0),
+            accessoryItemIds,
+            wearState: String(document.getElementById('bs-bt-wardrobe-outfit-state')?.value || '整齐'),
+          },
+        }, 'manual_wardrobe_outfit');
+        globalThis.toastr?.success?.(result.message, '[BS BioTracker]');
+      } catch (error) {
+        globalThis.toastr?.error?.(String(error?.message || error), '[BS BioTracker]');
+      }
+      return;
+    }
+  });
+  wardrobeAddPage?.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof Element) || !target.closest('[data-wardrobe-item-save]')) return;
+    const characterName = String(document.getElementById('bs-bt-wardrobe-item-character')?.value || '').trim();
+    if (!characterName) return;
+    const settings = getSettings(ctx);
+    const chatState = getChatState(ctx, settings);
+    const character = chatState.characters?.[characterName];
+    if (!character) return;
+    try {
+      const slot = String(document.getElementById('bs-bt-wardrobe-item-slot')?.value || 'main');
+      const item = {
+        name: String(document.getElementById('bs-bt-wardrobe-item-name')?.value || '').trim(),
+        note: String(document.getElementById('bs-bt-wardrobe-item-note')?.value || '').trim(),
+        slot,
+        ...(slot === 'accessory' && document.getElementById('bs-bt-wardrobe-item-layer')?.value === 'inner' ? { layer: 'inner' } : {}),
+        ...(slot === 'main' ? {
+          parts: String(document.getElementById('bs-bt-wardrobe-item-parts')?.value || '').split(/[,，]/).map((part) => part.trim()).filter(Boolean),
+        } : {}),
+        ...Object.fromEntries(Object.keys(WARDROBE_DIMENSION_LABELS).map((key) => [key, Number(document.getElementById(`bs-bt-wardrobe-item-${key}`)?.value || 0)])),
+      };
+      if (!item.name) throw new Error('衣物名称不能为空。');
+      initializeEmptyWardrobe(character);
+      const result = applyManualWardrobeTool(ctx, {
+        name: 'bsAddWardrobeItem', arguments: { female: characterName, item },
+      }, 'manual_wardrobe_item_add');
+      const status = document.getElementById('bs-bt-wardrobe-add-status');
+      if (status) status.textContent = result.message;
+      globalThis.toastr?.success?.(result.message, '[BS BioTracker]');
+    } catch (error) {
+      const message = String(error?.message || error);
+      const status = document.getElementById('bs-bt-wardrobe-add-status');
+      if (status) status.textContent = message;
+      globalThis.toastr?.error?.(message, '[BS BioTracker]');
     }
   });
   wardrobeList?.addEventListener('pointerdown', (event) => {
@@ -5360,6 +6132,93 @@ async function ensureModal(ctx) {
       setRegisterTab(String(node.getAttribute('data-register-tab') || 'inference'));
     });
   });
+  document.getElementById('bs-bt-skill-definition-add')?.addEventListener('click', () => {
+    const nameNode = document.getElementById('bs-bt-skill-definition-name');
+    const descriptionNode = document.getElementById('bs-bt-skill-definition-description');
+    const settings = getSettings(ctx);
+    const chatState = getChatState(ctx, settings);
+    const result = applyToolCall(chatState, {
+      name: 'bsRegisterSkillDefinition',
+      arguments: {
+        name: String(nameNode?.value || '').trim(),
+        description: String(descriptionNode?.value || '').trim(),
+      },
+    });
+    if (!result.applied) {
+      setSkillCatalogStatus(result.message, true);
+      return;
+    }
+    recordChatStateSnapshot(ctx, chatState, { reason: 'manual_skill_definition' });
+    saveSettings(ctx);
+    if (nameNode) nameNode.value = '';
+    if (descriptionNode) descriptionNode.value = '';
+    renderSkillCatalogPage(ctx);
+    updateMainFlowPrompt(ctx);
+    setSkillCatalogStatus(result.message);
+  });
+  document.getElementById('bs-bt-skill-catalog-list')?.addEventListener('click', (event) => {
+    const deleteButton = event.target.closest('[data-skill-definition-delete]');
+    if (deleteButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!deleteButton.disabled) deleteSkillDefinitionFromCatalog(ctx, Number(deleteButton.getAttribute('data-skill-definition-delete')));
+      return;
+    }
+    const card = event.target.closest('[data-skill-definition-open]');
+    if (!card) return;
+    selectedSkillDefinitionId = Number(card.getAttribute('data-skill-definition-open')) || 0;
+    renderSkillCatalogPage(ctx);
+  });
+  document.getElementById('bs-bt-skill-catalog-list')?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    if (event.target.closest('[data-skill-definition-delete]')) return;
+    const card = event.target.closest('[data-skill-definition-open]');
+    if (!card) return;
+    event.preventDefault();
+    selectedSkillDefinitionId = Number(card.getAttribute('data-skill-definition-open')) || 0;
+    renderSkillCatalogPage(ctx);
+  });
+  document.getElementById('bs-bt-skill-detail-back')?.addEventListener('click', () => {
+    selectedSkillDefinitionId = 0;
+    renderSkillCatalogPage(ctx);
+  });
+  document.getElementById('bs-bt-skill-detail-characters')?.addEventListener('change', (event) => {
+    const target = event.target;
+    if (!(target instanceof Element) || !target.matches('[data-character-skill-level], [data-character-skill-exp]')) return;
+    const setStatus = (message, isError = false) => {
+      const node = document.getElementById('bs-bt-character-skill-status');
+      if (!node) return;
+      node.textContent = String(message || '');
+      node.dataset.state = isError ? 'error' : 'normal';
+    };
+    try {
+      const row = target.closest('[data-character-skill-row]');
+      const [kind, rawSkillId] = String(row?.getAttribute('data-character-skill-row') || '').split(':');
+      const skillId = Number(rawSkillId);
+      const listKey = kind === 'talent' ? 'talents' : 'skills';
+      const level = Number(row?.querySelector('[data-character-skill-level]')?.value);
+      const exp = Number(row?.querySelector('[data-character-skill-exp]')?.value);
+      const characterCard = target.closest('[data-character-skill-character]');
+      const characterName = String(characterCard?.getAttribute('data-character-skill-character') || '').trim();
+      applyManualCharacterSkillChange(ctx, characterName, (config) => {
+        const index = config[listKey].findIndex((entry) => Number(entry.skillId) === skillId);
+        const meansAbsent = kind === 'talent' ? level === 0 && exp === 0 : level <= 0;
+        if (meansAbsent) {
+          if (index >= 0) config[listKey].splice(index, 1);
+          return;
+        }
+        const nextEntry = { skillId, level, exp };
+        if (index < 0) config[listKey].push(nextEntry);
+        else config[listKey][index] = nextEntry;
+      }, 'manual_character_skill_auto_update');
+      setStatus(`已自动更新 ${characterName} 的${kind === 'talent' ? '天赋' : '技能'}。`);
+    } catch (error) {
+      setStatus(String(error?.message || error), true);
+    }
+  });
+  document.getElementById('bs-bt-register-skill-generate')?.addEventListener('click', (event) => generateRegistrySkillSetup(ctx, event.currentTarget));
+  document.getElementById('bs-bt-register-skill-write')?.addEventListener('click', () => writeRegistrySkillSetup(ctx));
+  document.getElementById('bs-bt-register-source')?.addEventListener('change', () => syncRegisterChildSourceFields(ctx));
   document.querySelectorAll('#bs-bt-encyclopedia-tabs [data-encyclopedia-tab]').forEach((node) => {
     node.addEventListener('click', () => {
       closeRacePhysiologyEditor();
@@ -5374,7 +6233,7 @@ async function ensureModal(ctx) {
   document.getElementById('bs-bt-diary-apply')?.addEventListener('click', () => applyRegistryDiary(ctx));
   document.getElementById('bs-bt-breeding-inference-run')?.addEventListener('click', async (event) => {
     const button = event.currentTarget;
-    const values = getRegisterFormValues();
+    const values = { ...getRegisterFormValues(), customNotes: '', skillPrompt: '' };
     if (!values.targetName) {
       setBreedingInferenceStatus('请先输入要推演的角色名。', true);
       globalThis.toastr?.warning?.('[BS BioTracker] 请先输入角色名');
@@ -5405,7 +6264,7 @@ async function ensureModal(ctx) {
     }
   });
   document.getElementById('bs-bt-breeding-inference-apply')?.addEventListener('click', () => {
-    const values = getRegisterFormValues();
+    const values = { ...getRegisterFormValues(), customNotes: '', skillPrompt: '' };
     let breedingInference = null;
     try {
       breedingInference = getApplicableBreedingInferenceDraft(values);
@@ -5421,7 +6280,7 @@ async function ensureModal(ctx) {
       return;
     }
     if (!breedingInference) {
-      setBreedingInferenceStatus('没有可套用的繁育推演，或当前角色名/种族/角色补充设定/额外推演提示已和推演时不同。', true);
+      setBreedingInferenceStatus('没有可套用的繁育推演，或当前角色名／种族／额外推演提示已和推演时不同。', true);
       globalThis.toastr?.warning?.('[BS BioTracker] 请先为当前输入执行繁育推演');
       return;
     }
@@ -5451,7 +6310,7 @@ async function ensureModal(ctx) {
     }
   });
   document.getElementById('bs-bt-register-run')?.addEventListener('click', async () => {
-    const { targetName, declaredRace, customNotes } = getRegisterFormValues();
+    const { targetName, declaredRace, customNotes, sourceChild } = getRegisterFormValues();
     if (!targetName) {
       setRegisterStatus('请先输入要注册的角色名。', true);
       globalThis.toastr?.warning?.('[BS BioTracker] 请先输入角色名');
@@ -5472,9 +6331,11 @@ async function ensureModal(ctx) {
       ? `正在使用繁育推演注册 ${targetName}...`
       : `正在注册 ${targetName}...`);
     try {
-      const character = await runRegistry(ctx, { targetName, customNotes, declaredRace, breedingInference });
+      const character = await runRegistry(ctx, { targetName, customNotes, declaredRace, breedingInference, sourceChild });
       renderStatusPanel(ctx);
       renderFullStatePage(ctx);
+      renderSkillCatalogPage(ctx);
+      renderRegisterChildSourceOptions(ctx);
       updateMainFlowPrompt(ctx);
       setRegisterStatus(breedingInference
         ? `注册完成：${character.name}（已套用繁育推演）。可继续备装或写日记。`

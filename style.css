@@ -922,6 +922,43 @@
   display: none;
 }
 
+#bs-biotracker-settings .bs-bt-register-source-section {
+  display: grid;
+  gap: 6px;
+}
+
+#bs-biotracker-settings #bs-bt-register-source-summary {
+  min-height: 1.35em;
+  line-height: 1.35;
+}
+
+#bs-biotracker-settings #bs-bt-register-race[readonly] {
+  background: color-mix(in srgb, var(--bsbt-lcd-bg) 84%, currentColor 16%);
+  cursor: not-allowed;
+}
+
+#bs-biotracker-settings [data-race-picker-target='bs-bt-register-race']:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#bs-biotracker-settings .bs-bt-register-page[data-register-page='skills']:not([hidden]) {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+#bs-biotracker-settings #bs-bt-register-skill-prompt {
+  min-height: 104px;
+}
+
+#bs-biotracker-settings #bs-bt-register-skill-result {
+  min-height: 260px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  font-size: 0.9em;
+  line-height: 1.4;
+}
+
 #bs-biotracker-settings .bs-bt-inline-status {
   margin-top: 8px;
   min-height: 1.4em;
@@ -1136,6 +1173,173 @@
   background: rgba(255, 255, 255, 0.06);
 }
 
+#bs-biotracker-settings .bs-bt-home-tile__icon--skill {
+  mask-image: url('./assets/icons/light-bulb-on-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/light-bulb-on-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-skill-catalog-list {
+  display: grid;
+  gap: 10px;
+}
+
+#bs-biotracker-settings #bs-bt-skill-catalog-overview:not([hidden]),
+#bs-biotracker-settings #bs-bt-skill-definition-detail:not([hidden]),
+#bs-biotracker-settings .bs-bt-skill-detail-characters {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+#bs-biotracker-settings #bs-bt-skill-catalog-overview[hidden],
+#bs-biotracker-settings #bs-bt-skill-definition-detail[hidden] {
+  display: none;
+}
+
+#bs-biotracker-settings .bs-bt-skill-card {
+  border: 1px solid color-mix(in srgb, var(--bsbt-border-color) 55%, transparent);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#bs-biotracker-settings .bs-bt-skill-card__title {
+  font-weight: 700;
+}
+
+#bs-biotracker-settings .bs-bt-skill-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+#bs-biotracker-settings .bs-bt-skill-card__delete {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 1.1em;
+  line-height: 1;
+  cursor: pointer;
+}
+
+#bs-biotracker-settings .bs-bt-skill-card__delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.3;
+}
+
+#bs-biotracker-settings .bs-bt-skill-card--interactive {
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+}
+
+#bs-biotracker-settings .bs-bt-skill-card--interactive .bs-bt-skill-card__header {
+  margin-bottom: 0;
+}
+
+#bs-biotracker-settings .bs-bt-skill-card--interactive:hover,
+#bs-biotracker-settings .bs-bt-skill-card--interactive:focus-visible {
+  border-color: currentColor;
+  background: rgba(255, 255, 255, 0.15);
+  outline: none;
+}
+
+#bs-biotracker-settings .bs-bt-skill-card--interactive:active {
+  transform: scale(0.99);
+}
+
+#bs-biotracker-settings .bs-bt-skill-definition-form {
+  display: grid;
+  gap: 7px;
+}
+
+#bs-biotracker-settings .bs-bt-skill-detail-head .menu_button {
+  width: auto;
+  margin: 0;
+}
+
+#bs-biotracker-settings .bs-bt-skill-detail-head {
+  display: grid;
+  gap: 6px;
+}
+
+#bs-biotracker-settings .bs-bt-skill-detail-head .bs-bt-section-title {
+  margin-top: 4px;
+  font-size: 1.08em;
+  font-weight: 750;
+}
+
+#bs-biotracker-settings .bs-bt-skill-character-card {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--bsbt-border-color) 55%, transparent);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#bs-biotracker-settings .bs-bt-skill-character-card__name {
+  font-weight: 750;
+  font-size: 1.02em;
+}
+
+#bs-biotracker-settings .bs-bt-character-skill-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr);
+  align-items: end;
+  gap: 6px;
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-character-skill-row label {
+  display: grid;
+  gap: 3px;
+  font-size: 0.86em;
+}
+
+#bs-biotracker-settings .bs-bt-character-skill-name {
+  align-self: center;
+  font-weight: 700;
+}
+
+#bs-biotracker-settings .bs-bt-character-skill-row .menu_button {
+  width: 100%;
+  margin: 0;
+}
+
+#bs-biotracker-settings .bs-bt-skill-history {
+  border-top: 1px solid color-mix(in srgb, var(--bsbt-border-color) 45%, transparent);
+  padding-top: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-skill-history summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+
+#bs-biotracker-settings .bs-bt-skill-history ul {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+#bs-biotracker-settings .bs-bt-skill-history li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  font-size: 0.86em;
+}
+
 #bs-biotracker-settings .bs-bt-prompt-toggle-item {
   display: flex;
   align-items: center;
@@ -1227,7 +1431,12 @@
 }
 
 #bs-biotracker-settings #bs-bt-register-tabs {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+#bs-biotracker-settings #bs-bt-register-tabs .bs-bt-track-tab {
+  padding-inline: 4px;
+  white-space: nowrap;
 }
 
 #bs-biotracker-settings #bs-bt-encyclopedia-tabs {
@@ -1651,6 +1860,49 @@
   margin-bottom: 8px;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+#bs-biotracker-settings .bs-bt-fetal-talent-editor {
+  display: grid;
+  gap: 9px;
+  margin-top: 10px;
+}
+
+#bs-biotracker-settings .bs-bt-fetal-talent-current {
+  display: grid;
+  gap: 5px;
+}
+
+#bs-biotracker-settings .bs-bt-fetal-talent-current-row {
+  display: grid;
+  gap: 2px;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 7px;
+  font-size: 0.86em;
+}
+
+#bs-biotracker-settings .bs-bt-fetal-talent-values,
+#bs-biotracker-settings .bs-bt-fetal-talent-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  align-items: stretch;
+}
+
+#bs-biotracker-settings .bs-bt-fetal-talent-values .bs-bt-track-debug-field {
+  grid-template-rows: minmax(2.8em, auto) auto;
+}
+
+#bs-biotracker-settings .bs-bt-fetal-talent-values input,
+#bs-biotracker-settings .bs-bt-fetal-talent-actions .menu_button {
+  width: 100%;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+#bs-biotracker-settings .bs-bt-fetal-talent-actions .menu_button {
+  min-width: 0;
 }
 
 #bs-biotracker-settings .bs-bt-track-section-title--split {
@@ -3111,6 +3363,49 @@
   align-items: center;
   justify-content: center;
   min-width: 32px;
+  position: relative;
+  cursor: help;
+  outline: none;
+}
+
+#bs-biotracker-settings .bs-bt-status-icons::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 10px);
+  right: 0;
+  width: max-content;
+  max-width: min(250px, calc(100vw - 96px));
+  padding: 7px 9px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: var(--bsbt-lcd-bg);
+  color: var(--bsbt-lcd-text);
+  box-shadow: 3px 3px 0 color-mix(in srgb, currentColor 32%, transparent);
+  font-family: var(--bsbt-font-main);
+  font-size: max(11px, calc(var(--bsbt-header-font-size) * 0.78));
+  font-weight: 400;
+  line-height: 1.35;
+  letter-spacing: normal;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-3px);
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+  pointer-events: none;
+}
+
+#bs-biotracker-settings .bs-bt-status-icons:hover::after,
+#bs-biotracker-settings .bs-bt-status-icons:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+#bs-biotracker-settings .bs-bt-status-icons:focus-visible {
+  filter: drop-shadow(0 0 2px currentColor);
 }
 
 #bs-biotracker-settings .bs-bt-status-icons[data-battery-state='critical'] {
@@ -3276,6 +3571,91 @@
 #bs-biotracker-settings .bs-bt-wardrobe-row {
   display: block;
   padding: 8px 9px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-row-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 26px;
+  align-items: center;
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-row-delete {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--bsbt-lcd-text) 38%, transparent);
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 20px;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0.72;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-row-delete:hover {
+  opacity: 1;
+  border-color: currentColor;
+}
+
+#bs-biotracker-settings #bs-bt-wardrobe-add-page[hidden],
+#bs-biotracker-settings #bs-bt-wardrobe-characters-page[hidden],
+#bs-biotracker-settings [data-wardrobe-type-field][hidden] {
+  display: none;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-tabs {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-outfit-editor,
+#bs-biotracker-settings .bs-bt-wardrobe-add-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 6px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-outfit-editor label,
+#bs-biotracker-settings .bs-bt-wardrobe-add-form label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.88em;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-accessory-checks,
+#bs-biotracker-settings .bs-bt-wardrobe-editor-wide,
+#bs-biotracker-settings .bs-bt-wardrobe-outfit-editor > .menu_button {
+  grid-column: 1 / -1;
+}
+
+#bs-biotracker-settings #bs-bt-wardrobe-item-note {
+  min-height: 90px;
+  resize: vertical;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-accessory-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+@media (max-width: 560px) {
+  #bs-biotracker-settings .bs-bt-skill-history li,
+  #bs-biotracker-settings .bs-bt-wardrobe-outfit-editor,
+  #bs-biotracker-settings .bs-bt-wardrobe-add-form {
+    grid-template-columns: 1fr;
+  }
+
+  #bs-biotracker-settings .bs-bt-wardrobe-accessory-checks,
+  #bs-biotracker-settings .bs-bt-wardrobe-editor-wide,
+  #bs-biotracker-settings .bs-bt-wardrobe-outfit-editor > .menu_button {
+    grid-column: auto;
+  }
 }
 
 #bs-biotracker-settings .bs-bt-wardrobe-row-main {

@@ -28,8 +28,9 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '以下是角色状态变量的语义说明，供你理解 existing_state 中的字段，不是要求你原样输出这些字段。',
   '',
   '[总结构]',
+  '- skill_catalog 是当前聊天的全局技能图鉴；每项包含稳定 id、技能名 name 与唯一描述 description。角色、胎儿、孩子只用 skillId 引用它。',
   '- 每个角色结构为 name / initialized / profile。',
-  '- profile 主要包含 base、pregnant、experience、psychology、children、metabolism、descriptions、diary、notify，必要时也会附带部分 bio 字段。',
+  '- profile 主要包含 base、pregnant、experience、psychology、skills、talents、children、metabolism、descriptions、diary、notify，必要时也会附带部分 bio 字段。',
   '- bio 与 immune 大多属于内部运行参数，tracker 默认不会完整发给你；但与剧情表达直接相关的少数 bio 字段可以发送。',
   '- 若角色具有 immune.metabolism=true，则 metabolism 也不会发给你，因为该角色不受代谢累积影响。',
   '- 若角色带有 offscreen=true，表示该角色当前不在场，existing_state 只提供精简状态，不代表角色不存在。',
@@ -85,6 +86,7 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '- fetuses[*].tendencyAngleText: 系统额外附带的胎位文字说明，如 正位(头位)/倒位(臀位)/横位/斜位。',
   '- fetuses[*].affinity: 母胎之間的親密度，也会参与 derivedType 进展。',
   '- fetuses[*].maternalDerivedTypeProgress: 与母体(正)/父源(負)衍生同化的进度，范围 -100 到 100。',
+  '- fetuses[*].talents: 胎儿承接的天赋，只含 skillId、带正负号的 level 与 exp；只能由孕体角色的 bsTrainSkill 在允许阶段自动改变。',
   '',
   '[bio]',
   '- bio 只会发送少量允许暴露给 LLM 的字段，不代表完整内部参数表。',
@@ -106,6 +108,18 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '- psychology.mens 另外包含 isChaste (是否当前保持贞洁)、hasContraception (是否有避孕措施) 两个事件旗标。',
   '- psychology.preg 另外包含 knowsFatherSource (是否知晓父源)、hasProfessionalPrenatalCare (是否接受专业产检) 两个事件旗标。',
   '',
+  '[skills / talents]',
+  '- skills 是角色后天技能列表；每项为 {skillId, level, exp}。技能从 Lv1 觉醒，最高 Lv10，只进不退。',
+  '- skillHistory 是系统自动保存的最近技能觉醒／升等事件，只供参考，不得由工具修改。一次跨多级只会有一条 fromLevel→toLevel 记录。',
+  '- talents 是角色先天天赋列表；每项为 {skillId, level, exp}。level 正数表示擅长、负数表示苦手、0 表示尚未形成；exp 同样带方向，反向经验会逐级削弱并能跨过 0 逆转，最高 ±Lv10。角色 talents 对所有 LLM 工具都是只读资料，只能由用户通过外部注册／技能／变量界面调整。',
+  '- 技能与天赋共用经验曲线 requiredExp(level)=100*level*level；技能 Lv1→2 要 100、Lv2→3 要 400。天赋 Lv0→±Lv1 固定要 100，之后按当前绝对等级使用同一曲线。',
+  '- 只有 recent_messages 明确出现相关事件、练习、实战运用、教学或领悟时，才调用 bsTrainSkill；不得仅凭“角色可能擅长”增加。',
+  '- skillExp 由你直接给非负整数，并综合事件成果、当前技能等级、本级需求及同名天赋判断。正天赋通常让同等事件更容易获得较多技能经验，负天赋通常较少；系统不会再次套倍率。',
+  '- 严禁尝试传入 talentExp 或用任何工具修改角色自己的 talents。只有系统在允许孕期阶段执行技能锻炼时，才能依亲和度自动改变 fetuses[*].talents。',
+  '- 新技能必须先调用 bsRegisterSkillDefinition，以 name+description 登记到 skill_catalog；先检查既有定义，禁止制造同义重复。随后才能用精确名称调用 bsTrainSkill，并在剧情确实触发觉醒时传 awaken=true。',
+  '- 孕中期、孕晚期、临产期、逾期、产兆前驱、第一产程调用 bsTrainSkill 时，系统每次只随机选择一胎，将本次 skillExp 依该胎 affinity 自动传为天赋经验：skillExp*abs(affinity)/50，正亲和为擅长、负亲和为苦手、0 不传。第二与第三产程禁止传递。',
+  '- 胎儿与孩子只有 talents，没有 skills。分娩时 talents 原样进入 children；日后注册孩子角色时，由用户在注册第五子页参考并载入，不会只凭同名自动继承。',
+  '',
   '[children]',
   '- 已出生孩子列表。provider!=null 的胎儿通常不会计入 children。',
   '- children[*].name: 孩子姓名。',
@@ -114,6 +128,7 @@ export const TRACKER_VARIABLE_GUIDE_PROMPT = [
   '- children[*].race: 孩子种族。',
   '- children[*].derivedType: 孩子继承到的衍生类型；没有则为 null。',
   '- children[*].age: 孩子年龄，单位为年，会随时间推进。',
+  '- children[*].talents: 从胎儿阶段保留下来的天赋；注册该孩子时供用户在注册技能页参考载入。',
   '',
   '[diary]',
   '- diary 是角色主观日记，保存为数组；existing_state 中只会发送最近几笔，前端完整变量仍会保留全量。',
@@ -209,7 +224,7 @@ function buildTrackerMetabolismGuide(payload = null) {
   if (!breedingPsychologyEnabled) {
     baseGuide = baseGuide
       .replace('、psychology', '')
-      .replace(/\n?\[psychology\][\s\S]*?\n\[children\]/, '\n[children]');
+      .replace(/\n?\[psychology\][\s\S]*?\n\[skills \/ talents\]/, '\n[skills / talents]');
   }
   return fluxNames.length > 0
     ? baseGuide.replace(

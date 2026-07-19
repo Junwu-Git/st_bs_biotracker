@@ -4,10 +4,11 @@ import test from 'node:test';
 import * as host from '../scripts/host.js';
 import * as state from '../scripts/state.js';
 import * as raceConfig from '../scripts/race_config.js';
+import * as skillConfig from '../scripts/skill_config.js';
 import { getTrackerToolDefinitions, isFailedAutoRetryBlocked } from '../scripts/tracker.js';
 import { buildTrackerSystemPrompt } from '../scripts/tracker_prompt_context.js';
 import { applyToolCall } from '../scripts/tools.js';
-import { buildRegistrySystemPrompt, buildWardrobePrepSystemPrompt, normalizeBreedingInferenceResult } from '../scripts/registry.js';
+import { applyInitialSkillTalentConfig, applyRegistryChildInheritance, applyRegistrySkillSetup, buildRegistrySkillSystemPrompt, buildRegistrySystemPrompt, buildWardrobePrepSystemPrompt, normalizeBreedingInferenceResult, resolveRegistryChildSource } from '../scripts/registry.js';
 
 function resetGlobals() {
   delete globalThis.__TAURITAVERN__;
@@ -295,6 +296,307 @@ test('registry prompt delegates diary writing to the dedicated diary flow', () =
   const prompt = buildRegistrySystemPrompt({}, { includeBreedingPsychology: false });
   assert.equal(prompt.includes('首篇日记'), false);
   assert.equal(prompt.includes('"diary"'), false);
+});
+
+test('skill and talent curves use square requirements and stop at level 10', () => {
+  assert.equal(skillConfig.requiredExp(1), 100);
+  assert.equal(skillConfig.requiredExp(2), 400);
+  assert.equal(skillConfig.requiredExp(9), 8100);
+  assert.deepEqual(skillConfig.addSkillExperience({ skillId: 1, level: 1, exp: 0 }, 500), { skillId: 1, level: 3, exp: 0 });
+  assert.deepEqual(skillConfig.addSkillExperience({ skillId: 1, level: 9, exp: 0 }, 999999), { skillId: 1, level: 10, exp: 0 });
+  assert.deepEqual(skillConfig.addTalentExperience({ skillId: 1, level: 0, exp: 0 }, 100), { skillId: 1, level: 1, exp: 0 });
+  assert.deepEqual(skillConfig.addTalentExperience({ skillId: 1, level: 1, exp: 50 }, -200), { skillId: 1, level: 0, exp: -50 });
+  assert.deepEqual(skillConfig.addTalentExperience({ skillId: 1, level: 0, exp: -50 }, 150), { skillId: 1, level: 1, exp: 0 });
+  const removed = skillConfig.removeSkillDefinition([
+    { id: 1, name: '剑术', description: '剑的运用。' },
+    { id: 2, name: '弓术', description: '弓的运用。' },
+  ], '剑术');
+  assert.equal(removed.ok, true);
+  assert.deepEqual(removed.catalog, [{ id: 2, name: '弓术', description: '弓的运用。' }]);
+  let history = [];
+  for (let index = 0; index < 105; index += 1) {
+    history = skillConfig.appendSkillHistory(history, {
+      skillId: 1, fromLevel: 0, toLevel: 1, reason: `事件 ${index}`, source: 'story', timestamp: index,
+    });
+  }
+  assert.equal(history.length, 100);
+  assert.equal(history[0].reason, '事件 5');
+});
+
+test('LLM must register a described global skill before awakening and training it', () => {
+  const chatState = state.createEmptyChatState();
+  chatState.characters.Alice = state.createDefaultFemaleState('Alice');
+  assert.equal(applyToolCall(chatState, {
+    name: 'bsRegisterSkillDefinition', arguments: { name: '剑术', description: '' },
+  }).applied, false);
+  assert.equal(applyToolCall(chatState, {
+    name: 'bsRegisterSkillDefinition', arguments: { name: '剑术', description: '以长剑攻防的实战技巧。' },
+  }).applied, true);
+  const result = applyToolCall(chatState, {
+    name: 'bsTrainSkill',
+    arguments: {
+      female: 'Alice',
+      skill: '剑术',
+      skillExp: 500,
+      awaken: true,
+      reason: '连续完成基础挥剑与一次实战格挡。',
+    },
+  });
+  assert.equal(result.applied, true, result.message);
+  assert.deepEqual(chatState.skillCatalog, [{ id: 1, name: '剑术', description: '以长剑攻防的实战技巧。' }]);
+  assert.deepEqual(chatState.characters.Alice.profile.skills[0], { skillId: 1, level: 3, exp: 0 });
+  assert.deepEqual(result.notify, {
+    type: 'skill_awakened', female: 'Alice', skillId: 1, skillName: '剑术', fromLevel: 0, toLevel: 3,
+    awakened: true, text: 'Alice觉醒了技能「剑术」，并提升至 Lv3',
+  });
+  assert.deepEqual(chatState.characters.Alice.profile.skillHistory.map(({ timestamp, ...entry }) => entry), [{
+    skillId: 1, fromLevel: 0, toLevel: 3, reason: '连续完成基础挥剑与一次实战格挡。', source: 'story',
+  }]);
+  assert.equal(Number.isInteger(chatState.characters.Alice.profile.skillHistory[0].timestamp), true);
+  assert.equal(state.summarizeOperationLogs([{ name: 'bsTrainSkill', applied: true, message: 'ok', notify: result.notify }])[0].notify.text, result.notify.text);
+  const noLevel = applyToolCall(chatState, {
+    name: 'bsTrainSkill', arguments: { female: 'Alice', skill: '剑术', skillExp: 1, reason: '短暂复习基本架势。' },
+  });
+  assert.equal(noLevel.notify, undefined);
+  assert.equal(chatState.characters.Alice.profile.skillHistory.length, 1);
+});
+
+test('registry skill prompt reuses catalog and atomically creates described missing skills', () => {
+  const chatState = state.createEmptyChatState();
+  chatState.characters.Alice = state.createDefaultFemaleState('Alice');
+  chatState.skillCatalog = [{ id: 1, name: '剑术', description: '以剑进行攻防的技巧。' }];
+  chatState.nextSkillId = 2;
+  const character = applyRegistrySkillSetup(chatState, 'Alice', {
+    skillDefinitions: [{ name: '魔力感知', description: '感知周遭魔力流动与异常的能力。' }],
+    initialSkills: [{ skill: '剑术', level: 2, exp: 10 }],
+    initialTalents: [{ skill: '魔力感知', level: -1, exp: 20 }],
+  });
+  assert.deepEqual(chatState.skillCatalog.map(({ id, name }) => ({ id, name })), [
+    { id: 1, name: '剑术' },
+    { id: 2, name: '魔力感知' },
+  ]);
+  assert.equal(chatState.nextSkillId, 3);
+  assert.deepEqual(character.profile.skills, [{ skillId: 1, level: 2, exp: 10 }]);
+  assert.deepEqual(character.profile.talents, [{ skillId: 2, level: -1, exp: -20 }]);
+  assert.deepEqual(character.profile.skillHistory, []);
+
+  const before = JSON.stringify(chatState);
+  assert.throws(() => applyRegistrySkillSetup(chatState, 'Alice', {
+    skillDefinitions: [{ name: '无描述技能', description: '' }],
+    initialSkills: [{ skill: '无描述技能', level: 1, exp: 0 }],
+  }), /必须填写定义描述/);
+  assert.equal(JSON.stringify(chatState), before);
+});
+
+test('dedicated registry skill prompt requires catalog reuse and described new definitions', () => {
+  const prompt = buildRegistrySkillSystemPrompt({ skillPrompt: '她擅长剑术。' });
+  assert.match(prompt, /payload\.skill_catalog/);
+  assert.match(prompt, /不得用近义词建立重复技能/);
+  assert.match(prompt, /每个新定义必须同时提供 name 与明确说明技能范围的 description/);
+  assert.match(prompt, /initialSkills/);
+  assert.match(prompt, /initialTalents/);
+});
+
+test('skill ids are never reused and snapshots restore catalog plus allocator', () => {
+  resetGlobals();
+  const chatState = state.createEmptyChatState();
+  applyToolCall(chatState, { name: 'bsRegisterSkillDefinition', arguments: { name: '剑术', description: '剑的运用。' } });
+  applyToolCall(chatState, { name: 'bsRegisterSkillDefinition', arguments: { name: '弓术', description: '弓的运用。' } });
+  const removed = skillConfig.removeSkillDefinition(chatState.skillCatalog, 2);
+  chatState.skillCatalog = removed.catalog;
+  assert.equal(chatState.nextSkillId, 3);
+  applyToolCall(chatState, { name: 'bsRegisterSkillDefinition', arguments: { name: '枪术', description: '长枪的运用。' } });
+  assert.deepEqual(chatState.skillCatalog.map((item) => item.id), [1, 3]);
+  assert.equal(chatState.nextSkillId, 4);
+
+  const ctx = { chatId: 'snapshot-skill-test', chat: [] };
+  state.recordChatStateSnapshot(ctx, chatState, { reason: 'skill_snapshot' });
+  const snapshot = chatState.snapshots.at(-1);
+  chatState.skillCatalog = [{ id: 99, name: '错误定义', description: '不应保留。' }];
+  chatState.nextSkillId = 100;
+  state.restoreChatStateFromSnapshot(chatState, snapshot);
+  assert.deepEqual(chatState.skillCatalog.map((item) => item.id), [1, 3]);
+  assert.equal(chatState.nextSkillId, 4);
+});
+
+test('middle-pregnancy training passes talent to one randomly selected fetus through childbirth', () => {
+  const chatState = state.createEmptyChatState();
+  applyToolCall(chatState, {
+    name: 'bsRegisterSkillDefinition', arguments: { name: '魔力感知', description: '辨识周遭魔力流动。' },
+  });
+  const mother = state.createDefaultFemaleState('Alice');
+  mother.initialized = true;
+  mother.profile.base.stage = '孕中期';
+  mother.profile.pregnant.fetuses = [
+    { fathers: 'Bob', provider: null, race: '人类', gender: '女', embryoType: '胎生', weight: 1.25, affinity: 50 },
+    { fathers: 'Bob', provider: null, race: '人类', gender: '男', embryoType: '胎生', affinity: -25 },
+    { fathers: 'Bob', provider: null, race: '人类', gender: '女', embryoType: '胎生', affinity: 0 },
+  ];
+  mother.profile.pregnant.fetusesCount = 3;
+  chatState.characters.Alice = mother;
+
+  const originalRandom = Math.random;
+  let trained;
+  try {
+    Math.random = () => 0;
+    trained = applyToolCall(chatState, {
+      name: 'bsTrainSkill',
+      arguments: {
+        female: 'Alice',
+        skill: '魔力感知',
+        skillExp: 200,
+        awaken: true,
+        reason: '在胎教仪式中反复引导魔力共鸣。',
+      },
+    });
+  } finally {
+    Math.random = originalRandom;
+  }
+  assert.equal(trained.applied, true, trained.message);
+  const fetuses = chatState.characters.Alice.profile.pregnant.fetuses;
+  assert.deepEqual(fetuses[0].talents[0], { skillId: 1, level: 2, exp: 0 });
+  assert.equal(fetuses[1].talents, undefined);
+  assert.deepEqual(fetuses[2].talents, undefined);
+
+  assert.equal(applyToolCall(chatState, { name: 'bsChildbirth', arguments: { female: 'Alice' } }).applied, true);
+  assert.deepEqual(chatState.characters.Alice.profile.children[0].talents[0], { skillId: 1, level: 2, exp: 0 });
+  assert.equal(chatState.characters.Alice.profile.children[0].birthWeightRatio, 1.25);
+  assert.equal(chatState.characters.Alice.profile.children[0].birthAffinity, 50);
+  assert.equal(applyToolCall(chatState, {
+    name: 'bsNameChild', arguments: { female: 'Alice', childIndex: 0, name: '莉亚' },
+  }).applied, true);
+  chatState.characters['莉亚'] = state.createDefaultFemaleState('莉亚');
+  const registered = applyInitialSkillTalentConfig(chatState, '莉亚', {
+    skills: [], talents: [{ skill: '魔力感知', level: 2, exp: 0 }],
+  });
+  assert.deepEqual(registered.profile.talents, [{ skillId: 1, level: 2, exp: 0 }]);
+  assert.deepEqual(registered.profile.skills, []);
+});
+
+test('child registration source fixes race, inherits talents and prevents duplicate selection', () => {
+  const chatState = state.createEmptyChatState();
+  chatState.skillCatalog = [{ id: 1, name: '魔力感知', description: '辨识魔力流动。' }];
+  const mother = state.createDefaultFemaleState('Alice');
+  mother.profile.children = [{
+    name: '莉亚', fathers: 'Bob', gender: '女', race: '精灵混血', derivedType: '魔女', age: 18,
+    birthWeightRatio: 1.12, birthAffinity: 30, talents: [{ skillId: 1, level: 2, exp: 40 }],
+  }];
+  chatState.characters.Alice = mother;
+  chatState.characters['莉亚'] = state.createDefaultFemaleState('莉亚');
+  chatState.characters['莉亚'].profile.base.race = '错误种族';
+  const source = { motherName: 'Alice', childIndex: 0 };
+  assert.equal(resolveRegistryChildSource(chatState, source)?.child?.birthAffinity, 30);
+  const result = applyRegistryChildInheritance(chatState, '莉亚', source);
+  assert.equal(result.character.profile.base.race, '精灵混血');
+  assert.equal(result.character.profile.base.derivedType, '魔女');
+  assert.deepEqual(result.character.profile.talents, [{ skillId: 1, level: 2, exp: 40 }]);
+  assert.deepEqual(result.character.profile.childSource, {
+    motherName: 'Alice',
+    childIndex: 0,
+    inheritedTalents: [{ skillId: 1, level: 2, exp: 40 }],
+  });
+  assert.equal(mother.profile.children[0].registeredAs, '莉亚');
+  const skillSetup = applyRegistrySkillSetup(chatState, '莉亚', {
+    skillDefinitions: [], initialSkills: [], initialTalents: [{ skill: '魔力感知', level: -5, exp: -10 }],
+  });
+  assert.deepEqual(skillSetup.profile.talents, [{ skillId: 1, level: 2, exp: 40 }]);
+  delete chatState.characters.Alice;
+  const setupAfterSourceRemoval = applyRegistrySkillSetup(chatState, '莉亚', {
+    skillDefinitions: [], initialSkills: [], initialTalents: [{ skill: '魔力感知', level: -5, exp: -10 }],
+  });
+  assert.deepEqual(
+    setupAfterSourceRemoval.profile.talents,
+    [{ skillId: 1, level: 2, exp: 40 }],
+    'the registered child keeps its birth talent snapshot after the mother record is removed',
+  );
+  delete setupAfterSourceRemoval.profile.childSource.inheritedTalents;
+  const migratedLegacySetup = applyRegistrySkillSetup(chatState, '莉亚', {
+    skillDefinitions: [], initialSkills: [], initialTalents: [],
+  });
+  assert.deepEqual(
+    migratedLegacySetup.profile.childSource.inheritedTalents,
+    [{ skillId: 1, level: 2, exp: 40 }],
+    'legacy child sources migrate the character current talents when the mother record is already missing',
+  );
+  assert.deepEqual(migratedLegacySetup.profile.talents, [{ skillId: 1, level: 2, exp: 40 }]);
+  assert.match(buildRegistrySkillSystemPrompt({ inheritedTalentsLocked: true }), /固定继承内容/);
+  assert.match(buildRegistrySystemPrompt({}, {
+    declaredRace: '[魔女]精灵混血',
+    payload: { source_child: { ...mother.profile.children[0] } },
+  }), /固定事实[\s\S]*?确定性继承/);
+});
+
+test('fetal talent transfer uses the complete allowed-stage boundary and affinity rounding', () => {
+  const allowedStages = ['孕中期', '孕晚期', '临产期', '逾期', '产兆前驱', '第一产程'];
+  const blockedStages = ['卵泡期', '孕早期', '第二产程', '第三产程', '产后恢复'];
+  const originalRandom = Math.random;
+  try {
+    Math.random = () => 0.999999;
+    for (const [stage, shouldTransfer] of [...allowedStages.map((value) => [value, true]), ...blockedStages.map((value) => [value, false])]) {
+      const chatState = state.createEmptyChatState();
+      applyToolCall(chatState, { name: 'bsRegisterSkillDefinition', arguments: { name: '共鸣', description: '维持稳定共鸣的能力。' } });
+      const character = state.createDefaultFemaleState('Alice');
+      character.profile.base.stage = stage;
+      character.profile.skills = [{ skillId: 1, level: 1, exp: 0 }];
+      character.profile.pregnant.fetuses = [{ affinity: 25, talents: [] }, { affinity: -25, talents: [] }];
+      chatState.characters.Alice = character;
+      const result = applyToolCall(chatState, {
+        name: 'bsTrainSkill', arguments: { female: 'Alice', skill: '共鸣', skillExp: 101, reason: `${stage}边界测试。` },
+      });
+      assert.equal(result.applied, true, `${stage}: ${result.message}`);
+      const [positive, negative] = chatState.characters.Alice.profile.pregnant.fetuses;
+      assert.deepEqual(positive.talents, [], stage);
+      if (shouldTransfer) {
+        assert.deepEqual(negative.talents, [{ skillId: 1, level: 0, exp: -51 }], stage);
+        assert.match(result.message, /fetus #2 selected, inherited EXP -51/, stage);
+      } else {
+        assert.deepEqual(negative.talents, [], stage);
+      }
+    }
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test('LLM tools cannot change character talents while fetal transfer includes first labor and stops at second labor', () => {
+  const chatState = state.createEmptyChatState();
+  applyToolCall(chatState, { name: 'bsRegisterSkillDefinition', arguments: { name: '忍耐', description: '承受压力并维持行动。' } });
+  const character = state.createDefaultFemaleState('Alice');
+  character.profile.base.stage = '第一产程';
+  character.profile.skills = [{ skillId: 1, level: 1, exp: 0 }];
+  character.profile.talents = [{ skillId: 1, level: -1, exp: -50 }];
+  character.profile.pregnant.fetuses = [{ affinity: 50, talents: [] }];
+  chatState.characters.Alice = character;
+  const blocked = applyToolCall(chatState, {
+    name: 'bsTrainSkill', arguments: { female: 'Alice', skill: '忍耐', skillExp: 100, talentExp: 200, reason: '在压力下克服原有苦手。' },
+  });
+  assert.equal(blocked.applied, false);
+  assert.match(blocked.message, /talents are read-only/);
+  assert.deepEqual(chatState.characters.Alice.profile.talents[0], { skillId: 1, level: -1, exp: -50 });
+  assert.deepEqual(chatState.characters.Alice.profile.pregnant.fetuses[0].talents, []);
+
+  assert.equal(applyToolCall(chatState, {
+    name: 'bsTrainSkill', arguments: { female: 'Alice', skill: '忍耐', skillExp: 100, reason: '在第一产程中持续承受压力。' },
+  }).applied, true);
+  assert.deepEqual(chatState.characters.Alice.profile.talents[0], { skillId: 1, level: -1, exp: -50 });
+  assert.deepEqual(chatState.characters.Alice.profile.pregnant.fetuses[0].talents, [{ skillId: 1, level: 1, exp: 0 }]);
+
+  chatState.characters.Alice.profile.base.stage = '第二产程';
+  assert.equal(applyToolCall(chatState, {
+    name: 'bsTrainSkill', arguments: { female: 'Alice', skill: '忍耐', skillExp: 100, reason: '继续承受第二产程压力。' },
+  }).applied, true);
+  assert.deepEqual(chatState.characters.Alice.profile.pregnant.fetuses[0].talents, [{ skillId: 1, level: 1, exp: 0 }]);
+});
+
+test('skill tool and inheritance guidance are always available to tracker', () => {
+  const definitions = getTrackerToolDefinitions({ diaryRecentLimit: 0 }, {});
+  const trainSkillTool = definitions.find((tool) => tool.name === 'bsTrainSkill');
+  assert.ok(trainSkillTool);
+  assert.equal(Object.hasOwn(trainSkillTool.input_schema.properties, 'talentExp'), false);
+  assert.equal(definitions.some((tool) => tool.name === 'bsRegisterSkillDefinition'), true);
+  const prompt = buildTrackerSystemPrompt('', null, {});
+  assert.equal(prompt.includes('[skills / talents]'), true);
+  assert.equal(prompt.includes('第二与第三产程禁止传递'), true);
 });
 
 test('derived type overrides affect base types and custom subtypes', () => {

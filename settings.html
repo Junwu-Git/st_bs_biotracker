@@ -13,7 +13,7 @@
       <div class="bs-bt-screen-header">
         <span id="bs-bt-time">--:--</span>
         <span id="bs-bt-title">HOME</span>
-        <span id="bs-bt-status-icons" class="bs-bt-status-icons" aria-label="battery status">
+        <span id="bs-bt-status-icons" class="bs-bt-status-icons" aria-label="battery status" tabindex="0">
           <svg class="bs-bt-battery-icon" viewBox="0 0 30 14" fill="none" xmlns="http://www.w3.org/2000/svg"
             aria-hidden="true">
             <rect x="1" y="1" width="24" height="12" rx="2" stroke="currentColor" stroke-width="2"></rect>
@@ -39,9 +39,9 @@
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--register" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">注册</span>
               </button>
-              <button class="bs-bt-home-tile" type="button" data-nav-view="full-state">
-                <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--json" aria-hidden="true"></span>
-                <span class="bs-bt-home-tile__label">变量</span>
+              <button class="bs-bt-home-tile" type="button" data-nav-view="skill-catalog">
+                <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--skill" aria-hidden="true"></span>
+                <span class="bs-bt-home-tile__label">技能</span>
               </button>
               <button class="bs-bt-home-tile" type="button" data-nav-view="track-list">
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--track" aria-hidden="true"></span>
@@ -51,6 +51,10 @@
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--wardrobe" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">衣柜</span>
               </button>
+              <button class="bs-bt-home-tile" type="button" data-nav-view="full-state">
+                <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--json" aria-hidden="true"></span>
+                <span class="bs-bt-home-tile__label">变量</span>
+              </button>
               <button class="bs-bt-home-tile" type="button" data-nav-view="race-encyclopedia">
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--dna" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">百科</span>
@@ -59,7 +63,37 @@
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--theme" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">主题</span>
               </button>
-              <div class="bs-bt-home-tile bs-bt-home-tile--empty" aria-hidden="true"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="bs-bt-view-skill-catalog" class="bs-bt-view" data-view="skill-catalog">
+          <div class="bs-bt-panel">
+            <div id="bs-bt-skill-catalog-overview">
+              <div id="bs-bt-skill-catalog-list" class="bs-bt-skill-catalog-list"></div>
+
+              <hr class="sysHR" />
+
+              <div class="settings_section bs-bt-skill-definition-form">
+                <div class="bs-bt-section-title">新增技能</div>
+                <label for="bs-bt-skill-definition-name">技能名称</label>
+                <input id="bs-bt-skill-definition-name" class="text_pole" type="text" placeholder="例如：NTR" />
+                <label for="bs-bt-skill-definition-description">定义描述</label>
+                <textarea id="bs-bt-skill-definition-description" class="text_pole bs-bt-textarea" rows="4" placeholder="新增技能必须提供清楚且稳定的定义。"></textarea>
+                <button id="bs-bt-skill-definition-add" class="menu_button" type="button">新增技能</button>
+              </div>
+
+              <div id="bs-bt-skill-catalog-status" class="bs-bt-inline-status"></div>
+            </div>
+
+            <div id="bs-bt-skill-definition-detail" hidden>
+              <div class="settings_section bs-bt-skill-detail-head">
+                <button id="bs-bt-skill-detail-back" class="menu_button" type="button">返回技能列表</button>
+                <div id="bs-bt-skill-detail-title" class="bs-bt-section-title"></div>
+                <div id="bs-bt-skill-detail-description"></div>
+              </div>
+              <div id="bs-bt-skill-detail-characters" class="bs-bt-skill-detail-characters"></div>
+              <div id="bs-bt-character-skill-status" class="bs-bt-inline-status"></div>
             </div>
           </div>
         </section>
@@ -209,6 +243,14 @@
 
         <section id="bs-bt-view-register" class="bs-bt-view" data-view="register">
           <div class="bs-bt-panel">
+            <div class="settings_section bs-bt-register-source-section">
+              <label for="bs-bt-register-source">注册来源</label>
+              <select id="bs-bt-register-source" class="text_pole">
+                <option value="">新角色</option>
+              </select>
+              <div id="bs-bt-register-source-summary" class="bs-bt-inline-status">直接注册新角色。</div>
+            </div>
+
             <div class="settings_section">
               <label for="bs-bt-register-name">注册角色名</label>
               <input id="bs-bt-register-name" class="text_pole" type="text" placeholder="露比" />
@@ -228,17 +270,12 @@
             </div>
 
             <div class="settings_section">
-              <label for="bs-bt-register-custom-notes">角色补充设定</label>
-              <textarea id="bs-bt-register-custom-notes" class="text_pole bs-bt-textarea" rows="3"
-                placeholder="推演、注册、备装、日记都会参考。例如：羊膜绒毛膜为 MCMA、时常泌乳体质、特殊繁殖设定、职业衣着偏好等"></textarea>
-            </div>
-
-            <div class="settings_section">
               <div class="bs-bt-track-tabs" id="bs-bt-register-tabs">
                 <button type="button" class="bs-bt-track-tab is-active" data-register-tab="inference">推演</button>
                 <button type="button" class="bs-bt-track-tab" data-register-tab="registry">注册</button>
                 <button type="button" class="bs-bt-track-tab" data-register-tab="wardrobe">备装</button>
                 <button type="button" class="bs-bt-track-tab" data-register-tab="diary">日记</button>
+                <button type="button" class="bs-bt-track-tab" data-register-tab="skills">技能</button>
               </div>
             </div>
 
@@ -264,6 +301,12 @@
             </div>
 
             <div class="bs-bt-register-page" data-register-page="registry" hidden>
+              <div class="settings_section">
+                <label for="bs-bt-register-custom-notes">角色补充设定</label>
+                <textarea id="bs-bt-register-custom-notes" class="text_pole bs-bt-textarea" rows="3"
+                  placeholder="仅用于本次角色注册。例如：羊膜绒毛膜为 MCMA、时常泌乳体质、特殊繁殖设定等。"></textarea>
+              </div>
+
               <div class="settings_section">
                 <label for="bs-bt-registry-normal-description">注册默认 normalDescription 规则</label>
                 <textarea id="bs-bt-registry-normal-description" class="text_pole bs-bt-textarea" rows="7"></textarea>
@@ -344,6 +387,27 @@
                 <div id="bs-bt-diary-status" class="bs-bt-inline-status">角色必须已注册，且同一故事日尚未写过日记。</div>
               </div>
             </div>
+            <div class="bs-bt-register-page" data-register-page="skills" hidden>
+              <div class="settings_section">
+                <label for="bs-bt-register-skill-prompt">额外技能／天赋提示</label>
+                <textarea id="bs-bt-register-skill-prompt" class="text_pole bs-bt-textarea" rows="5"
+                  placeholder="例如：她从小接受剑术训练，初始剑术 Lv2；对魔力感知很有天赋，但尚未正式觉醒相关技能。"></textarea>
+              </div>
+
+              <div class="settings_section bs-bt-action-row">
+                <button id="bs-bt-register-skill-generate" class="menu_button" type="button">生成技能／天赋</button>
+                <button id="bs-bt-register-skill-write" class="menu_button" type="button">写入技能／天赋</button>
+              </div>
+
+              <hr class="sysHR" />
+
+              <div class="settings_section">
+                <label for="bs-bt-register-skill-result">技能／天赋预览</label>
+                <textarea id="bs-bt-register-skill-result" class="text_pole bs-bt-textarea" rows="14"
+                  placeholder="生成结果会显示为 JSON；确认或修改后再写入角色。"></textarea>
+                <div id="bs-bt-register-skill-status" class="bs-bt-inline-status">角色必须先完成注册，才能生成并写入初始技能／天赋。</div>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -379,8 +443,15 @@
         <section id="bs-bt-view-wardrobe" class="bs-bt-view" data-view="wardrobe">
           <div class="bs-bt-panel">
             <div class="settings_section">
+              <div class="bs-bt-track-tabs bs-bt-wardrobe-tabs" id="bs-bt-wardrobe-tabs">
+                <button type="button" class="bs-bt-track-tab is-active" data-wardrobe-tab="characters">角色衣柜</button>
+                <button type="button" class="bs-bt-track-tab" data-wardrobe-tab="add">新增衣物</button>
+              </div>
+            </div>
+            <div id="bs-bt-wardrobe-characters-page" class="settings_section">
               <div id="bs-bt-wardrobe-list" class="bs-bt-wardrobe-list"></div>
             </div>
+            <div id="bs-bt-wardrobe-add-page" class="settings_section" hidden></div>
           </div>
         </section>
 

@@ -52,6 +52,16 @@ import {
   parseRaceDescriptor,
   getRaceComponents as getConfiguredRaceComponents,
 } from './race_config.js';
+import {
+  addSkillExperience,
+  addTalentExperience,
+  appendSkillHistory,
+  normalizeSkillList,
+  normalizeTalentList,
+  registerSkillDefinition,
+  requiredExp,
+  resolveSkillDefinition,
+} from './skill_config.js';
 
 export const TOOL_DEFINITIONS = Object.freeze([
   {
@@ -256,6 +266,35 @@ export const TOOL_DEFINITIONS = Object.freeze([
         name: { type: 'string' },
       },
       required: ['female', 'childIndex', 'name'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'bsRegisterSkillDefinition',
+    description: '向当前聊天的全局技能图鉴登记一个全新技能定义。新增时 name 与 description 都必填；先检查 skill_catalog，已有同名技能时直接引用，不要制造近义重复。此工具只建立定义，不会让任何角色觉醒或获得经验。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        description: { type: 'string' },
+      },
+      required: ['name', 'description'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'bsTrainSkill',
+    description: '依最近剧情让单一角色觉醒或锻炼一个已登记技能。skillExp 只能非负，技能只会进步、不会降级；技能不存在时必须明确传 awaken=true 才会从 Lv1 觉醒。角色自己的 talents 对所有 LLM 工具均为只读，只能作为判断 skillExp 的参考，绝不可直接修改；角色天赋仅能由用户在外部界面调整。若角色处于孕中期、孕晚期、临产期、逾期、产兆前驱或第一产程，系统每次只随机选择一胎，把本次 skillExp 按该胎 affinity/50 转为正负胎儿天赋经验；第二、第三产程不会传递。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        female: { type: 'string' },
+        skill: { type: ['integer', 'string'] },
+        skillExp: { type: 'integer', minimum: 0, maximum: 1000000 },
+        awaken: { type: 'boolean' },
+        reason: { type: 'string' },
+      },
+      required: ['female', 'skill', 'skillExp', 'reason'],
       additionalProperties: false,
     },
   },
@@ -2061,6 +2100,9 @@ function appendChildrenFromFetuses(profile, fetuses) {
       race: String(fetus?.race || '未知'),
       derivedType: childDerivedType,
       age: 0,
+      birthWeightRatio: clampNumber(fetus?.weight, 0.33, 3.0, 1.0),
+      birthAffinity: clampNumber(fetus?.affinity, -50, 50, 0),
+      talents: normalizeTalentList(fetus?.talents ?? fetus?.inheritedTalents),
     });
   }
   profile.children = children;
@@ -3684,6 +3726,117 @@ function applyNameChild(chatState, args) {
   return { applied: true, message: `bsNameChild applied to ${female}: child ${childIndex} named ${childName}.` };
 }
 
+function applyRegisterSkillDefinition(chatState, args) {
+  const result = registerSkillDefinition(chatState.skillCatalog, args, chatState.nextSkillId);
+  if (!result.ok) return { applied: false, message: `bsRegisterSkillDefinition skipped: ${result.message}` };
+  chatState.skillCatalog = result.catalog;
+  chatState.nextSkillId = result.nextSkillId;
+  return {
+    applied: result.created,
+    message: result.created
+      ? `bsRegisterSkillDefinition registered #${result.definition.id} ${result.definition.name}.`
+      : `bsRegisterSkillDefinition skipped: ${result.definition.name} already exists as #${result.definition.id}.`,
+  };
+}
+
+const FETAL_TALENT_TRANSFER_STAGES = new Set(['孕中期', '孕晚期', '临产期', '逾期', '产兆前驱', '第一产程']);
+
+function applyTrainSkill(chatState, args) {
+  const female = String(args?.female || '').trim();
+  const character = chatState.characters?.[female];
+  if (!female || !character) return { applied: false, message: `bsTrainSkill skipped: unknown character ${female || '(empty)'}.` };
+
+  const definition = resolveSkillDefinition(chatState.skillCatalog, args?.skill);
+  const reason = String(args?.reason || '').trim();
+  const skillExp = Number(args?.skillExp);
+  if (!definition) return { applied: false, message: `bsTrainSkill skipped for ${female}: skill is not registered in skill_catalog.` };
+  if (!reason) return { applied: false, message: `bsTrainSkill skipped for ${female}: training reason is required.` };
+  if (args?.talentExp !== undefined) {
+    return { applied: false, message: `bsTrainSkill skipped for ${female}: character talents are read-only to LLM tools; remove talentExp.` };
+  }
+  if (!Number.isInteger(skillExp) || skillExp < 0 || skillExp > 1000000) {
+    return { applied: false, message: `bsTrainSkill skipped for ${female}: skillExp must be an integer from 0 to 1000000.` };
+  }
+
+  const next = cloneValue(character);
+  const profile = next.profile || {};
+  const skills = normalizeSkillList(profile.skills);
+  let skill = skills.find((item) => item.skillId === definition.id);
+  const previousLevel = skill?.level || 0;
+  const awakened = !skill && args?.awaken === true;
+  if (!skill && !awakened) {
+    return { applied: false, message: `bsTrainSkill skipped for ${female}: ${definition.name} is not awakened; pass awaken=true only when the story triggers awakening.` };
+  }
+  if (!skill) {
+    skill = { skillId: definition.id, level: 1, exp: 0 };
+    skills.push(skill);
+  }
+  const trained = addSkillExperience(skill, skillExp);
+  Object.assign(skill, trained);
+  profile.skills = skills;
+
+  let levelUpNotify = null;
+  if (skill.level > previousLevel) {
+    profile.skillHistory = appendSkillHistory(profile.skillHistory, {
+      skillId: definition.id,
+      fromLevel: previousLevel,
+      toLevel: skill.level,
+      reason,
+      source: 'story',
+      timestamp: Date.now(),
+    });
+    const awakenedNow = previousLevel === 0;
+    levelUpNotify = {
+      type: awakenedNow ? 'skill_awakened' : 'skill_level_up',
+      female,
+      skillId: definition.id,
+      skillName: definition.name,
+      fromLevel: previousLevel,
+      toLevel: skill.level,
+      awakened: awakenedNow,
+      text: awakenedNow
+        ? `${female}觉醒了技能「${definition.name}」${skill.level > 1 ? `，并提升至 Lv${skill.level}` : ''}`
+        : `${female}的「${definition.name}」由 Lv${previousLevel} 提升至 Lv${skill.level}`,
+    };
+  }
+
+  let inheritedFetusIndex = -1;
+  let inheritedExp = 0;
+  const stage = String(profile?.base?.stage || '');
+  if (skillExp > 0 && FETAL_TALENT_TRANSFER_STAGES.has(stage)) {
+    const pregnant = profile.pregnant || {};
+    const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses.map((fetus) => ({ ...fetus })) : [];
+    if (fetuses.length > 0) {
+      inheritedFetusIndex = randomInt(0, fetuses.length - 1);
+      const selectedFetus = fetuses[inheritedFetusIndex];
+      const affinity = clampNumber(selectedFetus?.affinity, -50, 50, 0);
+      inheritedExp = Math.round(skillExp * (Math.abs(affinity) / 50)) * Math.sign(affinity);
+      const fetusTalents = normalizeTalentList(selectedFetus.talents ?? selectedFetus.inheritedTalents);
+      let fetusTalent = fetusTalents.find((item) => item.skillId === definition.id);
+      if (inheritedExp !== 0 && !fetusTalent) {
+        fetusTalent = { skillId: definition.id, level: 0, exp: 0 };
+        fetusTalents.push(fetusTalent);
+      }
+      if (inheritedExp !== 0) {
+        Object.assign(fetusTalent, addTalentExperience(fetusTalent, inheritedExp));
+        selectedFetus.talents = fetusTalents;
+        delete selectedFetus.inheritedTalents;
+      }
+    }
+    pregnant.fetuses = fetuses;
+    profile.pregnant = pregnant;
+  }
+
+  next.profile = profile;
+  next.updatedAt = Date.now();
+  chatState.characters[female] = next;
+  return {
+    applied: true,
+    message: `bsTrainSkill applied to ${female}: ${definition.name} Lv${skill.level}, EXP ${skill.exp}/${skill.level >= 10 ? 0 : requiredExp(skill.level)}${awakened ? '; awakened' : ''}${inheritedFetusIndex >= 0 ? `; fetus #${inheritedFetusIndex + 1} selected${inheritedExp !== 0 ? `, inherited EXP ${inheritedExp}` : ', no inherited EXP'}` : ''}.`,
+    ...(levelUpNotify ? { notify: levelUpNotify } : {}),
+  };
+}
+
 function applyUpdatePsychology(chatState, args) {
   const female = String(args?.female || '').trim();
   const character = chatState.characters?.[female];
@@ -4253,6 +4406,8 @@ export function applyToolCall(chatState, call) {
   if (name === 'bsSetCharacterPresence') return applySetCharacterPresence(chatState, args);
   if (name === 'bsUpdateExperience') return applyUpdateExperience(chatState, args);
   if (name === 'bsNameChild') return applyNameChild(chatState, args);
+  if (name === 'bsRegisterSkillDefinition') return applyRegisterSkillDefinition(chatState, args);
+  if (name === 'bsTrainSkill') return applyTrainSkill(chatState, args);
   if (name === 'bsUpdatePsychology') return applyUpdatePsychology(chatState, args);
   if (name === 'bsAddSperm') return applyAddSperm(chatState, args);
   if (name === 'bsDrainSperm') return applyDrainSperm(chatState, args);
@@ -4280,6 +4435,7 @@ export function applyToolCallsResult(ctx, result) {
       arguments: normalizeToolCallArguments(call?.arguments),
     };
     const appliedResult = applyToolCall(chatState, normalizedCall);
+    if (appliedResult?.notify?.text) globalThis.toastr?.info?.(appliedResult.notify.text, '[BS BioTracker]');
     logs.push({
       ...appliedResult,
       name: normalizedCall.name,

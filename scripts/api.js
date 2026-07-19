@@ -53,6 +53,102 @@ export function getAuthHeaders(settings) {
   return headers;
 }
 
+function isBrowserRuntime() {
+  return typeof window !== 'undefined' && typeof document !== 'undefined';
+}
+
+function isCrossOriginUrl(url) {
+  try {
+    if (typeof location === 'undefined' || !location?.origin) return false;
+    return new URL(url, location.href).origin !== location.origin;
+  } catch {
+    return false;
+  }
+}
+
+function getHostProxyHeaders(extraHeaders = {}) {
+  const headers = { 'Content-Type': 'application/json', ...extraHeaders };
+  try {
+    const hostHeaders = globalThis.SillyTavern?.getRequestHeaders?.()
+      || globalThis.getRequestHeaders?.()
+      || null;
+    if (hostHeaders && typeof hostHeaders === 'object') {
+      Object.entries(hostHeaders).forEach(([key, value]) => {
+        if (value !== null && value !== undefined && value !== '') headers[key] = String(value);
+      });
+    }
+  } catch {}
+  try {
+    const csrfToken = document?.cookie?.match(/(?:^|;\s*)csrf_token=([^;]+)/)?.[1];
+    if (csrfToken && !headers['X-CSRF-Token']) headers['X-CSRF-Token'] = decodeURIComponent(csrfToken);
+  } catch {}
+  return headers;
+}
+
+function buildHostProxyConfig(apiBase, settings) {
+  const apiKey = String(settings?.apiKey || '');
+  return {
+    chat_completion_source: 'custom',
+    custom_url: apiBase,
+    reverse_proxy: apiBase,
+    proxy_password: apiKey,
+    custom_include_headers: apiKey ? `Authorization: Bearer ${apiKey}` : '',
+  };
+}
+
+function shouldUseHostProxy(url) {
+  return isBrowserRuntime() && isCrossOriginUrl(url);
+}
+
+function isMissingHostProxy(responseText, status) {
+  return status === 404
+    || status === 405
+    || /cannot\s+post|not\s+found|no\s+route|ENOENT/i.test(String(responseText || ''));
+}
+
+async function fetchText(url, options = {}) {
+  const response = await fetch(url, options);
+  const responseText = await response.text().catch((error) => (
+    `[failed to read response text: ${String(error?.message || error)}]`
+  ));
+  return { response, responseText };
+}
+
+async function requestHostProxyModelList(apiBase, settings) {
+  return fetchText('/api/backends/chat-completions/status', {
+    method: 'POST',
+    headers: getHostProxyHeaders(),
+    body: JSON.stringify(buildHostProxyConfig(apiBase, settings)),
+    cache: 'no-cache',
+  });
+}
+
+async function requestHostProxyChatCompletion(apiBase, settings, requestBody) {
+  const proxyBody = {
+    messages: requestBody.messages,
+    model: requestBody.model,
+    temperature: requestBody.temperature,
+    top_p: requestBody.top_p,
+    top_k: requestBody.top_k,
+    frequency_penalty: requestBody.frequency_penalty,
+    presence_penalty: requestBody.presence_penalty,
+    max_tokens: requestBody.max_tokens,
+    seed: requestBody.seed,
+    response_format: requestBody.response_format,
+    stream: false,
+    ...buildHostProxyConfig(apiBase, settings),
+  };
+  Object.keys(proxyBody).forEach((key) => {
+    if (proxyBody[key] === undefined) delete proxyBody[key];
+  });
+  return fetchText('/api/backends/chat-completions/generate', {
+    method: 'POST',
+    headers: getHostProxyHeaders(),
+    body: JSON.stringify(proxyBody),
+    cache: 'no-cache',
+  });
+}
+
 function buildJsonRetryInstruction() {
   return [
     '你上一条回复不是合法 JSON。',
@@ -388,35 +484,61 @@ async function requestChatCompletion(apiBase, settings, body) {
     const previousAsyncFlag = globalThis.__bs_biotracker_async_request__;
     globalThis.__bs_biotracker_async_request__ = true;
     const url = `${apiBase}/chat/completions`;
+    const useHostProxy = shouldUseHostProxy(url);
+    let transport = useHostProxy ? 'host-proxy' : 'direct';
     let requestText = '';
     try {
       requestText = JSON.stringify(requestBody);
       logApiDebug(`request:${attempt}`, {
-        url,
+        transport,
+        url: useHostProxy ? '/api/backends/chat-completions/generate' : url,
+        apiBase,
         requestBody,
         requestText,
         requestTextLength: requestText.length,
       });
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: getAuthHeaders(settings),
-        body: requestText,
-      });
-      const responseText = await response.text().catch((error) => {
-        const message = `[failed to read response text: ${String(error?.message || error)}]`;
-        return message;
-      });
+      let response;
+      let responseText;
+      if (useHostProxy) {
+        try {
+          ({ response, responseText } = await requestHostProxyChatCompletion(apiBase, settings, requestBody));
+          if (!response.ok && isMissingHostProxy(responseText, response.status)) {
+            transport = 'direct-after-proxy-miss';
+            ({ response, responseText } = await fetchText(url, {
+              method: 'POST',
+              headers: getAuthHeaders(settings),
+              body: requestText,
+            }));
+          }
+        } catch (proxyError) {
+          transport = 'direct-after-proxy-error';
+          logApiDebug(`proxy_error:${attempt}`, { proxyError });
+          ({ response, responseText } = await fetchText(url, {
+            method: 'POST',
+            headers: getAuthHeaders(settings),
+            body: requestText,
+          }));
+        }
+      } else {
+        ({ response, responseText } = await fetchText(url, {
+          method: 'POST',
+          headers: getAuthHeaders(settings),
+          body: requestText,
+        }));
+      }
       globalThis[DEBUG_LAST_API_RESPONSE_KEY] = {
         capturedAt: Date.now(),
         attempt,
-        url,
+        transport,
+        url: transport === 'host-proxy' ? '/api/backends/chat-completions/generate' : url,
         status: response.status,
         ok: response.ok,
         responseText,
         requestText,
       };
       logApiDebug(`response:${attempt}`, {
-        url,
+        transport,
+        url: transport === 'host-proxy' ? '/api/backends/chat-completions/generate' : url,
         status: response.status,
         ok: response.ok,
         responseText,
@@ -425,12 +547,13 @@ async function requestChatCompletion(apiBase, settings, body) {
       return { response, responseText, requestText };
     } catch (error) {
       logApiDebug(`error:${attempt}`, {
+        transport,
         url,
         requestBody,
         requestText,
         error,
       });
-      throw new Error(`无法连接到 API。请检查 Base URL、服务是否启动，或是否被 CORS 拦截。原始错误: ${String(error?.message || error)}`);
+      throw new Error(`无法连接到 API。请检查 Base URL、API Key、服务是否启动；浏览器环境会优先通过酒馆后端代理。原始错误: ${String(error?.message || error)}`);
     } finally {
       globalThis.__bs_biotracker_async_request__ = previousAsyncFlag;
     }
@@ -496,20 +619,52 @@ function hasPresetToggleOverrides(settings) {
 export async function fetchModelList(settings) {
   const apiBase = getApiBase(settings);
   if (!apiBase) throw new Error('请先填写 API Base URL');
-  if (!settings.apiKey) throw new Error('请先填写 API Key');
   let response;
+  let responseText = '';
+  const url = `${apiBase}/models`;
+  const useHostProxy = shouldUseHostProxy(url);
+  let transport = useHostProxy ? 'host-proxy' : 'direct';
   try {
-    response = await fetch(`${apiBase}/models`, { method: 'GET', headers: getAuthHeaders(settings) });
+    if (useHostProxy) {
+      try {
+        ({ response, responseText } = await requestHostProxyModelList(apiBase, settings));
+        if (!response.ok && isMissingHostProxy(responseText, response.status)) {
+          transport = 'direct-after-proxy-miss';
+          ({ response, responseText } = await fetchText(url, { method: 'GET', headers: getAuthHeaders(settings) }));
+        }
+      } catch (proxyError) {
+        transport = 'direct-after-proxy-error';
+        console.warn('[BS BioTracker] host proxy model list failed, trying direct', proxyError);
+        ({ response, responseText } = await fetchText(url, { method: 'GET', headers: getAuthHeaders(settings) }));
+      }
+    } else {
+      ({ response, responseText } = await fetchText(url, { method: 'GET', headers: getAuthHeaders(settings) }));
+    }
   } catch (error) {
-    throw new Error(`模型列表连接失败。请检查 Base URL，或手动填写模型名称后直接使用追踪/注册。原始错误: ${String(error?.message || error)}`);
+    throw new Error(`模型列表连接失败（${transport}）。请检查 Base URL / API Key；也可手动填写模型名称后直接使用追踪/注册。原始错误: ${String(error?.message || error)}`);
   }
   if (!response.ok) {
-    const errorText = await response.text().catch(() => '');
-    throw new Error(`模型列表请求失败 ${response.status}: ${errorText.slice(0, 240)}。如果此 API 不支持 /models，可手动填写模型名称。`);
+    throw new Error(`模型列表请求失败 ${response.status}（${transport}）: ${responseText.slice(0, 240)}。如果此 API 不支持 /models，可手动填写模型名称。`);
   }
-  const data = await response.json();
-  const models = (Array.isArray(data?.data) ? data.data : [])
-    .map((item) => String(item?.id || '').trim())
+  let data;
+  try {
+    data = JSON.parse(responseText);
+  } catch {
+    throw new Error(`模型列表响应不是 JSON（${transport}）: ${responseText.slice(0, 180)}`);
+  }
+  if (data && typeof data === 'object' && data.data == null && data.models == null && data.response) {
+    try {
+      const nested = typeof data.response === 'string' ? JSON.parse(data.response) : data.response;
+      if (nested && typeof nested === 'object') data = nested;
+    } catch {}
+  }
+  const modelItems = Array.isArray(data?.data)
+    ? data.data
+    : (Array.isArray(data?.models) ? data.models : (Array.isArray(data) ? data : []));
+  const models = modelItems
+    .map((item) => (typeof item === 'string'
+      ? item.trim()
+      : String(item?.id || item?.name || item?.model || '').trim()))
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b));
   if (models.length === 0) throw new Error('API 有响应，但没有返回可用模型；可手动填写模型名称。');
