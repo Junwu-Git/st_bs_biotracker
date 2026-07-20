@@ -58,7 +58,8 @@
       艾拉: makeCharacter('艾拉', {
         profile: {
           skills: [{ skillId: 1, level: 3, exp: 120 }],
-          talents: [{ skillId: 2, level: 1, exp: 30 }],
+          // skillId 1：有技能有天赋 → 技能卡右侧小标；skillId 2：有天赋无技能 → 不显示
+          talents: [{ skillId: 1, level: -1, exp: -40 }, { skillId: 2, level: 1, exp: 30 }],
           skillHistory: [{
             skillId: 1, fromLevel: 1, toLevel: 3, reason: '在连续实战中掌握了新的剑术节奏。', source: 'story', timestamp: Date.now() - 3600000,
           }],
@@ -72,6 +73,22 @@
             ],
           },
           outfit: { mainItemId: 1, accessoryItemIds: [3, 4], temporaryItems: [], wearState: '敞开', pregFit: null },
+        },
+      }),
+      琪拉: makeCharacter('琪拉', {
+        base: { stage: '孕晚期', days: 152, age: 26, eggs: 0 },
+        descriptions: { pregnantDescription: '孕态|腹部高耸，行动迟缓;;' },
+        profile: {
+          pregnant: {
+            pregnantDays: 152,
+            effectivePregnantDays: 152,
+            amnionDurability: 82,
+            // 双胎：一胎正亲和（擅长方向）、一胎负亲和（苦手方向），验证胎儿天赋显示
+            fetuses: [
+              { fathers: '莱昂', fatherRace: '人类', embryoType: '标准胎', gender: '女', weight: 1.05, tendencyAngle: 30, affinity: 60, talents: [{ skillId: 1, level: 2, exp: 40 }] },
+              { fathers: '莱昂', fatherRace: '人类', embryoType: '标准胎', gender: '男', weight: 0.98, tendencyAngle: -20, affinity: -35, talents: [{ skillId: 2, level: -1, exp: -30 }] },
+            ],
+          },
         },
       }),
       贝拉: makeCharacter('贝拉', {
@@ -116,10 +133,29 @@
     saveSettingsDebounced() {},
     eventSource: { on() {}, off() {}, removeListener() {}, once() {} },
     event_types: {},
+    async loadWorldInfo(name) {
+      const books = {
+        '全局设定书': { name: '全局设定书', entries: [{ uid: 1, comment: '世界观总纲', content: '大陆历八百年。', disable: false }] },
+        '性格适配衣橱': { name: '性格适配衣橱', entries: [
+          { uid: 1, comment: '衣橱-日常', content: '日常便服清单。', disable: false },
+          { uid: 2, comment: '衣橱-礼服', content: '正式场合衣着。', disable: false },
+          { uid: 3, comment: '衣橱-战斗\n\n<!-- ACU_SKILL_META_START\n{"version":1,"description":"战斗装"}\n-->', content: '战斗装配置。', disable: false },
+        ] },
+      };
+      return books[name] || null;
+    },
   };
 
   globalThis.SillyTavern = { getContext: () => ctx };
   globalThis.toastr = { success() {}, error() {}, info() {}, warning() {} };
+  // mock world-info 模块：全局启用书 + 当前角色（aila.png）的附加知识书 charLore
+  globalThis.__bsBtWorldInfoModuleOverride__ = {
+    selected_world_info: ['全局设定书'],
+    world_info: {
+      globalSelect: ['全局设定书'],
+      charLore: [{ name: 'aila', extraBooks: ['性格适配衣橱'] }],
+    },
+  };
 
   await import('/index.js');
 

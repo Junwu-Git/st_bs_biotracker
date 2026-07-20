@@ -6,6 +6,8 @@ const TAURI_STATE_NAMESPACE = 'bs-biotracker';
 const TAURI_STATE_KEY = 'chat-state-v1';
 const TAURI_STATE_SAVE_DELAY_MS = 250;
 const TAURI_STATE_SAVE_QUEUE = new Map();
+const TAURI_STATE_KNOWN_MISSING_IDS = new Set();
+const TAURI_STATE_LOAD_INFLIGHT = new Map();
 const HOST_EVENT_TYPE_KEYS = Object.freeze({
   appReady: 'APP_READY',
   chatChanged: 'CHAT_CHANGED',
@@ -292,15 +294,33 @@ export async function loadHostChatState(ctx = null) {
   if (ready && typeof ready.then === 'function') await ready;
   const handle = getCurrentTauriChatHandle();
   if (typeof handle?.store?.getJson !== 'function') return null;
-  try {
-    const stored = await handle.store.getJson({ namespace: TAURI_STATE_NAMESPACE, key: TAURI_STATE_KEY });
-    if (stored?.version === 1 && stored.chatState && typeof stored.chatState === 'object') {
-      return cloneHostValue(stored.chatState);
+  // TT surfaces every backend store miss as an error toast, so remember chats
+  // without stored state and skip repeat probes until our own save creates one.
+  const chatId = await resolveHostChatId(ctx);
+  if (TAURI_STATE_KNOWN_MISSING_IDS.has(chatId)) return null;
+  const inflight = TAURI_STATE_LOAD_INFLIGHT.get(chatId);
+  if (inflight) return inflight;
+  const loadPromise = (async () => {
+    try {
+      const stored = await handle.store.getJson({ namespace: TAURI_STATE_NAMESPACE, key: TAURI_STATE_KEY });
+      if (stored?.version === 1 && stored.chatState && typeof stored.chatState === 'object') {
+        return cloneHostValue(stored.chatState);
+      }
+    } catch (error) {
+      if (/not found/i.test(String(error?.message || error))) {
+        TAURI_STATE_KNOWN_MISSING_IDS.add(chatId);
+      } else {
+        console.warn('[BS BioTracker] unable to load TauriTavern chat state', error);
+      }
     }
-  } catch (error) {
-    console.warn('[BS BioTracker] unable to load TauriTavern chat state', error);
+    return null;
+  })();
+  TAURI_STATE_LOAD_INFLIGHT.set(chatId, loadPromise);
+  try {
+    return await loadPromise;
+  } finally {
+    TAURI_STATE_LOAD_INFLIGHT.delete(chatId);
   }
-  return null;
 }
 
 export function scheduleHostChatStateSave(ctx, chatState) {
@@ -329,6 +349,7 @@ export function scheduleHostChatStateSave(ctx, chatState) {
   const handle = getCurrentTauriChatHandle();
   if (typeof handle?.store?.setJson !== 'function') return;
   const chatId = getHostChatId(ctx);
+  TAURI_STATE_KNOWN_MISSING_IDS.delete(chatId);
   const previous = TAURI_STATE_SAVE_QUEUE.get(chatId);
   if (previous?.timer) clearTimeout(previous.timer);
   const payload = { version: 1, chatState: cloneHostValue(chatState) };

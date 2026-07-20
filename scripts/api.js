@@ -165,6 +165,40 @@ function summarizeModelText(text) {
   return normalized.slice(0, 300);
 }
 
+const GLOBAL_API_MAX_RETRIES = 3;
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function isNonRetriableApiError(error) {
+  const message = String(error?.message || error || '');
+  // 配置/鉴权类错误重试无意义
+  return /请先填写|尚未配置|API URL 或模型名称|401|403|Unauthorized|invalid.?api.?key|Incorrect API key/i.test(message);
+}
+
+/** 全局自动重试：首次失败后按 1s/2s/3s 间隔再试，最多 3 次（合计最多 4 轮） */
+async function withGlobalApiRetries(task, options = {}) {
+  const maxRetries = Math.max(0, Math.min(10, Math.floor(Number(options.maxRetries ?? GLOBAL_API_MAX_RETRIES) || 0)));
+  const label = String(options.label || 'API');
+  let lastError;
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      return await task(attempt);
+    } catch (error) {
+      lastError = error;
+      if (isNonRetriableApiError(error) || attempt >= maxRetries) break;
+      const delay = 1000 * (attempt + 1);
+      console.warn(`[BS BioTracker] ${label} 失败，将在 ${delay}ms 后重试 (${attempt + 1}/${maxRetries})`, error);
+      try {
+        globalThis.toastr?.warning?.(`${label} 失败，${Math.round(delay / 1000)}s 后重试 (${attempt + 1}/${maxRetries})`, '[BS BioTracker]');
+      } catch {}
+      await sleepMs(delay);
+    }
+  }
+  throw lastError;
+}
+
 function sanitizeTransportString(value) {
   const text = String(value ?? '');
   let result = '';
@@ -744,24 +778,30 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
   const effectiveMessages = presetEnvelope?.messages?.length ? presetEnvelope.messages : baseMessages;
   const stPresetSampling = presetEnvelope?.sampling || {};
   const effectivePresetName = presetEnvelope?.presetName || '';
+  // 格式化输出(v4兼容)：仅 response_format.type = json_object（无 json_schema），可在设置关闭
+  const useFormattedOutputV4 = settings?.formattedOutputV4 !== false;
   const body = {
     model,
     temperature: 0.2,
     ...stPresetSampling,
     messages: effectiveMessages,
-    response_format: { type: 'json_object' },
+    ...(useFormattedOutputV4 ? { response_format: { type: 'json_object' } } : {}),
   };
   recordEffectiveRequestDebug(
-    `${safePayload?.target_character ? 'registry' : 'tracker'}${mainflowCopy.hasMainflowCopy ? '-mainflow-copy' : (safePayload?.resolved_worldbook_prompt ? '-mainflow-worldinfo' : '')}`,
+    `${safePayload?.target_character ? 'registry' : 'tracker'}${mainflowCopy.hasMainflowCopy ? '-mainflow-copy' : (safePayload?.resolved_worldbook_prompt ? '-mainflow-worldinfo' : '')}${useFormattedOutputV4 ? '' : '-no-response-format'}`,
     effectivePresetName,
     stPresetSampling,
     effectiveMessages,
     body,
   );
-  const data = await requestChatCompletion(apiBase, settings, body);
-  const content = data?.choices?.[0]?.message?.content || '';
-  let parsed = extractJson(content);
-  if (!parsed || typeof parsed !== 'object') {
+  const callLabel = safePayload?.target_character ? '注册请求' : '追踪请求';
+  return withGlobalApiRetries(async (globalAttempt) => {
+    const data = await requestChatCompletion(apiBase, settings, body);
+    const content = data?.choices?.[0]?.message?.content || '';
+    let parsed = extractJson(content);
+    if (parsed && typeof parsed === 'object') return parsed;
+
+    // 同一轮全局尝试内：先做一次「请只输出 JSON」纠错请求
     const retryBody = {
       model,
       temperature: 0.1,
@@ -771,16 +811,15 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
         { role: 'assistant', content: String(content || '') },
         { role: 'user', content: buildJsonRetryInstruction() },
       ],
-      response_format: { type: 'json_object' },
+      ...(useFormattedOutputV4 ? { response_format: { type: 'json_object' } } : {}),
     };
     const retryData = await requestChatCompletion(apiBase, settings, retryBody);
     const retryContent = retryData?.choices?.[0]?.message?.content || '';
     parsed = extractJson(retryContent);
-    if (!parsed || typeof parsed !== 'object') {
-      throw new Error(
-        `模型没有返回可解析的 JSON。原始回覆：${summarizeModelText(retryContent || content)}`,
-      );
-    }
-  }
-  return parsed;
+    if (parsed && typeof parsed === 'object') return parsed;
+
+    throw new Error(
+      `模型没有返回可解析的 JSON（全局尝试 ${globalAttempt + 1}/${GLOBAL_API_MAX_RETRIES + 1}）。原始回覆：${summarizeModelText(retryContent || content)}`,
+    );
+  }, { label: callLabel });
 }

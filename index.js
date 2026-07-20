@@ -67,6 +67,7 @@ import {
   getCharacterWorldBookName,
   getCharacterWorldBookNameViaSTscript,
   getActiveGlobalWorldBookNames,
+  getCharacterAdditionalWorldBookNames,
   getGestationEffectiveSpeed,
   getGestationSpeciesSpeed,
   getChatKey,
@@ -76,14 +77,18 @@ import {
   isChatStateEffectivelyEmpty,
   getResolvedCharacter,
   getSettings,
+  getWorldbookEntryDisplayName,
   hydrateChatStateFromHost,
+  loadCharacterAdditionalWorldBooks,
   loadGlobalWorldBook,
   MODULE_NAME,
   normalizeCharacterPsychologyState,
   recordChatStateSnapshot,
   resolveRegisteredCharacterName,
+  sanitizeWorldbookEntryDisplayName,
   saveSettings,
   THEME_CONFIG,
+  worldbookSelectionMatches,
 } from './scripts/state.js';
 
 const PANEL_ID = 'bs-biotracker-settings';
@@ -963,8 +968,19 @@ function installMainflowRequestCapture() {
   globalThis[FETCH_CAPTURE_READY_KEY] = true;
 }
 
+// skill 化条目的 comment 可能带多行 meta，入名单前统一清洗成单行标题
+function normalizeWorldbookNameList(names) {
+  return Array.from(
+    new Set(
+      (Array.isArray(names) ? names : [])
+        .map((item) => sanitizeWorldbookEntryDisplayName(item))
+        .filter(Boolean),
+    ),
+  );
+}
+
 function saveWorldbookExcludeNamesFromList(ctx, names) {
-  const normalized = Array.from(new Set((Array.isArray(names) ? names : []).map((item) => String(item || '').trim()).filter(Boolean)));
+  const normalized = normalizeWorldbookNameList(names);
   const settings = getSettings(ctx);
   settings.trackerWorldbookExcludeNames = normalized.join('\n');
   syncWorldbookFilterInput(ctx);
@@ -974,7 +990,7 @@ function saveWorldbookExcludeNamesFromList(ctx, names) {
 }
 
 function saveWorldbookIncludeNamesFromList(ctx, names) {
-  const normalized = Array.from(new Set((Array.isArray(names) ? names : []).map((item) => String(item || '').trim()).filter(Boolean)));
+  const normalized = normalizeWorldbookNameList(names);
   const settings = getSettings(ctx);
   settings.trackerWorldbookIncludeNames = normalized.join('\n');
   syncWorldbookFilterInput(ctx);
@@ -984,7 +1000,7 @@ function saveWorldbookIncludeNamesFromList(ctx, names) {
 }
 
 function saveGlobalWorldbookExcludeNamesFromList(ctx, names) {
-  const normalized = Array.from(new Set((Array.isArray(names) ? names : []).map((item) => String(item || '').trim()).filter(Boolean)));
+  const normalized = normalizeWorldbookNameList(names);
   const settings = getSettings(ctx);
   settings.trackerGlobalWorldbookExcludeNames = normalized.join('\n');
   syncWorldbookFilterInput(ctx);
@@ -994,7 +1010,7 @@ function saveGlobalWorldbookExcludeNamesFromList(ctx, names) {
 }
 
 function saveGlobalWorldbookIncludeNamesFromList(ctx, names) {
-  const normalized = Array.from(new Set((Array.isArray(names) ? names : []).map((item) => String(item || '').trim()).filter(Boolean)));
+  const normalized = normalizeWorldbookNameList(names);
   const settings = getSettings(ctx);
   settings.trackerGlobalWorldbookIncludeNames = normalized.join('\n');
   syncWorldbookFilterInput(ctx);
@@ -1046,9 +1062,13 @@ function renderWorldbookEntryList(ctx, entries = [], { scope = 'character' } = {
     } else if (item.name) {
       const name = String(item.name).trim();
       const bookName = String(item.bookName || '').trim();
-      const selectionName = isGlobal ? formatGlobalWorldbookSelectionName(bookName, name) : name;
+      const source = String(item.source || '').trim();
+      // 附加知识书也按「书名 :: 条目名」展示，避免多本书条目撞名
+      const selectionName = (isGlobal || source === 'additional' || bookName)
+        ? (item.selectionName || formatGlobalWorldbookSelectionName(bookName, name))
+        : name;
       if (name && !normalizedEntries.find((e) => e.selectionName === selectionName)) {
-        normalizedEntries.push({ name, bookName, selectionName, mode: item.mode || '' });
+        normalizedEntries.push({ name, bookName, selectionName, mode: item.mode || '', source });
       }
     }
   }
@@ -1064,13 +1084,15 @@ function renderWorldbookEntryList(ctx, entries = [], { scope = 'character' } = {
   if (title) {
     title.textContent = isGlobal
       ? (mode === 'allowlist_all' ? '全域世界书条目（仅供参考）' : '全域世界书条目')
-      : (mode === 'allowlist_all' ? '角色世界书条目（仅供参考）' : '角色世界书条目');
+      : (mode === 'allowlist_all' ? '角色世界书（主书+附加）条目（仅供参考）' : '角色世界书（主书+附加）条目');
   }
 
   if (normalizedEntries.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'bs-bt-connect-status';
-    empty.textContent = isGlobal ? '目前没有启用中的全域世界书条目' : '当前角色世界书暂无可识别条目';
+    empty.textContent = isGlobal
+      ? '目前没有启用中的全域世界书条目（若已在设置勾选全局书仍为空，请回报宿主环境）'
+      : '当前角色主世界书/附加知识书暂无可识别条目';
     container.appendChild(empty);
     return;
   }
@@ -1094,12 +1116,17 @@ function renderWorldbookEntryList(ctx, entries = [], { scope = 'character' } = {
 
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
-    checkbox.checked = selected.has(selectionName);
+    checkbox.checked = worldbookSelectionMatches(selected, selectionName, name);
 
     const toggleEntrySelection = () => {
       const nextSelected = new Set(isGlobal ? getGlobalWorldbookFilterInputNames(ctx) : getWorldbookFilterInputNames(ctx));
-      if (nextSelected.has(selectionName)) nextSelected.delete(selectionName);
-      else nextSelected.add(selectionName);
+      if (worldbookSelectionMatches(nextSelected, selectionName, name)) {
+        // 清掉「书名 :: 条目名」与裸名两种写法的残留
+        nextSelected.delete(selectionName);
+        nextSelected.delete(name);
+      } else {
+        nextSelected.add(selectionName);
+      }
       if (normalizeWorldbookMode(getSettings(ctx).trackerWorldbookMode) === 'allowlist_all') {
         if (isGlobal) saveGlobalWorldbookIncludeNamesFromList(ctx, Array.from(nextSelected));
         else saveWorldbookIncludeNamesFromList(ctx, Array.from(nextSelected));
@@ -1115,13 +1142,20 @@ function renderWorldbookEntryList(ctx, entries = [], { scope = 'character' } = {
       event.stopPropagation();
       toggleEntrySelection();
     });
+    // 手机 WebView 上 click 偶尔被吞；补 pointerup 兜底
+    label.addEventListener('pointerup', (event) => {
+      if (event.pointerType === 'mouse') return;
+      event.preventDefault();
+      event.stopPropagation();
+      toggleEntrySelection();
+    }, { passive: false });
 
     const textWrap = document.createElement('div');
     textWrap.style.display = 'flex';
     textWrap.style.gap = '8px';
     textWrap.style.alignItems = 'baseline';
 
-    if (isGlobal && bookName) {
+    if (bookName) {
       const bookBadge = document.createElement('span');
       bookBadge.textContent = `[${bookName}]`;
       bookBadge.style.fontSize = '0.8em';
@@ -1684,7 +1718,7 @@ function parseWorldbookExcludeNamesInput(value) {
     new Set(
       String(value || '')
         .split(/\r?\n+/)
-        .map((item) => item.trim())
+        .map((item) => sanitizeWorldbookEntryDisplayName(item))
         .filter(Boolean),
     ),
   );
@@ -1719,15 +1753,17 @@ function collectWorldbookEntryNames(value) {
     if (!entry || typeof entry !== 'object') continue;
     if (!includeDisabled && (entry.enabled === false || entry.disable === true)) continue;
 
-    // 匹配 filterTrackerWorldbookEntries 的擷取邏輯
-    const name = String(entry.name || entry.comment || entry.title || entry.displayName || entry.uid || '').trim();
+    // 匹配 filterTrackerWorldbookEntries 的擷取邏輯；skill 化 comment 只取清洗后的标题
+    const name = getWorldbookEntryDisplayName(entry);
     if (name && !seen.has(name)) {
       seen.add(name);
       let mode = entry.activationMode || '';
       if (!mode) {
         if (entry.constant === true || entry.always === true) mode = 'always';
-        else if (entry.selective === true || (Array.isArray(entry.key) && entry.key.length > 0)) mode = 'keyword';
+        else if (entry.selective === true || (Array.isArray(entry.key) && entry.key.length > 0) || (Array.isArray(entry.keys) && entry.keys.length > 0)) mode = 'keyword';
       }
+      // skill 化条目标记，方便 UI 识别
+      if (/ACU_SKILL_META/i.test(String(entry.comment || ''))) mode = mode ? `${mode} · skill` : 'skill';
       results.push({ name, mode });
     }
   }
@@ -1808,7 +1844,7 @@ async function getGlobalWorldbookEntries(ctx) {
       try {
         const worldBook = await loadGlobalWorldBook(ctx, bookName);
         return collectWorldbookEntryNames(worldBook, { includeDisabled: normalizeWorldbookMode(getSettings(ctx).trackerWorldbookMode) === 'allowlist_all' })
-          .map((entry) => ({ ...entry, bookName }));
+          .map((entry) => ({ ...entry, bookName, source: 'global' }));
       } catch (error) {
         console.warn(`[BS BioTracker] get global worldbook "${bookName}" failed`, error);
         return [];
@@ -1821,18 +1857,57 @@ async function getGlobalWorldbookEntries(ctx) {
   }
 }
 
+// 角色附加知识书条目（charLore.extraBooks），显示在角色分页
+async function getAdditionalWorldbookEntries(ctx) {
+  try {
+    const mode = normalizeWorldbookMode(getSettings(ctx).trackerWorldbookMode);
+    const books = await loadCharacterAdditionalWorldBooks(ctx);
+    const entries = [];
+    for (const book of books) {
+      const bookName = String(book?.name || '').trim();
+      const collected = collectWorldbookEntryNames(book, { includeDisabled: mode === 'allowlist_all' })
+        .map((entry) => ({
+          ...entry,
+          bookName,
+          source: 'additional',
+          mode: entry.mode ? `${entry.mode} · 附加` : '附加',
+        }));
+      entries.push(...collected);
+    }
+    // 条目加载不到时至少把书名列出来，方便确认已识别到附加书
+    if (entries.length === 0) {
+      for (const name of await getCharacterAdditionalWorldBookNames(ctx)) {
+        entries.push({ name: `(书) ${name}`, bookName: name, selectionName: `${name} :: (整本)`, source: 'additional', mode: '附加书' });
+      }
+    }
+    return entries;
+  } catch (error) {
+    console.warn('[BS BioTracker] load additional worldbooks for filter UI failed', error);
+    return [];
+  }
+}
+
 async function inspectCurrentCharacterWorldbook(ctx) {
   const worldBook = await getCurrentCharacterWorldbook(ctx);
   const globalEntries = await getGlobalWorldbookEntries(ctx);
+  const additionalEntries = await getAdditionalWorldbookEntries(ctx);
   const settings = getSettings(ctx);
   const mode = normalizeWorldbookMode(settings.trackerWorldbookMode);
-  const foundEntries = collectWorldbookEntryNames(worldBook, { includeDisabled: mode === 'allowlist_all' });
+  // 角色分页同时展示：主世界书 + 附加知识书
+  const primaryEntries = collectWorldbookEntryNames(worldBook, { includeDisabled: mode === 'allowlist_all' })
+    .map((entry) => ({ ...entry, source: 'primary' }));
+  const foundEntries = [...primaryEntries, ...additionalEntries];
   const foundNames = foundEntries.map(e => e.name);
   const filterInputValue = document.getElementById('bs-bt-worldbook-filter-input')?.value;
   const trackedNames = filterInputValue === undefined
     ? getWorldbookFilterInputNames(ctx)
     : parseWorldbookExcludeNamesInput(filterInputValue);
+  // 「书名 :: 条目名」写法也算命中
   const foundSet = new Set(foundNames);
+  for (const entry of foundEntries) {
+    const bookName = String(entry?.bookName || '').trim();
+    if (bookName && entry?.name) foundSet.add(entry.selectionName || formatGlobalWorldbookSelectionName(bookName, entry.name));
+  }
   const matched = trackedNames.filter((name) => foundSet.has(name));
   const missing = trackedNames.filter((name) => !foundSet.has(name));
   const resolvedCharacter = getResolvedCharacter(ctx);
@@ -1844,6 +1919,7 @@ async function inspectCurrentCharacterWorldbook(ctx) {
   const topLevelKeys = worldBook && typeof worldBook === 'object' && !Array.isArray(worldBook) ? Object.keys(worldBook) : [];
   const candidateLines = getCharacterWorldbookCandidates(ctx).map((candidate) => `${candidate.label}: ${summarizeValueShape(candidate.value)}`);
   const stscriptWorldBookName = await getCharacterWorldBookNameViaSTscript();
+  const extraWorldBookNames = await getCharacterAdditionalWorldBookNames(ctx);
   let apiSourceSummary = '不可用';
   let apiSourcePreview = '无';
   try {
@@ -1861,6 +1937,7 @@ async function inspectCurrentCharacterWorldbook(ctx) {
     `groupId：${groupId === undefined || groupId === null || groupId === '' ? '无' : String(groupId)}`,
     `loadWorldInfo：${canLoadHostWorldInfo(ctx) ? '可用' : '不可用'}`,
     `STscript(/getcharbook)：${stscriptWorldBookName || '无'}`,
+    `附加知识书：${extraWorldBookNames.length > 0 ? extraWorldBookNames.join(', ') : '无'}`,
     `世界书来源：${worldBook ? '已取得' : '未取得'}`,
     `找到的条目名数量：${foundNames.length}`,
     `${mode === 'allowlist_all' ? '白名单数量' : '排除名单数量'}：${trackedNames.length}`,
@@ -1891,6 +1968,8 @@ async function inspectCurrentCharacterWorldbook(ctx) {
     matched,
     missing,
     globalEntries,
+    additionalEntries,
+    additionalBookNames: extraWorldBookNames,
   };
 }
 
@@ -3127,7 +3206,7 @@ function renderTrackPregnancy(viewModel) {
                 <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">体重倍率</span><span class="bs-bt-track-list-value">${escapeHtml(formatFixedDisplay(item?.weight, 2))}</span></div>
                 <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">胎位角</span><span class="bs-bt-track-list-value">${escapeHtml(`${formatIntegerDisplay(item?.tendencyAngle)}°`)}</span></div>
                 <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">亲和</span><span class="bs-bt-track-list-value">${escapeHtml(formatIntegerDisplay(item?.affinity))}</span></div>
-                <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">胎儿天赋</span><span class="bs-bt-track-list-value">${escapeHtml((Array.isArray(item?.talents) ? item.talents : []).map((talent) => `${talent.name}：${talent.label} (${talent.exp >= 0 ? '+' : ''}${talent.exp} EXP)`).join('、') || '无')}</span></div>
+                <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">胎教</span><span class="bs-bt-track-list-value">${escapeHtml((Array.isArray(item?.talents) ? item.talents : []).map((talent) => { const level = Number(talent.level) || 0; return `${talent.name}(${level > 0 ? '+' : ''}${level})`; }).join('、') || '无')}</span></div>
               </div>`,
         '当前无妊娠胎儿资料',
         'fetuses',
@@ -3140,6 +3219,25 @@ function renderTrackPregnancy(viewModel) {
 }
 
 function renderTrackExperience(viewModel) {
+  // 天赋只作为对应技能的右侧小标显示；有天赋无技能则不显示
+  const talentBySkillId = new Map(
+    (Array.isArray(viewModel.experience.talents) ? viewModel.experience.talents : [])
+      .filter((talent) => Number(talent?.level) !== 0)
+      .map((talent) => [Number(talent?.skillId), talent]),
+  );
+  const renderSkillCard = (item) => {
+    const talent = talentBySkillId.get(Number(item?.skillId));
+    const talentBadge = talent ? `<span class="bs-bt-track-tag bs-bt-track-talent-tag">${escapeHtml(talent.label)}</span>` : '';
+    const maxed = !item?.requiredExp;
+    const fillPercent = maxed ? 100 : Math.max(0, Math.min(100, (Number(item?.exp) || 0) / Number(item.requiredExp) * 100));
+    return `<div class="bs-bt-track-card">
+      <div class="bs-bt-track-card-title bs-bt-track-card-title--split"><span>${escapeHtml(item?.name || '未命名技能')} · Lv${escapeHtml(formatIntegerDisplay(item?.level))}</span>${talentBadge}</div>
+      <div class="bs-bt-track-progress">
+        <div class="bs-bt-track-progress-head"><span>EXP</span><span>${escapeHtml(maxed ? 'MAX' : `${item.exp}/${item.requiredExp}`)}</span></div>
+        <div class="bs-bt-track-progress-bar"><div class="bs-bt-track-progress-fill" style="width:${fillPercent}%;"></div></div>
+      </div>
+    </div>`;
+  };
   return `
     <div class="bs-bt-track-section">
       <div class="bs-bt-track-section-title">经历记录</div>
@@ -3155,36 +3253,9 @@ function renderTrackExperience(viewModel) {
     ${renderCardCarouselSection(
       '技能',
       viewModel.experience.skills,
-      (item) => `<div class="bs-bt-track-card">
-        <div class="bs-bt-track-card-title">${escapeHtml(item?.name || '未命名技能')} · Lv${escapeHtml(formatIntegerDisplay(item?.level))}</div>
-        <div class="bs-bt-track-card-note">${escapeHtml(item?.description || '暂无说明')}</div>
-        <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">经验</span><span class="bs-bt-track-list-value">${escapeHtml(item?.requiredExp ? `${item.exp}/${item.requiredExp}` : 'MAX')}</span></div>
-      </div>`,
+      renderSkillCard,
       '当前无技能记录',
       'skills',
-    )}
-    ${renderCardCarouselSection(
-      '先天天赋',
-      viewModel.experience.talents,
-      (item) => `<div class="bs-bt-track-card">
-        <div class="bs-bt-track-card-title">${escapeHtml(item?.name || '未命名天赋')} · ${escapeHtml(item?.label || '尚未形成')}</div>
-        <div class="bs-bt-track-card-note">${escapeHtml(item?.description || '暂无说明')}</div>
-        <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">方向经验</span><span class="bs-bt-track-list-value">${escapeHtml(item?.requiredExp ? `${item.exp >= 0 ? '+' : ''}${item.exp}/${item.requiredExp}` : 'MAX')}</span></div>
-      </div>`,
-      '当前无先天天赋',
-      'talents',
-    )}
-    ${renderCardCarouselSection(
-      '技能成长记录',
-      viewModel.experience.skillHistory,
-      (item) => `<div class="bs-bt-track-card">
-        <div class="bs-bt-track-card-title">${escapeHtml(item?.skillName || '未知技能')} · Lv${escapeHtml(item?.fromLevel)} → Lv${escapeHtml(item?.toLevel)}</div>
-        <div class="bs-bt-track-card-note">${escapeHtml(item?.reason || '')}</div>
-        <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">来源</span><span class="bs-bt-track-list-value">${item?.source === 'manual' ? '手动调整' : '故事成长'}</span></div>
-        <div class="bs-bt-track-list-row"><span class="bs-bt-track-list-label">记录时间</span><span class="bs-bt-track-list-value">${escapeHtml(item?.timestamp ? new Date(item.timestamp).toLocaleString() : '未知')}</span></div>
-      </div>`,
-      '当前无技能成长记录',
-      'skill-history',
     )}
     ${renderCardCarouselSection(
       '孩子记录',
@@ -4836,6 +4907,7 @@ function applySettingsToForm(ctx) {
   setValue('bs-bt-api-url', settings.apiUrl);
   setValue('bs-bt-api-key', settings.apiKey);
   setValue('bs-bt-model', settings.model);
+  setValue('bs-bt-formatted-output-v4', settings.formattedOutputV4 !== false);
   setValue('bs-bt-trigger', settings.triggerTiming);
   setValue('bs-bt-poll-ms', settings.pollMs);
   setValue('bs-bt-context-size', settings.contextSize);
@@ -5417,6 +5489,8 @@ function readSettingsFromForm(ctx) {
   settings.apiUrl = String(getValue('bs-bt-api-url')).trim();
   settings.apiKey = String(getValue('bs-bt-api-key')).trim();
   settings.model = String(getValue('bs-bt-model')).trim();
+  const formattedOutputToggle = document.getElementById('bs-bt-formatted-output-v4');
+  if (formattedOutputToggle) settings.formattedOutputV4 = Boolean(formattedOutputToggle.checked);
   settings.triggerTiming = String(getValue('bs-bt-trigger')).trim() || 'after_ai';
   settings.pollMs = Math.max(800, Number(getValue('bs-bt-poll-ms')) || 1800);
   settings.contextSize = Math.max(2, Number(getValue('bs-bt-context-size')) || 12);

@@ -28,10 +28,13 @@ import {
   getCharacterWorldBookName,
   getCharacterWorldBookNameViaSTscript,
   getActiveGlobalWorldBookNames,
+  getCharacterAdditionalWorldBookNames,
   getChatKey,
   getChatState,
   getPsyStressInitByLevel,
   getSettings,
+  getWorldbookEntryDisplayName,
+  loadCharacterAdditionalWorldBooks,
   loadGlobalWorldBook,
   normalizeCharacterPsychologyState,
   recordChatStateSnapshot,
@@ -39,6 +42,7 @@ import {
   syncCharacterStageFromProfile,
   getVitalityInitByLevel,
   saveSettings,
+  worldbookSelectionMatches,
 } from './state.js';
 import { canLoadHostWorldInfo, getHostWorldBook, loadHostWorldInfo } from './host.js';
 import {
@@ -167,17 +171,20 @@ function filterRegistryWorldbookEntries(value, excludedNames, settings = null, r
   if (!value || typeof value !== 'object') return value;
   const mode = normalizeWorldbookMode(settings?.trackerWorldbookMode);
   const globalBookName = String(options.globalBookName || '').trim();
-  const includedNames = globalBookName ? parseRegistryGlobalWorldbookIncludeNames(settings) : parseRegistryWorldbookIncludeNames(settings);
+  // characterScopeLists：附加知识书带书名前缀，但白名单仍走角色侧名单
+  const includedNames = globalBookName && options.characterScopeLists !== true
+    ? parseRegistryGlobalWorldbookIncludeNames(settings)
+    : parseRegistryWorldbookIncludeNames(settings);
   const activationText = mode === 'mainflow' ? buildWorldbookActivationText(recentMessages) : '';
 
-  const normalizeEntryName = (entry) => String(entry?.name || entry?.comment || entry?.title || entry?.displayName || entry?.uid || '').trim();
+  const normalizeEntryName = (entry) => getWorldbookEntryDisplayName(entry);
 
   const keepEntry = (entry) => {
     const name = normalizeEntryName(entry);
     const selectionName = globalBookName ? formatGlobalWorldbookSelectionName(globalBookName, name) : name;
-    if (mode === 'allowlist_all') return Boolean(name) && includedNames.has(selectionName);
+    if (mode === 'allowlist_all') return Boolean(name) && worldbookSelectionMatches(includedNames, selectionName, name);
     if (entry?.enabled === false || entry?.disable === true) return false;
-    if (name && excludedNames.has(selectionName)) return false;
+    if (name && worldbookSelectionMatches(excludedNames, selectionName, name)) return false;
     if (mode === 'mainflow') {
       const activationMode = getWorldbookEntryActivationMode(entry);
       if (activationMode === 'always' || activationMode === 'constant') return true;
@@ -226,6 +233,36 @@ async function getFilteredGlobalWorldbooks(ctx, settings, recentMessages = []) {
     console.warn('[BS BioTracker] load active global worldbooks for registry failed', error);
     return [];
   }
+}
+
+// 附加知识书走角色侧排除名单，条目以「书名 :: 条目名」参与匹配
+async function getCharacterAdditionalWorldbooksForRegistry(ctx, settings, recentMessages = []) {
+  const excludedNames = parseRegistryWorldbookExcludeNames(settings);
+  return loadCharacterAdditionalWorldBooks(ctx, {
+    recentMessages,
+    filterBook: (worldBook, bookName, messages) => filterRegistryWorldbookEntries(
+      worldBook,
+      excludedNames,
+      settings,
+      messages,
+      { globalBookName: bookName, characterScopeLists: true },
+    ),
+  });
+}
+
+function mergeRegistryWorldbookLists(...lists) {
+  const seen = new Set();
+  const merged = [];
+  for (const list of lists) {
+    for (const book of Array.isArray(list) ? list : []) {
+      if (!book || typeof book !== 'object') continue;
+      const key = String(book.name || '').trim();
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      merged.push(book);
+    }
+  }
+  return merged;
 }
 
 function recordRegistryRequestDebug(systemPrompt, payload) {
@@ -508,6 +545,8 @@ async function buildRegistryPayload(ctx, settings, chatState, options = {}) {
   );
   const payloadWorldBook = characterWorldBook;
   const payloadGlobalWorldbooks = await getFilteredGlobalWorldbooks(ctx, settings, recentMessages);
+  // 附加知识书（charLore.extraBooks）与主世界书分离，旧版只读主书会漏掉
+  const payloadAdditionalWorldbooks = await getCharacterAdditionalWorldbooksForRegistry(ctx, settings, recentMessages);
   const sourceChild = options.sourceChildContext
     ? {
       mother: options.sourceChildContext.motherName,
@@ -540,7 +579,8 @@ async function buildRegistryPayload(ctx, settings, chatState, options = {}) {
     character_description: currentCharacter.description || '',
     character_worldbook_name: payloadWorldBook ? (getCharacterWorldBookName(ctx) || null) : null,
     character_worldbook: payloadWorldBook,
-    global_worldbooks: payloadGlobalWorldbooks,
+    character_additional_worldbook_names: await getCharacterAdditionalWorldBookNames(ctx),
+    global_worldbooks: mergeRegistryWorldbookLists(payloadGlobalWorldbooks, payloadAdditionalWorldbooks),
     target_character: targetName,
     existing_state: chatState.characters[targetName] || null,
     recent_messages: recentMessages,

@@ -12,17 +12,21 @@ import {
   getCharacterWorldBookName,
   getCharacterWorldBookNameViaSTscript,
   getActiveGlobalWorldBookNames,
+  getCharacterAdditionalWorldBookNames,
   getChatKey,
   getChatState,
   getRegisteredTargetNames,
   getSettings,
   getLatestMatchingSnapshot,
+  getWorldbookEntryDisplayName,
   hydrateChatStateFromHost,
+  loadCharacterAdditionalWorldBooks,
   loadGlobalWorldBook,
   recordChatStateSnapshot,
   restoreChatStateFromSnapshot,
   saveSettings,
   shouldTriggerForMessage,
+  worldbookSelectionMatches,
 } from './state.js';
 import { getDerivedTypeMetabolismExemptions } from './race_config.js';
 import { LABOR_STAGES, PREGNANCY_STAGES } from './stage_config.js';
@@ -476,17 +480,20 @@ function filterTrackerWorldbookEntries(value, excludedNames, settings = null, re
   if (!value || typeof value !== 'object') return value;
   const mode = normalizeWorldbookMode(settings?.trackerWorldbookMode);
   const globalBookName = String(options.globalBookName || '').trim();
-  const includedNames = globalBookName ? parseTrackerGlobalWorldbookIncludeNames(settings) : parseTrackerWorldbookIncludeNames(settings);
+  // characterScopeLists：附加知识书带书名前缀，但白名单仍走角色侧名单
+  const includedNames = globalBookName && options.characterScopeLists !== true
+    ? parseTrackerGlobalWorldbookIncludeNames(settings)
+    : parseTrackerWorldbookIncludeNames(settings);
   const activationText = mode === 'mainflow' ? buildWorldbookActivationText(recentMessages) : '';
 
-  const normalizeEntryName = (entry) => String(entry?.name || entry?.comment || entry?.title || entry?.displayName || entry?.uid || '').trim();
+  const normalizeEntryName = (entry) => getWorldbookEntryDisplayName(entry);
 
   const keepEntry = (entry) => {
     const name = normalizeEntryName(entry);
     const selectionName = globalBookName ? formatGlobalWorldbookSelectionName(globalBookName, name) : name;
-    if (mode === 'allowlist_all') return Boolean(name) && includedNames.has(selectionName);
+    if (mode === 'allowlist_all') return Boolean(name) && worldbookSelectionMatches(includedNames, selectionName, name);
     if (entry?.enabled === false || entry?.disable === true) return false;
-    if (name && excludedNames.has(selectionName)) return false;
+    if (name && worldbookSelectionMatches(excludedNames, selectionName, name)) return false;
     if (mode === 'mainflow') {
       const activationMode = getWorldbookEntryActivationMode(entry);
       if (activationMode === 'always' || activationMode === 'constant') return true;
@@ -536,6 +543,36 @@ async function getFilteredGlobalWorldbooks(ctx, settings, recentMessages = []) {
     console.warn('[BS BioTracker] load active global worldbooks for tracker failed', error);
     return [];
   }
+}
+
+// 附加知识书走角色侧排除名单，条目以「书名 :: 条目名」参与匹配
+async function getCharacterAdditionalWorldbooksForTracker(ctx, settings, recentMessages = []) {
+  const excludedNames = parseTrackerWorldbookExcludeNames(settings);
+  return loadCharacterAdditionalWorldBooks(ctx, {
+    recentMessages,
+    filterBook: (worldBook, bookName, messages) => filterTrackerWorldbookEntries(
+      worldBook,
+      excludedNames,
+      settings,
+      messages,
+      { globalBookName: bookName, characterScopeLists: true },
+    ),
+  });
+}
+
+function mergeTrackerWorldbookLists(...lists) {
+  const seen = new Set();
+  const merged = [];
+  for (const list of lists) {
+    for (const book of Array.isArray(list) ? list : []) {
+      if (!book || typeof book !== 'object') continue;
+      const key = String(book.name || '').trim();
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      merged.push(book);
+    }
+  }
+  return merged;
 }
 
 function getMainflowContextSnapshot() {
@@ -746,9 +783,16 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
       console.warn('[BS BioTracker] loadWorldInfo for tracker failed', error);
     }
   }
-  payload.global_worldbooks = payload.mainflow_context_snapshot
-    ? []
-    : await getFilteredGlobalWorldbooks(ctx, settings, payload.recent_messages);
+  if (payload.mainflow_context_snapshot) {
+    payload.character_additional_worldbook_names = [];
+    payload.global_worldbooks = [];
+  } else {
+    const additionalBooks = await getCharacterAdditionalWorldbooksForTracker(ctx, settings, payload.recent_messages);
+    const globalBooks = await getFilteredGlobalWorldbooks(ctx, settings, payload.recent_messages);
+    payload.character_additional_worldbook_names = await getCharacterAdditionalWorldBookNames(ctx);
+    // 附加知识书与全局启用书合并传输，按书名去重
+    payload.global_worldbooks = mergeTrackerWorldbookLists(globalBooks, additionalBooks);
+  }
   chatState.lastRunAt = Date.now();
   chatState.lastAttemptedSignature = buildSignature(ctx, messageIndex + 1);
   saveSettings(ctx);

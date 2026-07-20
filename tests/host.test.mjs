@@ -17,6 +17,13 @@ function resetGlobals() {
   delete globalThis.SillyTavern;
   delete globalThis.ST_API;
   delete globalThis.openai_settings;
+  delete globalThis.__bsBtWorldInfoModuleOverride__;
+  delete globalThis.world_info;
+  delete globalThis.world_info_settings;
+  delete globalThis.selected_world_info;
+  delete globalThis.getCharLorebooks;
+  delete globalThis.getLorebookSettings;
+  delete globalThis.TavernHelper;
 }
 
 test('standard SillyTavern keeps chatStates in extensionSettings', () => {
@@ -91,6 +98,97 @@ test('Luker uses its chat sidecar without persisting chatStates globally', async
   state.saveSettings(ctx);
   await new Promise((resolve) => setTimeout(resolve, 350));
   assert.equal(saved?.chatState?.characters?.Alice?.initialized, true);
+});
+
+test('character additional worldbooks come from charLore for the current character only', async () => {
+  resetGlobals();
+  const ctx = {
+    characterId: 0,
+    characters: [{ name: '雪之下 琉璃', avatar: '雪之下 琉璃.png' }],
+    extensionSettings: {},
+    saveSettingsDebounced() {},
+  };
+  globalThis.SillyTavern = { getContext: () => ctx };
+  globalThis.__bsBtWorldInfoModuleOverride__ = {
+    selected_world_info: ['全局书'],
+    world_info: {
+      globalSelect: ['全局书'],
+      charLore: [
+        { name: '雪之下 琉璃', extraBooks: ['性格适配衣橱', '性格适配衣橱', ' '] },
+        { name: '别的角色', extraBooks: ['别人的书'] },
+      ],
+    },
+  };
+  assert.deepEqual(await state.getCharacterAdditionalWorldBookNames(ctx), ['性格适配衣橱']);
+  assert.deepEqual(await state.getActiveGlobalWorldBookNames(), ['全局书']);
+  resetGlobals();
+});
+
+test('world-info fallbacks cover TavernHelper and settings globals when module import fails', async () => {
+  resetGlobals();
+  const ctx = {
+    characterId: 0,
+    characters: [{ name: '艾拉', avatar: 'aila.png' }],
+    extensionSettings: {},
+    saveSettingsDebounced() {},
+  };
+  globalThis.SillyTavern = { getContext: () => ctx };
+  globalThis.__bsBtWorldInfoModuleOverride__ = null; // 模组 import 失败（酒馆助手 iframe 注入场景）
+  globalThis.world_info = { globalSelect: ['设置里的全局书'], charLore: [{ name: 'aila', extraBooks: ['设置里的附加书'] }] };
+  globalThis.TavernHelper = {
+    getLorebookSettings: async () => ({ selected_global_lorebooks: ['助手全局书'] }),
+    getCharLorebooks: async () => ({ additional: ['助手附加书'] }),
+  };
+  assert.deepEqual(await state.getActiveGlobalWorldBookNames(), ['设置里的全局书', '助手全局书']);
+  assert.deepEqual(await state.getCharacterAdditionalWorldBookNames(ctx), ['助手附加书', '设置里的附加书']);
+  resetGlobals();
+});
+
+test('skill-ized worldbook comments collapse to their title line and keep matching', () => {
+  const skillComment = '战斗隐奸侵扰\n\n<!-- ACU_SKILL_META_START\n{"version":1,"description":"..."}\n-->';
+  assert.equal(state.sanitizeWorldbookEntryDisplayName(skillComment), '战斗隐奸侵扰');
+  assert.equal(state.getWorldbookEntryDisplayName({ comment: skillComment }), '战斗隐奸侵扰');
+  const selected = new Set(['战斗隐奸侵扰']);
+  assert.equal(state.worldbookSelectionMatches(selected, '数据库 :: 战斗隐奸侵扰', '战斗隐奸侵扰'), true);
+  const selectedFull = new Set(['数据库 :: 战斗隐奸侵扰']);
+  assert.equal(state.worldbookSelectionMatches(selectedFull, '数据库 :: 战斗隐奸侵扰', '战斗隐奸侵扰'), true);
+  assert.equal(state.worldbookSelectionMatches(selectedFull, '别的书 :: 战斗隐奸侵扰', '别的名字'), false);
+});
+
+test('TauriTavern chat state load caches Not-found results and dedupes concurrent probes', async () => {
+  resetGlobals();
+  let getJsonCalls = 0;
+  let saved = null;
+  const handle = {
+    stableId: async () => 'stable-missing-chat',
+    store: {
+      getJson: async () => {
+        getJsonCalls += 1;
+        throw new Error('Not found: Chat store entry not found: some/path/chat-state-v1.json');
+      },
+      setJson: async ({ value }) => { saved = value; },
+    },
+  };
+  const ctx = { chatId: 'fallback-missing', extensionSettings: {}, saveSettingsDebounced() {} };
+  globalThis.SillyTavern = { getContext: () => ctx };
+  globalThis.__TAURITAVERN__ = {
+    ready: Promise.resolve(),
+    api: { chat: { current: { handle: () => handle } } },
+  };
+
+  const [first, second] = await Promise.all([host.loadHostChatState(ctx), host.loadHostChatState(ctx)]);
+  assert.equal(first, null);
+  assert.equal(second, null);
+  assert.equal(getJsonCalls, 1, 'concurrent probes collapse into a single store read');
+  assert.equal(await host.loadHostChatState(ctx), null);
+  assert.equal(getJsonCalls, 1, 'known-missing chats are not probed again');
+
+  await host.resolveHostChatId(ctx);
+  host.scheduleHostChatStateSave(ctx, { characters: {}, snapshots: [] });
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(saved?.version, 1);
+  await host.loadHostChatState(ctx);
+  assert.equal(getJsonCalls, 2, 'saving clears the known-missing marker so state is probed again');
 });
 
 test('TauriTavern agent barrier waits for completed runs', async () => {

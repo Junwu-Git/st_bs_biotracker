@@ -119,6 +119,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   apiKey: '',
   model: 'gpt-4.1-mini',
   modelOptions: [],
+  formattedOutputV4: true,
   triggerTiming: 'after_ai',
   pollMs: 1800,
   contextSize: 12,
@@ -1264,6 +1265,55 @@ export function getCharacterWorldBookName(ctx) {
   ]);
 }
 
+/**
+ * 清洗世界书条目显示名。
+ * 数据库 skill 化后 comment 常变成「条目名\n\n<!-- ACU_SKILL_META_START ... -->」；
+ * 若直接用整段 comment，排除名单按行拆分会把名字拆碎，导致勾选后匹配失败。
+ */
+export function sanitizeWorldbookEntryDisplayName(value) {
+  let text = String(value ?? '');
+  if (!text) return '';
+  text = text.replace(/<!--[\s\S]*?-->/g, ' ');
+  text = text.replace(/ACU_SKILL_META_(?:START|END)/gi, ' ');
+  const firstLine = text
+    .split(/\r?\n+/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  return String(firstLine || '').trim();
+}
+
+export function getWorldbookEntryDisplayName(entry) {
+  if (entry == null) return '';
+  if (typeof entry === 'string' || typeof entry === 'number') {
+    return sanitizeWorldbookEntryDisplayName(entry);
+  }
+  if (typeof entry !== 'object') return '';
+  const raw = entry.name || entry.comment || entry.title || entry.displayName || entry.uid || '';
+  return sanitizeWorldbookEntryDisplayName(raw);
+}
+
+/** 排除/白名单匹配：完整「书名 :: 条目名」或裸条目名任一命中即可 */
+export function worldbookSelectionMatches(selectedSet, selectionName, entryName = '') {
+  if (!selectedSet || typeof selectedSet.has !== 'function') return false;
+  const full = String(selectionName || '').trim();
+  const bare = String(entryName || '').trim();
+  if (full && selectedSet.has(full)) return true;
+  if (bare && selectedSet.has(bare)) return true;
+  if (full.includes(' :: ')) {
+    const onlyEntry = full.split(' :: ').slice(1).join(' :: ').trim();
+    if (onlyEntry && selectedSet.has(onlyEntry)) return true;
+  }
+  return false;
+}
+
+export function getCharacterAvatarBaseName(ctx) {
+  const card = getResolvedCharacter(ctx)?.card;
+  if (!card || typeof card !== 'object') return '';
+  const avatar = pickFirstString(card, ['avatar', 'data.avatar', 'img', 'filename']);
+  if (avatar) return avatar.replace(/\.[^/.]+$/, '').trim();
+  return String(card.name || '').trim();
+}
+
 export function getResolvedCharacter(ctx) {
   const characters = getHostCharacters(ctx);
   const directId = Number.isInteger(ctx?.characterId) ? ctx.characterId : null;
@@ -1305,6 +1355,7 @@ export async function getCharacterWorldBookNameViaSTscript() {
 }
 
 async function getWorldInfoModule() {
+  if (globalThis.__bsBtWorldInfoModuleOverride__ !== undefined) return globalThis.__bsBtWorldInfoModuleOverride__;
   if (!worldInfoModulePromise) {
     const moduleUrl = new URL('../../../../world-info.js', import.meta.url).href;
     worldInfoModulePromise = import(moduleUrl).catch((error) => {
@@ -1315,15 +1366,142 @@ async function getWorldInfoModule() {
   return worldInfoModulePromise;
 }
 
+function pushWorldBookNames(target, list) {
+  for (const item of Array.isArray(list) ? list : []) {
+    const name = String(item || '').trim();
+    if (name && !target.includes(name)) target.push(name);
+  }
+}
+
+/** 世界书设置对象的候选来源：正规扩展与酒馆助手 iframe 注入环境的布局都覆盖 */
+function collectWorldInfoRoots(worldInfoModule = null) {
+  const roots = [];
+  const pushRoot = (root) => {
+    if (root && typeof root === 'object' && !roots.includes(root)) roots.push(root);
+  };
+  pushRoot(worldInfoModule?.world_info);
+  try { pushRoot(globalThis.world_info); } catch {}
+  try { pushRoot(globalThis.world_info_settings?.world_info); } catch {}
+  try { pushRoot(globalThis.power_user?.world_info); } catch {}
+  try {
+    const ctx = getHostContext();
+    pushRoot(ctx?.world_info);
+    pushRoot(ctx?.worldInfoSettings?.world_info);
+  } catch {}
+  try {
+    const parentWin = globalThis.parent && globalThis.parent !== globalThis ? globalThis.parent : null;
+    if (parentWin) {
+      pushRoot(parentWin.world_info);
+      pushRoot(parentWin.world_info_settings?.world_info);
+    }
+  } catch {}
+  return roots;
+}
+
 export async function getActiveGlobalWorldBookNames() {
+  const names = [];
+
+  // 1) 经典 ST：world-info.js 模组的 selected_world_info（酒馆助手 iframe 注入时常 import 失败）
   const worldInfoModule = await getWorldInfoModule();
-  return Array.from(
-    new Set(
-      (Array.isArray(worldInfoModule?.selected_world_info) ? worldInfoModule.selected_world_info : [])
-        .map((name) => String(name || '').trim())
-        .filter(Boolean),
-    ),
-  );
+  pushWorldBookNames(names, worldInfoModule?.selected_world_info);
+
+  // 2) 运行时全局
+  try { pushWorldBookNames(names, globalThis.selected_world_info); } catch {}
+
+  // 3) world_info.globalSelect（ST/TT 设置里的启用全域书）
+  for (const root of collectWorldInfoRoots(worldInfoModule)) {
+    pushWorldBookNames(names, root?.globalSelect);
+  }
+
+  // 4) 页面上的全域世界书多选框（若存在）
+  try {
+    const select = document.querySelector?.('#world_info');
+    if (select?.selectedOptions) {
+      pushWorldBookNames(names, Array.from(select.selectedOptions).map((option) => option.textContent || option.label || option.value));
+    }
+  } catch {}
+
+  // 5) 酒馆助手 API
+  for (const fn of [globalThis.getLorebookSettings, globalThis.TavernHelper?.getLorebookSettings]) {
+    if (typeof fn !== 'function') continue;
+    try {
+      const lorebookSettings = await Promise.resolve(fn());
+      pushWorldBookNames(names, lorebookSettings?.selected_global_lorebooks);
+      pushWorldBookNames(names, lorebookSettings?.selected_world_info);
+    } catch {}
+  }
+
+  return names;
+}
+
+function matchCharLoreEntry(entry, avatarBaseName, cardName) {
+  if (!entry || typeof entry !== 'object') return false;
+  const entryName = String(entry.name || '').trim();
+  if (!entryName) return false;
+  const entryBaseName = entryName.replace(/\.[^/.]+$/, '');
+  if (avatarBaseName && (entryName === avatarBaseName || entryBaseName === avatarBaseName)) return true;
+  if (cardName && (entryName === cardName || entryBaseName === cardName)) return true;
+  return false;
+}
+
+/**
+ * 角色附加知识书（charLore / extraBooks）名称列表。
+ * 与主世界书 data.extensions.world 分开存储，旧版只读主书会漏掉。
+ */
+export async function getCharacterAdditionalWorldBookNames(ctx) {
+  const names = [];
+
+  // 1) 酒馆助手 API（iframe 注入环境；可能为 async）
+  for (const fn of [globalThis.getCharLorebooks, globalThis.TavernHelper?.getCharLorebooks]) {
+    if (typeof fn !== 'function') continue;
+    try {
+      const books = await Promise.resolve(fn({ type: 'all' }));
+      if (books && typeof books === 'object') {
+        pushWorldBookNames(names, books.additional);
+        pushWorldBookNames(names, books.extraBooks);
+      }
+    } catch {}
+  }
+
+  // 2) world_info.charLore（world-info 模组与各运行时全局）
+  const worldInfoModule = await getWorldInfoModule();
+  const avatarBaseName = getCharacterAvatarBaseName(ctx);
+  const cardName = String(getResolvedCharacter(ctx)?.card?.name || '').trim();
+  for (const root of collectWorldInfoRoots(worldInfoModule)) {
+    if (!Array.isArray(root?.charLore)) continue;
+    const entry = root.charLore.find((item) => matchCharLoreEntry(item, avatarBaseName, cardName));
+    if (entry) pushWorldBookNames(names, entry.extraBooks);
+  }
+
+  // 主世界书名不要混进附加列表
+  const primary = String(getCharacterWorldBookName(ctx) || '').trim();
+  return names.filter((name) => name && name !== primary);
+}
+
+/**
+ * 加载角色附加知识书，返回带 source 标记的书列表。
+ * filterBook 由调用方注入，避免 state ↔ registry/tracker 循环依赖。
+ */
+export async function loadCharacterAdditionalWorldBooks(ctx, { loadBook, filterBook, recentMessages = [] } = {}) {
+  const names = await getCharacterAdditionalWorldBookNames(ctx);
+  if (!names.length) return [];
+  const load = typeof loadBook === 'function' ? loadBook : async (name) => loadGlobalWorldBook(ctx, name);
+  const books = await Promise.all(names.map(async (name) => {
+    try {
+      let worldBook = await load(name);
+      if (!worldBook) return null;
+      if (typeof filterBook === 'function') worldBook = filterBook(worldBook, name, recentMessages);
+      if (!worldBook) return null;
+      const hasEntries = (Array.isArray(worldBook.entries) && worldBook.entries.length > 0)
+        || (worldBook.entries && typeof worldBook.entries === 'object' && Object.keys(worldBook.entries).length > 0);
+      if (!hasEntries) return null;
+      return { ...worldBook, name, source: 'character_additional' };
+    } catch (error) {
+      console.warn(`[BS BioTracker] load character additional worldbook "${name}" failed`, error);
+      return null;
+    }
+  }));
+  return books.filter(Boolean);
 }
 
 export async function loadGlobalWorldBook(ctx, name) {
@@ -1342,6 +1520,11 @@ export async function loadGlobalWorldBook(ctx, name) {
   } catch (error) {
     console.warn(`[BS BioTracker] host get active global worldbook "${normalizedName}" failed`, error);
   }
+  // 附加知识书有时只能按 character scope 取到
+  try {
+    const worldBook = await getHostWorldBook(normalizedName, 'character');
+    if (worldBook) return worldBook;
+  } catch {}
   return null;
 }
 

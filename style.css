@@ -2391,6 +2391,20 @@
   word-break: break-word;
 }
 
+#bs-biotracker-settings .bs-bt-track-card-title--split {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-track-talent-tag {
+  font-size: 0.78em;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 #bs-biotracker-settings .bs-bt-track-card-empty {
   border: 1px dashed rgba(0, 0, 0, 0.22);
   border-radius: 8px;
