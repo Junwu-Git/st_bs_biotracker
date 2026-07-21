@@ -52,14 +52,30 @@
     skillCatalog: [
       { id: 1, name: '剑术', description: '使用长剑进行攻防的实战技巧。' },
       { id: 2, name: '魔力感知', description: '辨识周遭魔力流动的能力。' },
+      { id: 3, name: '察言观色', description: '从神情与语气读出对方真意。' },
+      { id: 4, name: '隐忍含蓄', description: '压下情绪不形于色。' },
+      { id: 5, name: '才情雅艺', description: '诗书琴画一类的雅致修养。' },
     ],
-    nextSkillId: 3,
+    nextSkillId: 6,
     characters: {
       艾拉: makeCharacter('艾拉', {
         profile: {
-          skills: [{ skillId: 1, level: 3, exp: 120 }],
-          // skillId 1：有技能有天赋 → 技能卡右侧小标；skillId 2：有天赋无技能 → 不显示
-          talents: [{ skillId: 1, level: -1, exp: -40 }, { skillId: 2, level: 1, exp: 30 }],
+          // 多项技能：验证「一次列出全部」的排版，其中 skillId 5 已满级走 MAX 分支
+          skills: [
+            { skillId: 1, level: 3, exp: 120 },
+            { skillId: 3, level: 3, exp: 0 },
+            { skillId: 4, level: 5, exp: 1200 },
+            { skillId: 5, level: 10, exp: 0 },
+          ],
+          // 有技能有天赋 → 格子右上角楔形角标；skillId 2 有天赋无技能 → 不显示。
+          // 覆盖苦手 Lv2 / 擅长 Lv3 / 擅长 Lv5（满）/ 苦手 Lv1 四种楔形数量与朝向。
+          talents: [
+            { skillId: 1, level: -2, exp: -40 },
+            { skillId: 2, level: 1, exp: 30 },
+            { skillId: 3, level: 3, exp: 0 },
+            { skillId: 4, level: 5, exp: 0 },
+            { skillId: 5, level: -1, exp: 0 },
+          ],
           skillHistory: [{
             skillId: 1, fromLevel: 1, toLevel: 3, reason: '在连续实战中掌握了新的剑术节奏。', source: 'story', timestamp: Date.now() - 3600000,
           }],

@@ -476,6 +476,9 @@
   --bsbt-ui-font-scale: 1.12;
 }
 
+/* 必须是 `*`：宿主酒馆会直接给 .menu_button / .text_pole / select 设字体，
+   只靠容器继承压不过去。代价是想让某个元素用别的字体时，不能设在容器上等继承，
+   要直接命中该元素本身（例：`.bs-bt-skill-tile-numeral text`）。 */
 #bs-biotracker-settings,
 #bs-biotracker-settings * {
   font-family: var(--bsbt-font-main);
@@ -2403,6 +2406,98 @@
   font-weight: 600;
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+/* 技能方格墙：一行三格自动换行，格子超过三行时列表内部滚动，不撑开整个手机 */
+#bs-biotracker-settings .bs-bt-skill-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  max-height: 268px;
+  overflow-y: auto;
+  padding-right: 2px;
+  -webkit-overflow-scrolling: touch;
+}
+
+#bs-biotracker-settings .bs-bt-skill-grid::-webkit-scrollbar {
+  width: 4px;
+}
+
+#bs-biotracker-settings .bs-bt-skill-grid::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+#bs-biotracker-settings .bs-bt-skill-tile {
+  position: relative;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  gap: 2px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 6px 4px 5px;
+}
+
+#bs-biotracker-settings .bs-bt-skill-tile.is-maxed {
+  border-color: rgba(0, 0, 0, 0.38);
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* 天赋角标：军衔式楔形，楔形数 = 等级，朝上擅长／朝下苦手。
+   viewBox 高度随数量变化，所以固定宽度、高度交给等比缩放。 */
+#bs-biotracker-settings .bs-bt-skill-tile-talent {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  z-index: 1;
+  width: 10px;
+  height: auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.88;
+}
+
+#bs-biotracker-settings .bs-bt-skill-tile-talent.is-negative {
+  opacity: 0.72;
+}
+
+#bs-biotracker-settings .bs-bt-skill-tile-numeral {
+  display: block;
+  width: 100%;
+  height: 38px;
+}
+
+/* 罗马数字必须带衬线，否则 III 在无衬线／点阵主题下会糊成三根竖线。
+   要压过 `#bs-biotracker-settings *` 的主题字体，只能直接命中 text 元素。 */
+#bs-biotracker-settings .bs-bt-skill-tile-numeral text {
+  font-family: 'Times New Roman', 'Noto Serif TC', 'Songti TC', serif;
+  font-weight: 700;
+}
+
+/* 未填满的部分留作淡色底，填实高度即经验进度 */
+#bs-biotracker-settings .bs-bt-skill-numeral-base {
+  fill: currentColor;
+  opacity: 0.2;
+}
+
+#bs-biotracker-settings .bs-bt-skill-numeral-fill {
+  fill: currentColor;
+  opacity: 0.92;
+}
+
+#bs-biotracker-settings .bs-bt-skill-tile-name {
+  font-size: 0.72em;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: center;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 #bs-biotracker-settings .bs-bt-track-card-empty {

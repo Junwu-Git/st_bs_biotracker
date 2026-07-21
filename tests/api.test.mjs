@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
 
-import { callOpenAICompatible, fetchModelList } from '../scripts/api.js';
+import { callOpenAICompatible, fetchModelList, isApiTimeoutError, resolveApiTimeoutMs } from '../scripts/api.js';
 
 const ORIGINAL_GLOBALS = {
   fetch: globalThis.fetch,
@@ -157,4 +157,38 @@ test('callOpenAICompatible falls back to direct access when the SillyTavern prox
     'https://relay.example.test/v1/chat/completions',
   ]);
   assert.equal(calls[1].options.headers.Authorization, 'Bearer relay-key');
+});
+
+test('callOpenAICompatible aborts a hanging request instead of waiting forever', async () => {
+  const calls = [];
+  installBrowserHost((url, options) => {
+    calls.push({ url, options });
+    return new Promise((_resolve, reject) => {
+      options.signal?.addEventListener('abort', () => {
+        const error = new Error('The operation was aborted.');
+        error.name = 'AbortError';
+        reject(error);
+      });
+    });
+  });
+
+  await assert.rejects(
+    callOpenAICompatible({
+      apiUrl: 'https://relay.example.test/v1',
+      apiKey: 'relay-key',
+      model: 'relay-model',
+      apiTimeoutMs: 1000,
+    }, { recent_messages: [] }, 'Return JSON.'),
+    (error) => isApiTimeoutError(error) && /自动终止/.test(error.message),
+  );
+
+  // 超时不重试，只发一次；也不会退回直连再卡一轮
+  assert.deepEqual(calls.map((call) => call.url), ['/api/backends/chat-completions/generate']);
+});
+
+test('resolveApiTimeoutMs clamps input and treats 0 as unlimited', () => {
+  assert.equal(resolveApiTimeoutMs({}), 180000);
+  assert.equal(resolveApiTimeoutMs({ apiTimeoutMs: 0 }), 0);
+  assert.equal(resolveApiTimeoutMs({ apiTimeoutMs: 500 }), 1000);
+  assert.equal(resolveApiTimeoutMs({ apiTimeoutMs: 99999999 }), 1800000);
 });

@@ -47,7 +47,7 @@ import { buildMainFlowPrompt, resetPoller, runTracker } from './scripts/tracker.
 import { applyToolCall } from './scripts/tools.js';
 import { getEmbryoTypeReferenceText } from './scripts/embryo_prompt_context.js';
 import { buildSingleRacePhysiologyText } from './scripts/race_prompt_context.js';
-import { appendSkillHistory, getTalentLabel, normalizeTalentList, removeSkillDefinition, requiredExp, resolveSkillDefinition } from './scripts/skill_config.js';
+import { appendSkillHistory, getTalentLabel, normalizeTalentList, removeSkillDefinition, requiredExp, resolveSkillDefinition, SKILL_MAX_LEVEL, TALENT_MAX_LEVEL } from './scripts/skill_config.js';
 import {
   canLoadHostWorldInfo,
   getHostChatCompletionSettings,
@@ -122,6 +122,14 @@ const MAINFLOW_CONTEXT_SNAPSHOT_KEY = '__bs_biotracker_mainflow_context_snapshot
 const DEBUG_LAST_MAINFLOW_SNAPSHOT_KEY = '__bs_biotracker_debug_last_mainflow_snapshot__';
 const FETCH_CAPTURE_READY_KEY = '__bs_biotracker_fetch_capture_ready__';
 let registryBreedingInferenceDraft = null;
+/**
+ * 注册页正在进行中的异步操作。小手机只是隐藏弹窗而不销毁 DOM，
+ * 但请求本身会跨越关闭／重开，所以进行中的状态必须记在模块层，
+ * 重开时再还原按钮与提示，否则会看到空白状态并重复触发请求。
+ */
+const registryPendingOps = new Map();
+/** 注册页最后一次初始化对应的聊天，用来区分「重开弹窗」与「换聊天」 */
+let registerPageChatKey = null;
 let registerManualRaceDraft = '人类';
 let selectedRegisterChildSourceKey = '';
 const ORIGINAL_FETCH_KEY = '__bs_biotracker_original_fetch__';
@@ -234,6 +242,98 @@ function setRegisterStatus(message, isError = false) {
   if (!el) return;
   el.textContent = message;
   el.dataset.state = isError ? 'error' : 'normal';
+}
+
+/** 注册页各异步操作的按钮与状态栏绑定 */
+const REGISTRY_OP_UI = {
+  register: { buttonId: 'bs-bt-register-run', busyText: '注册中...', idleText: '注册当前角色', setStatus: (message, isError) => setRegisterStatus(message, isError) },
+  inference: { buttonId: 'bs-bt-breeding-inference-run', busyText: '推演中...', idleText: '繁育推演', setStatus: (message, isError) => setBreedingInferenceStatus(message, isError) },
+  wardrobe: { buttonId: 'bs-bt-wardrobe-prep-run', busyText: '生成中...', idleText: '生成备装', setStatus: (message, isError) => setWardrobePrepStatus(message, isError) },
+  diary: { buttonId: 'bs-bt-diary-generate', busyText: '生成中...', idleText: '生成日记', setStatus: (message, isError) => setDiaryStatus(message, isError) },
+  skill: { buttonId: 'bs-bt-register-skill-generate', busyText: '生成中...', idleText: '生成技能／天赋', setStatus: (message, isError) => setRegisterSkillStatus(message, isError) },
+};
+
+function isRegistryOperationPending(key) {
+  return registryPendingOps.has(key);
+}
+
+function hasPendingRegistryOperations() {
+  return registryPendingOps.size > 0;
+}
+
+function beginRegistryOperation(key, message) {
+  const ui = REGISTRY_OP_UI[key];
+  registryPendingOps.set(key, String(message || ''));
+  if (!ui) return;
+  const button = document.getElementById(ui.buttonId);
+  if (button) {
+    button.disabled = true;
+    button.textContent = ui.busyText;
+  }
+  ui.setStatus(message);
+}
+
+function endRegistryOperation(key) {
+  const ui = REGISTRY_OP_UI[key];
+  registryPendingOps.delete(key);
+  if (!ui) return;
+  const button = document.getElementById(ui.buttonId);
+  if (button) {
+    button.disabled = false;
+    button.textContent = ui.idleText;
+  }
+}
+
+/** 重开小手机后把进行中的请求还原成「运行中」的样子，而不是一片空白 */
+function restorePendingRegistryOperations() {
+  registryPendingOps.forEach((message, key) => {
+    const ui = REGISTRY_OP_UI[key];
+    if (!ui) return;
+    const button = document.getElementById(ui.buttonId);
+    if (button) {
+      button.disabled = true;
+      button.textContent = ui.busyText;
+    }
+    if (message) ui.setStatus(message);
+  });
+}
+
+/** 注册成功后才清掉这份推演草稿与编辑器内容 */
+function clearBreedingInferenceDraftFor(registeredName) {
+  const name = String(registeredName || '').trim();
+  if (!name || registryBreedingInferenceDraft?.targetName !== name) return;
+  registryBreedingInferenceDraft = null;
+  setBreedingInferenceEditor('尚未执行繁育推演。直接注册不会生成繁育心理人设。');
+  setBreedingInferenceStatus('');
+}
+
+function resetRegisterPageState() {
+  registryBreedingInferenceDraft = null;
+  setRegisterTab('inference');
+  setBreedingInferenceEditor('尚未执行繁育推演。直接注册不会生成繁育心理人设。');
+  setBreedingInferenceStatus('');
+  setWardrobePrepStatus('角色必须已注册，才能准备衣柜与当前穿着。');
+  setDiaryStatus('角色必须已注册，且同一故事日尚未写过日记。');
+  setRegisterStatus('输入名字与 Description 规则后发送注册请求，完成后可在“角色追踪”查看该角色状态变量。');
+}
+
+/**
+ * 重开小手机时不再无条件清空注册页。弹窗只是被隐藏，DOM 与请求都还活着，
+ * 之前每次打开都重置，等于把推演草稿、生成结果和「正在注册」的提示全抹掉。
+ * 现在只有换聊天才回到初始文案；推演草稿在该角色注册成功后清空。
+ */
+function syncRegisterPageOnOpen(ctx) {
+  const chatKey = getChatKey(ctx);
+  const isSameChat = registerPageChatKey === chatKey;
+  registerPageChatKey = chatKey;
+  if (!isSameChat && !hasPendingRegistryOperations()) {
+    resetRegisterPageState();
+    return;
+  }
+  if (!isSameChat && registryBreedingInferenceDraft?.chatKey !== chatKey) {
+    registryBreedingInferenceDraft = null;
+  }
+  restorePendingRegistryOperations();
 }
 
 function setRegisterTab(tab) {
@@ -371,7 +471,7 @@ function renderSkillDefinitionDetail(chatState, definition) {
     const exists = Boolean(entry);
     return `<div class="bs-bt-character-skill-row" data-character-skill-row="${kind}:${definition.id}">
       <span class="bs-bt-character-skill-name">${entryLabel}</span>
-      <label>Lv <input class="text_pole" type="number" data-character-skill-level min="${isTalent ? -10 : 0}" max="10" step="1" value="${escapeHtml(exists ? entry.level : 0)}"></label>
+      <label>Lv <input class="text_pole" type="number" data-character-skill-level min="${isTalent ? -TALENT_MAX_LEVEL : 0}" max="${isTalent ? TALENT_MAX_LEVEL : SKILL_MAX_LEVEL}" step="1" value="${escapeHtml(exists ? entry.level : 0)}"></label>
       <label>EXP <input class="text_pole" type="number" data-character-skill-exp min="${isTalent ? -1000000 : 0}" max="1000000" step="1" value="${escapeHtml(exists ? entry.exp : 0)}"></label>
     </div>`;
   };
@@ -441,7 +541,11 @@ function applyManualCharacterSkillChange(ctx, characterName, mutation, reason) {
   updateMainFlowPrompt(ctx);
 }
 
-async function generateRegistrySkillSetup(ctx, button = null) {
+async function generateRegistrySkillSetup(ctx) {
+  if (isRegistryOperationPending('skill')) {
+    globalThis.toastr?.info?.('[BS BioTracker] 技能／天赋生成正在进行中，请等待完成');
+    return;
+  }
   const values = getRegisterFormValues();
   if (!values.targetName) {
     setRegisterSkillStatus('请先输入已注册角色名。', true);
@@ -455,12 +559,7 @@ async function generateRegistrySkillSetup(ctx, button = null) {
     setRegisterSkillStatus(`尚未找到已注册角色：${values.targetName}。请先完成角色注册。`, true);
     return;
   }
-  const originalText = button?.textContent;
-  if (button) {
-    button.disabled = true;
-    button.textContent = '生成中...';
-  }
-  setRegisterSkillStatus(`正在为 ${targetName} 生成初始技能／天赋...`);
+  beginRegistryOperation('skill', `正在为 ${targetName} 生成初始技能／天赋...`);
   try {
     const result = await runRegistrySkillInference(ctx, {
       targetName,
@@ -474,10 +573,7 @@ async function generateRegistrySkillSetup(ctx, button = null) {
     setRegisterSkillStatus(message, true);
     globalThis.toastr?.error?.(message, '[BS BioTracker]');
   } finally {
-    if (button) {
-      button.disabled = false;
-      button.textContent = originalText || '生成技能／天赋';
-    }
+    endRegistryOperation('skill');
   }
 }
 
@@ -520,7 +616,11 @@ function setWardrobePrepStatus(message, isError = false) {
   el.dataset.state = isError ? 'error' : 'normal';
 }
 
-async function runWardrobePrepInference(ctx, button = null) {
+async function runWardrobePrepInference(ctx) {
+  if (isRegistryOperationPending('wardrobe')) {
+    globalThis.toastr?.info?.('[BS BioTracker] 备装生成正在进行中，请等待完成');
+    return;
+  }
   const values = getRegisterFormValues();
   if (!values.targetName) {
     setWardrobePrepStatus('请先输入要备装的已注册角色名。', true);
@@ -539,12 +639,7 @@ async function runWardrobePrepInference(ctx, button = null) {
   const wardrobePrepPrompt = String(document.getElementById('bs-bt-wardrobe-prep-prompt')?.value || settings.wardrobePrepPrompt || '').trim();
   const wardrobePrepMainCount = Math.max(1, Math.min(12, Math.floor(Number(document.getElementById('bs-bt-wardrobe-prep-main-count')?.value || settings.wardrobePrepMainCount || 3))));
   const wardrobePrepAccessoryCount = Math.max(0, Math.min(12, Math.floor(Number(document.getElementById('bs-bt-wardrobe-prep-accessory-count')?.value || settings.wardrobePrepAccessoryCount || 3))));
-  const originalText = button?.textContent;
-  if (button) {
-    button.disabled = true;
-    button.textContent = '生成中...';
-  }
-  setWardrobePrepStatus(`正在为 ${targetName} 生成衣柜 JSON...`);
+  beginRegistryOperation('wardrobe', `正在为 ${targetName} 生成衣柜 JSON...`);
   try {
     const result = await runRegistryWardrobeInference(ctx, { ...values, customNotes: '', skillPrompt: '', targetName, wardrobePrepPrompt, wardrobePrepMainCount, wardrobePrepAccessoryCount });
     const editor = document.getElementById('bs-bt-wardrobe-prep-json');
@@ -557,10 +652,7 @@ async function runWardrobePrepInference(ctx, button = null) {
     setWardrobePrepStatus(message, true);
     globalThis.toastr?.error?.(message, '[BS BioTracker]');
   } finally {
-    if (button) {
-      button.disabled = false;
-      button.textContent = originalText || '生成备装';
-    }
+    endRegistryOperation('wardrobe');
   }
 }
 
@@ -645,7 +737,11 @@ function setDiaryStatus(message, isError = false) {
   node.dataset.kind = isError ? 'error' : 'normal';
 }
 
-async function generateRegistryDiary(ctx, button = null) {
+async function generateRegistryDiary(ctx) {
+  if (isRegistryOperationPending('diary')) {
+    globalThis.toastr?.info?.('[BS BioTracker] 日记生成正在进行中，请等待完成');
+    return;
+  }
   const values = getRegisterFormValues();
   if (!values.targetName) {
     setDiaryStatus('请先输入要写日记的已注册角色名。', true);
@@ -655,12 +751,7 @@ async function generateRegistryDiary(ctx, button = null) {
   const settings = getSettings(ctx);
   const requestedDate = String(document.getElementById('bs-bt-diary-date')?.value || '').trim();
   const diaryWritingPrompt = String(document.getElementById('bs-bt-diary-writing-prompt')?.value || settings.diaryWritingPrompt || '').trim();
-  const originalText = button?.textContent;
-  if (button) {
-    button.disabled = true;
-    button.textContent = '生成中...';
-  }
-  setDiaryStatus(`正在为 ${values.targetName} 生成日记...`);
+  beginRegistryOperation('diary', `正在为 ${values.targetName} 生成日记...`);
   try {
     const result = await runRegistryDiaryInference(ctx, { ...values, customNotes: '', skillPrompt: '', requestedDate, diaryWritingPrompt });
     const editor = document.getElementById('bs-bt-diary-result');
@@ -671,10 +762,7 @@ async function generateRegistryDiary(ctx, button = null) {
     setDiaryStatus(message, true);
     globalThis.toastr?.error?.(message, '[BS BioTracker]');
   } finally {
-    if (button) {
-      button.disabled = false;
-      button.textContent = originalText || '生成日记';
-    }
+    endRegistryOperation('diary');
   }
 }
 
@@ -2837,7 +2925,7 @@ function buildTrackCharacterViewModel(character) {
       name: definition.name,
       description: definition.description,
       label: getTalentLabel(talent),
-      requiredExp: Math.abs(Number(talent?.level)) >= 10 ? 0 : requiredExp(Math.max(1, Math.abs(Number(talent?.level) || 0))),
+      requiredExp: Math.abs(Number(talent?.level)) >= TALENT_MAX_LEVEL ? 0 : requiredExp(Math.max(1, Math.abs(Number(talent?.level) || 0))),
     };
   };
   const diaryEnabled = Math.max(0, Math.min(20, Math.floor(Number(runtimeSettings?.diaryRecentLimit) || 0))) > 0;
@@ -3218,26 +3306,100 @@ function renderTrackPregnancy(viewModel) {
   `;
 }
 
-function renderTrackExperience(viewModel) {
-  // 天赋只作为对应技能的右侧小标显示；有天赋无技能则不显示
+const SKILL_ROMAN_NUMERALS = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
+
+/** 技能等级用罗马数字表示；超出表格范围就退回阿拉伯数字，不至于渲染成空白 */
+function formatSkillLevelNumeral(level) {
+  const value = Math.max(0, Math.floor(Number(level) || 0));
+  return SKILL_ROMAN_NUMERALS[value] || String(value);
+}
+
+/**
+ * 罗马数字本身就是经验条：底部按经验比例填实，上半截留作淡色底。
+ * 这样一格里同时读得到等级与进度，不必再单独列出 exp 数字。
+ */
+function renderSkillLevelNumeral(numeral, fillPercent, uniqueKey) {
+  const clipId = `bsbt-skill-exp-${uniqueKey}`;
+  // 字数越多越要缩，否则 VIII 会撑出格子
+  const fontSize = numeral.length >= 4 ? 26 : (numeral.length === 3 ? 34 : 42);
+  const filled = Math.max(0, Math.min(100, Number(fillPercent) || 0));
+  const fillHeight = 60 * (filled / 100);
+  const text = (className) =>
+    `<text x="50" y="30" text-anchor="middle" dominant-baseline="central" font-size="${fontSize}" class="${className}">${escapeHtml(numeral)}</text>`;
+  return `<svg class="bs-bt-skill-tile-numeral" viewBox="0 0 100 60" role="img" aria-label="Lv${escapeHtml(numeral)}">
+    <defs><clipPath id="${escapeHtml(clipId)}"><rect x="0" y="${60 - fillHeight}" width="100" height="${fillHeight}"></rect></clipPath></defs>
+    ${text('bs-bt-skill-numeral-base')}
+    <g clip-path="url(#${escapeHtml(clipId)})">${text('bs-bt-skill-numeral-fill')}</g>
+  </svg>`;
+}
+
+/**
+ * 天赋用军衔式楔形层叠表示：楔形数量 = 等级，朝上为擅长、朝下为苦手。
+ * 天赋上限收到 ±5 之后数量落进「一眼可辨」的范围，不必再写成数字；
+ * 楔形也刻意跟罗马数字的「水位填充」区分开，免得两处视觉语言互相干扰。
+ */
+function renderTalentChevrons(talentLevel) {
+  const level = Math.max(-TALENT_MAX_LEVEL, Math.min(TALENT_MAX_LEVEL, Math.round(Number(talentLevel) || 0)));
+  if (!level) return '';
+  const count = Math.abs(level);
+  const pointsUp = level > 0;
+  const pitch = 3.2;
+  const depth = 2.4;
+  const height = (count - 1) * pitch + depth + 2;
+  const marks = [];
+  for (let index = 0; index < count; index += 1) {
+    const top = 1 + index * pitch;
+    const bottom = (top + depth).toFixed(1);
+    marks.push(pointsUp
+      ? `<polyline points="1.6,${bottom} 5,${top.toFixed(1)} 8.4,${bottom}"></polyline>`
+      : `<polyline points="1.6,${top.toFixed(1)} 5,${bottom} 8.4,${top.toFixed(1)}"></polyline>`);
+  }
+  return `<svg class="bs-bt-skill-tile-talent ${pointsUp ? 'is-positive' : 'is-negative'}" viewBox="0 0 10 ${height.toFixed(1)}" aria-hidden="true">${marks.join('')}</svg>`;
+}
+
+/**
+ * 技能改为方格墙：一行三格，满了自动换行，一次看得到全部技能。
+ * 原本走通用轮播一次只显示一张卡，翻页看完既慢也比不出彼此高低。
+ */
+function renderTrackSkillSection(viewModel) {
+  // 天赋只作为对应技能格右上角的楔形角标；有天赋无技能则不显示
   const talentBySkillId = new Map(
     (Array.isArray(viewModel.experience.talents) ? viewModel.experience.talents : [])
       .filter((talent) => Number(talent?.level) !== 0)
       .map((talent) => [Number(talent?.skillId), talent]),
   );
-  const renderSkillCard = (item) => {
+  const skills = Array.isArray(viewModel.experience.skills) ? viewModel.experience.skills : [];
+  if (skills.length === 0) {
+    return `
+      <div class="bs-bt-track-section">
+        <div class="bs-bt-track-section-title">${renderTrackTitle('技能')}</div>
+        <div class="bs-bt-track-card-empty">当前无技能记录</div>
+      </div>
+    `;
+  }
+  const tiles = skills.map((item, index) => {
     const talent = talentBySkillId.get(Number(item?.skillId));
-    const talentBadge = talent ? `<span class="bs-bt-track-tag bs-bt-track-talent-tag">${escapeHtml(talent.label)}</span>` : '';
+    const talentLevel = Number(talent?.level) || 0;
     const maxed = !item?.requiredExp;
     const fillPercent = maxed ? 100 : Math.max(0, Math.min(100, (Number(item?.exp) || 0) / Number(item.requiredExp) * 100));
-    return `<div class="bs-bt-track-card">
-      <div class="bs-bt-track-card-title bs-bt-track-card-title--split"><span>${escapeHtml(item?.name || '未命名技能')} · Lv${escapeHtml(formatIntegerDisplay(item?.level))}</span>${talentBadge}</div>
-      <div class="bs-bt-track-progress">
-        <div class="bs-bt-track-progress-head"><span>EXP</span><span>${escapeHtml(maxed ? 'MAX' : `${item.exp}/${item.requiredExp}`)}</span></div>
-        <div class="bs-bt-track-progress-bar"><div class="bs-bt-track-progress-fill" style="width:${fillPercent}%;"></div></div>
-      </div>
+    const uniqueKey = `${index}-${Number(item?.skillId) || 0}`;
+    // 不挂 title：浏览器原生气泡会从复古机身里弹出来，破坏沉浸感。
+    // 等级看罗马数字、经验看填色高度、天赋看楔形，格子本身已经说完了。
+    return `<div class="bs-bt-skill-tile${maxed ? ' is-maxed' : ''}">
+      ${renderTalentChevrons(talentLevel)}
+      ${renderSkillLevelNumeral(formatSkillLevelNumeral(item?.level), fillPercent, uniqueKey)}
+      <span class="bs-bt-skill-tile-name">${escapeHtml(item?.name || '未命名技能')}</span>
     </div>`;
-  };
+  }).join('');
+  return `
+    <div class="bs-bt-track-section">
+      <div class="bs-bt-track-section-title">${renderTrackTitle('技能')}</div>
+      <div class="bs-bt-skill-grid">${tiles}</div>
+    </div>
+  `;
+}
+
+function renderTrackExperience(viewModel) {
   return `
     <div class="bs-bt-track-section">
       <div class="bs-bt-track-section-title">经历记录</div>
@@ -3250,13 +3412,7 @@ function renderTrackExperience(viewModel) {
       .join('')}
       </div>
     </div>
-    ${renderCardCarouselSection(
-      '技能',
-      viewModel.experience.skills,
-      renderSkillCard,
-      '当前无技能记录',
-      'skills',
-    )}
+    ${renderTrackSkillSection(viewModel)}
     ${renderCardCarouselSection(
       '孩子记录',
         viewModel.experience.children,
@@ -4197,16 +4353,13 @@ function renderStatusPanel(ctx) {
     node.addEventListener('click', () => {
       const kind = String(node.getAttribute('data-card-nav') || '').trim();
       const step = Number(node.getAttribute('data-card-step') || 0);
-      if (!kind || !step) return;
-      let items = [];
-      if (kind === 'sperms') items = Array.isArray(viewModel?.pregnancy?.sperms) ? viewModel.pregnancy.sperms : [];
-      if (kind === 'fetuses') items = Array.isArray(viewModel?.pregnancy?.fetuses) ? viewModel.pregnancy.fetuses : [];
-      if (kind === 'children') items = Array.isArray(viewModel?.experience?.children) ? viewModel.experience.children : [];
-      if (kind === 'diary') items = Array.isArray(viewModel?.diary?.entries) ? viewModel.diary.entries : [];
-      if (items.length <= 1) return;
-      const currentIndex = getTrackCardIndex(kind, items.length);
-      const nextIndex = (currentIndex + step + items.length) % items.length;
-      setTrackCardIndex(kind, nextIndex, items.length);
+      // 直接用按钮上的 data-card-count，不再按 kind 逐一映射回 viewModel：
+      // 旧写法漏掉一种 kind，那一组的左右切换就会静默失效。
+      const count = Number(node.getAttribute('data-card-count') || 0);
+      if (!kind || !step || !Number.isFinite(count) || count <= 1) return;
+      const currentIndex = getTrackCardIndex(kind, count);
+      const nextIndex = (currentIndex + step + count) % count;
+      setTrackCardIndex(kind, nextIndex, count);
       renderStatusPanel(ctx);
     }),
   );
@@ -4505,7 +4658,9 @@ function validateManualCharacterState(next, currentName) {
     if (current !== undefined && (typeof current !== 'number' || !Number.isFinite(current))) errors.push(`${path.join('.')} 必须是有限数字。`);
   }
 
-  if (typeof profile.base?.days === 'number' && profile.base.days < 1) errors.push('profile.base.days 必须大于等于 1。');
+  // base.days 是阶段内的 0 基天数：注册与每次阶段切换都会重置成 0，界面再按「第 N+1 天」显示。
+  // 旧规则要求 >= 1，导致刚切换排卵周期（days=0）的角色一改变量就被判为非法。
+  if (typeof profile.base?.days === 'number' && profile.base.days < 0) errors.push('profile.base.days 不能是负数。');
   if (typeof profile.base?.vitalityLevel === 'number' && (profile.base.vitalityLevel < 1 || profile.base.vitalityLevel > 7)) errors.push('profile.base.vitalityLevel 必须在 1 到 7 之间。');
   if (typeof profile.base?.psyStressLevel === 'number' && (profile.base.psyStressLevel < 1 || profile.base.psyStressLevel > 7)) errors.push('profile.base.psyStressLevel 必须在 1 到 7 之间。');
 
@@ -4666,7 +4821,7 @@ function renderFetalTalentDebugEditor(chatState, character) {
       <label class="bs-bt-track-debug-field"><span class="bs-bt-track-debug-label">胎儿</span><select id="bs-bt-debug-fetal-talent-fetus" class="text_pole">${fetusOptions}</select></label>
       <label class="bs-bt-track-debug-field"><span class="bs-bt-track-debug-label">天赋</span><select id="bs-bt-debug-fetal-talent-skill" class="text_pole">${skillOptions}</select></label>
       <div class="bs-bt-fetal-talent-values">
-        <label class="bs-bt-track-debug-field"><span class="bs-bt-track-debug-label">Lv（负数为苦手）</span><input id="bs-bt-debug-fetal-talent-level" class="text_pole" type="number" min="-10" max="10" step="1" value="${escapeHtml(selection.talent?.level ?? 0)}"></label>
+        <label class="bs-bt-track-debug-field"><span class="bs-bt-track-debug-label">Lv（负数为苦手）</span><input id="bs-bt-debug-fetal-talent-level" class="text_pole" type="number" min="-${TALENT_MAX_LEVEL}" max="${TALENT_MAX_LEVEL}" step="1" value="${escapeHtml(selection.talent?.level ?? 0)}"></label>
         <label class="bs-bt-track-debug-field"><span class="bs-bt-track-debug-label">EXP（正擅长／负苦手）</span><input id="bs-bt-debug-fetal-talent-exp" class="text_pole" type="number" min="-1000000" max="1000000" step="1" value="${escapeHtml(selection.talent?.exp ?? 0)}"></label>
       </div>
       <div class="bs-bt-fetal-talent-actions">
@@ -4697,7 +4852,7 @@ function applyFetalTalentDebugChange(ctx, action) {
   } else {
     const level = Number(document.getElementById('bs-bt-debug-fetal-talent-level')?.value);
     const exp = Number(document.getElementById('bs-bt-debug-fetal-talent-exp')?.value);
-    if (!Number.isInteger(level) || level < -10 || level > 10) throw new Error('天赋等级必须是 -10 到 10 的整数。');
+    if (!Number.isInteger(level) || level < -TALENT_MAX_LEVEL || level > TALENT_MAX_LEVEL) throw new Error(`天赋等级必须是 -${TALENT_MAX_LEVEL} 到 ${TALENT_MAX_LEVEL} 的整数。`);
     if (!Number.isInteger(exp) || exp < -1000000 || exp > 1000000) throw new Error('天赋 EXP 必须是范围内的整数。');
     const normalized = normalizeTalentList([{ skillId: definition.id, level, exp }])[0];
     if (!normalized) throw new Error('无法建立天赋资料。');
@@ -4910,6 +5065,7 @@ function applySettingsToForm(ctx) {
   setValue('bs-bt-formatted-output-v4', settings.formattedOutputV4 !== false);
   setValue('bs-bt-trigger', settings.triggerTiming);
   setValue('bs-bt-poll-ms', settings.pollMs);
+  setValue('bs-bt-api-timeout-sec', Math.round((Number(settings.apiTimeoutMs) || 0) / 1000));
   setValue('bs-bt-context-size', settings.contextSize);
   setValue('bs-bt-tracker-token-budget', settings.trackerTokenBudget);
   setValue('bs-bt-require-full-description-updates', settings.requireFullDescriptionUpdates);
@@ -4928,13 +5084,7 @@ function applySettingsToForm(ctx) {
   setValue('bs-bt-wardrobe-prep-accessory-count', settings.wardrobePrepAccessoryCount);
   populateModelList(settings);
   setConnectStatus(settings.modelOptions.length > 0 ? `已缓存 ${settings.modelOptions.length} 个模型` : '尚未连接');
-  registryBreedingInferenceDraft = null;
-  setRegisterTab('inference');
-  setBreedingInferenceEditor('尚未执行繁育推演。直接注册不会生成繁育心理人设。');
-  setBreedingInferenceStatus('');
-  setWardrobePrepStatus('角色必须已注册，才能准备衣柜与当前穿着。');
-  setDiaryStatus('角色必须已注册，且同一故事日尚未写过日记。');
-  setRegisterStatus('输入名字与 Description 规则后发送注册请求，完成后可在“角色追踪”查看该角色状态变量。');
+  syncRegisterPageOnOpen(ctx);
   syncWorldbookFilterInput(ctx);
   renderWorldbookEntryList(ctx, parseWorldbookExcludeNamesInput(settings.trackerWorldbookExcludeNames));
   renderWorldbookEntryList(ctx, [], { scope: 'global' });
@@ -5493,6 +5643,11 @@ function readSettingsFromForm(ctx) {
   if (formattedOutputToggle) settings.formattedOutputV4 = Boolean(formattedOutputToggle.checked);
   settings.triggerTiming = String(getValue('bs-bt-trigger')).trim() || 'after_ai';
   settings.pollMs = Math.max(800, Number(getValue('bs-bt-poll-ms')) || 1800);
+  const rawApiTimeoutSec = String(getValue('bs-bt-api-timeout-sec')).trim();
+  const apiTimeoutSec = rawApiTimeoutSec === '' ? NaN : Number(rawApiTimeoutSec);
+  settings.apiTimeoutMs = !Number.isFinite(apiTimeoutSec)
+    ? 180000
+    : (apiTimeoutSec <= 0 ? 0 : Math.max(1, Math.min(1800, Math.floor(apiTimeoutSec))) * 1000);
   settings.contextSize = Math.max(2, Number(getValue('bs-bt-context-size')) || 12);
   settings.trackerTokenBudget = Math.max(500, Math.min(100000, Math.floor(Number(getValue('bs-bt-tracker-token-budget')) || 4096)));
   settings.requireFullDescriptionUpdates = Boolean(document.getElementById('bs-bt-require-full-description-updates')?.checked);
@@ -6290,7 +6445,7 @@ async function ensureModal(ctx) {
       setStatus(String(error?.message || error), true);
     }
   });
-  document.getElementById('bs-bt-register-skill-generate')?.addEventListener('click', (event) => generateRegistrySkillSetup(ctx, event.currentTarget));
+  document.getElementById('bs-bt-register-skill-generate')?.addEventListener('click', () => generateRegistrySkillSetup(ctx));
   document.getElementById('bs-bt-register-skill-write')?.addEventListener('click', () => writeRegistrySkillSetup(ctx));
   document.getElementById('bs-bt-register-source')?.addEventListener('change', () => syncRegisterChildSourceFields(ctx));
   document.querySelectorAll('#bs-bt-encyclopedia-tabs [data-encyclopedia-tab]').forEach((node) => {
@@ -6301,12 +6456,15 @@ async function ensureModal(ctx) {
       scrollEncyclopediaToTop();
     });
   });
-  document.getElementById('bs-bt-wardrobe-prep-run')?.addEventListener('click', (event) => runWardrobePrepInference(ctx, event.currentTarget));
+  document.getElementById('bs-bt-wardrobe-prep-run')?.addEventListener('click', () => runWardrobePrepInference(ctx));
   document.getElementById('bs-bt-wardrobe-prep-apply')?.addEventListener('click', () => applyWardrobePrep(ctx));
-  document.getElementById('bs-bt-diary-generate')?.addEventListener('click', (event) => generateRegistryDiary(ctx, event.currentTarget));
+  document.getElementById('bs-bt-diary-generate')?.addEventListener('click', () => generateRegistryDiary(ctx));
   document.getElementById('bs-bt-diary-apply')?.addEventListener('click', () => applyRegistryDiary(ctx));
-  document.getElementById('bs-bt-breeding-inference-run')?.addEventListener('click', async (event) => {
-    const button = event.currentTarget;
+  document.getElementById('bs-bt-breeding-inference-run')?.addEventListener('click', async () => {
+    if (isRegistryOperationPending('inference')) {
+      globalThis.toastr?.info?.('[BS BioTracker] 繁育推演正在进行中，请等待完成');
+      return;
+    }
     const values = { ...getRegisterFormValues(), customNotes: '', skillPrompt: '' };
     if (!values.targetName) {
       setBreedingInferenceStatus('请先输入要推演的角色名。', true);
@@ -6314,13 +6472,12 @@ async function ensureModal(ctx) {
       return;
     }
     readSettingsFromForm(ctx);
-    button.disabled = true;
-    button.textContent = '推演中...';
-    setBreedingInferenceStatus(`正在推演 ${values.targetName} 的繁育心理...`);
+    beginRegistryOperation('inference', `正在推演 ${values.targetName} 的繁育心理...`);
     try {
       const result = await runRegistryBreedingInference(ctx, values);
       registryBreedingInferenceDraft = {
         ...values,
+        chatKey: getChatKey(ctx),
         result,
       };
       setBreedingInferenceEditor(formatBreedingInferencePreview(result));
@@ -6333,8 +6490,7 @@ async function ensureModal(ctx) {
       setBreedingInferenceStatus(message, true);
       globalThis.toastr?.error?.(message, '[BS BioTracker]');
     } finally {
-      button.disabled = false;
-      button.textContent = '繁育推演';
+      endRegistryOperation('inference');
     }
   });
   document.getElementById('bs-bt-breeding-inference-apply')?.addEventListener('click', () => {
@@ -6384,6 +6540,11 @@ async function ensureModal(ctx) {
     }
   });
   document.getElementById('bs-bt-register-run')?.addEventListener('click', async () => {
+    // 注册没有节流会重复发送：小手机关掉再打开时按钮看似可点，实际上上一轮还在跑
+    if (isRegistryOperationPending('register')) {
+      globalThis.toastr?.info?.('[BS BioTracker] 注册请求正在进行中，请等待完成');
+      return;
+    }
     const { targetName, declaredRace, customNotes, sourceChild } = getRegisterFormValues();
     if (!targetName) {
       setRegisterStatus('请先输入要注册的角色名。', true);
@@ -6401,7 +6562,7 @@ async function ensureModal(ctx) {
       globalThis.toastr?.error?.(message, '[BS BioTracker]');
       return;
     }
-    setRegisterStatus(breedingInference
+    beginRegistryOperation('register', breedingInference
       ? `正在使用繁育推演注册 ${targetName}...`
       : `正在注册 ${targetName}...`);
     try {
@@ -6411,6 +6572,8 @@ async function ensureModal(ctx) {
       renderSkillCatalogPage(ctx);
       renderRegisterChildSourceOptions(ctx);
       updateMainFlowPrompt(ctx);
+      // 角色已经注册进去了，这份推演草稿才算用完，可以清空
+      clearBreedingInferenceDraftFor(character.name);
       setRegisterStatus(breedingInference
         ? `注册完成：${character.name}（已套用繁育推演）。可继续备装或写日记。`
         : `注册完成：${character.name}。可继续备装或写日记。`);
@@ -6420,6 +6583,8 @@ async function ensureModal(ctx) {
       const message = String(error?.message || error);
       setRegisterStatus(message, true);
       globalThis.toastr?.error?.(message, '[BS BioTracker]');
+    } finally {
+      endRegistryOperation('register');
     }
   });
   document.querySelector('#bs-bt-view-register .bs-bt-race-picker-wrap')?.addEventListener('click', (event) => {

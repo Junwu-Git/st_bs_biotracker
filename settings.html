@@ -191,6 +191,11 @@
             </div>
 
             <div class="settings_section">
+              <label for="bs-bt-api-timeout-sec">请求超时（秒，0 = 不限制）</label>
+              <input id="bs-bt-api-timeout-sec" class="text_pole" type="number" min="0" max="1800" step="10" />
+            </div>
+
+            <div class="settings_section">
               <label for="bs-bt-context-size">送入分析的最近消息数</label>
               <input id="bs-bt-context-size" class="text_pole" type="number" min="2" step="1" />
             </div>

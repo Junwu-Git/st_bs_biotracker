@@ -1,5 +1,5 @@
 export const SKILL_MAX_LEVEL = 10;
-export const TALENT_MAX_LEVEL = 10;
+export const TALENT_MAX_LEVEL = 5;
 export const SKILL_HISTORY_LIMIT = 100;
 
 const MAX_NAME_LENGTH = 80;

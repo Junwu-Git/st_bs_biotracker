@@ -122,6 +122,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   formattedOutputV4: true,
   triggerTiming: 'after_ai',
   pollMs: 1800,
+  apiTimeoutMs: 180000,
   contextSize: 12,
   trackerTokenBudget: 4096,
   requireFullDescriptionUpdates: false,
@@ -1055,6 +1056,14 @@ export function getSettings(ctx) {
   const diaryRecentLimit = Math.max(0, Math.min(20, Math.floor(Number.isFinite(rawDiaryRecentLimit) ? rawDiaryRecentLimit : DEFAULT_SETTINGS.diaryRecentLimit)));
   if (settings.diaryRecentLimit !== diaryRecentLimit) {
     settings.diaryRecentLimit = diaryRecentLimit;
+    shouldSave = true;
+  }
+  const rawApiTimeoutMs = Number(settings.apiTimeoutMs);
+  const apiTimeoutMs = !Number.isFinite(rawApiTimeoutMs)
+    ? DEFAULT_SETTINGS.apiTimeoutMs
+    : (rawApiTimeoutMs <= 0 ? 0 : Math.max(1000, Math.min(1800000, Math.floor(rawApiTimeoutMs))));
+  if (settings.apiTimeoutMs !== apiTimeoutMs) {
+    settings.apiTimeoutMs = apiTimeoutMs;
     shouldSave = true;
   }
   const rawTrackerTokenBudget = Number(settings.trackerTokenBudget);

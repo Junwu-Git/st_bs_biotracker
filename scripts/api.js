@@ -108,12 +108,64 @@ function shouldFallbackFromHostProxy(responseText, status) {
     || /cannot\s+post|not\s+found|no\s+route|ENOENT/i.test(String(responseText || ''));
 }
 
+export const DEFAULT_API_TIMEOUT_MS = 180000;
+export const API_TIMEOUT_MIN_MS = 1000;
+export const API_TIMEOUT_MAX_MS = 1800000;
+const API_TIMEOUT_MARKER = '__bs_biotracker_timeout__';
+
+/** 请求超时（毫秒）：0 或负值表示不限制 */
+export function resolveApiTimeoutMs(settings) {
+  const raw = Number(settings?.apiTimeoutMs);
+  if (!Number.isFinite(raw)) return DEFAULT_API_TIMEOUT_MS;
+  if (raw <= 0) return 0;
+  return Math.max(API_TIMEOUT_MIN_MS, Math.min(API_TIMEOUT_MAX_MS, Math.floor(raw)));
+}
+
+/** 模型列表只是探测请求，不需要等满整个追踪超时 */
+function resolveModelListTimeoutMs(settings) {
+  const limit = resolveApiTimeoutMs(settings);
+  if (limit <= 0) return 60000;
+  return Math.min(limit, 60000);
+}
+
+export function isApiTimeoutError(error) {
+  return error?.[API_TIMEOUT_MARKER] === true;
+}
+
+function createApiTimeoutError(timeoutMs) {
+  const error = new Error(`请求超过 ${Math.round(timeoutMs / 1000)} 秒未响应，已自动终止。可在设置中调整「请求超时」。`);
+  error[API_TIMEOUT_MARKER] = true;
+  return error;
+}
+
 async function fetchText(url, options = {}) {
-  const response = await fetch(url, options);
-  const responseText = await response.text().catch((error) => (
-    `[failed to read response text: ${String(error?.message || error)}]`
-  ));
-  return { response, responseText };
+  const { timeoutMs, ...fetchOptions } = options;
+  const limitMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : 0;
+  let controller = null;
+  let timer = null;
+  let timedOut = false;
+  if (limitMs > 0 && typeof AbortController === 'function') {
+    controller = new AbortController();
+    fetchOptions.signal = controller.signal;
+    timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        controller.abort();
+      } catch {}
+    }, limitMs);
+  }
+  try {
+    const response = await fetch(url, fetchOptions);
+    const responseText = await response.text().catch((error) => (
+      `[failed to read response text: ${String(error?.message || error)}]`
+    ));
+    return { response, responseText };
+  } catch (error) {
+    if (timedOut) throw createApiTimeoutError(limitMs);
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function requestHostProxyModelList(apiBase, settings) {
@@ -122,6 +174,7 @@ async function requestHostProxyModelList(apiBase, settings) {
     headers: getHostProxyHeaders(),
     body: JSON.stringify(buildHostProxyConfig(apiBase, settings)),
     cache: 'no-cache',
+    timeoutMs: resolveModelListTimeoutMs(settings),
   });
 }
 
@@ -148,6 +201,7 @@ async function requestHostProxyChatCompletion(apiBase, settings, requestBody) {
     headers: getHostProxyHeaders(),
     body: JSON.stringify(proxyBody),
     cache: 'no-cache',
+    timeoutMs: resolveApiTimeoutMs(settings),
   });
 }
 
@@ -172,6 +226,8 @@ function sleepMs(ms) {
 }
 
 function isNonRetriableApiError(error) {
+  // 超时已经等满一整轮，立刻重试只会把卡住的时间乘上重试次数
+  if (isApiTimeoutError(error)) return true;
   const message = String(error?.message || error || '');
   // 配置/鉴权类错误重试无意义
   return /请先填写|尚未配置|API URL 或模型名称|401|403|Unauthorized|invalid.?api.?key|Incorrect API key/i.test(message);
@@ -542,6 +598,8 @@ async function requestChatCompletion(apiBase, settings, body) {
         } catch (error) {
           proxyError = error;
           logApiDebug(`proxy_error:${attempt}`, { proxyError: error });
+          // 代理已经等满超时，直连只会再卡一次同样的时长
+          if (isApiTimeoutError(error)) throw error;
         }
         if (proxyError || (!response.ok && shouldFallbackFromHostProxy(responseText, response.status))) {
           transport = proxyError ? 'direct-after-proxy-error' : `direct-after-proxy-${response.status}`;
@@ -549,6 +607,7 @@ async function requestChatCompletion(apiBase, settings, body) {
             method: 'POST',
             headers: getAuthHeaders(settings),
             body: requestText,
+            timeoutMs: resolveApiTimeoutMs(settings),
           }));
         }
       } else {
@@ -556,6 +615,7 @@ async function requestChatCompletion(apiBase, settings, body) {
           method: 'POST',
           headers: getAuthHeaders(settings),
           body: requestText,
+          timeoutMs: resolveApiTimeoutMs(settings),
         }));
       }
       globalThis[DEBUG_LAST_API_RESPONSE_KEY] = {
@@ -585,6 +645,7 @@ async function requestChatCompletion(apiBase, settings, body) {
         requestText,
         error,
       });
+      if (isApiTimeoutError(error)) throw error;
       throw new Error(`无法连接到 API。请检查 Base URL、API Key、服务是否启动；浏览器环境会优先通过酒馆后端代理。原始错误: ${String(error?.message || error)}`);
     } finally {
       globalThis.__bs_biotracker_async_request__ = previousAsyncFlag;
@@ -667,10 +728,10 @@ export async function fetchModelList(settings) {
       }
       if (proxyError || (!response.ok && shouldFallbackFromHostProxy(responseText, response.status))) {
         transport = proxyError ? 'direct-after-proxy-error' : `direct-after-proxy-${response.status}`;
-        ({ response, responseText } = await fetchText(url, { method: 'GET', headers: getAuthHeaders(settings) }));
+        ({ response, responseText } = await fetchText(url, { method: 'GET', headers: getAuthHeaders(settings), timeoutMs: resolveModelListTimeoutMs(settings) }));
       }
     } else {
-      ({ response, responseText } = await fetchText(url, { method: 'GET', headers: getAuthHeaders(settings) }));
+      ({ response, responseText } = await fetchText(url, { method: 'GET', headers: getAuthHeaders(settings), timeoutMs: resolveModelListTimeoutMs(settings) }));
     }
   } catch (error) {
     throw new Error(`模型列表连接失败（${transport}）。请检查 Base URL / API Key；也可手动填写模型名称后直接使用追踪/注册。原始错误: ${String(error?.message || error)}`);

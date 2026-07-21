@@ -1,4 +1,4 @@
-import { callOpenAICompatible } from './api.js';
+import { callOpenAICompatible, resolveApiTimeoutMs } from './api.js';
 import { buildMainFlowStatePrompt, buildTrackerSystemPrompt } from './tracker_prompt_context.js';
 import { DEFAULT_WEAR_STATE, sanitizeWearState } from './wardrobe_config.js';
 import { applyToolCallsResult, TOOL_DEFINITIONS } from './tools.js';
@@ -34,11 +34,31 @@ import { canLoadHostWorldInfo, getHostAgentRunBarrier, getHostChat, getHostKind,
 
 export const POLL_RUNTIME_KEY = '__bs_biotracker_poll__';
 export const RUN_RUNTIME_KEY = '__bs_biotracker_running__';
+export const RUN_STARTED_AT_KEY = '__bs_biotracker_running_started_at__';
+/** 单条消息之外的准备工作（世界书、宿主上下文）也算在看门狗里，留一段余量 */
+const RUN_WATCHDOG_MARGIN_MS = 120000;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const AFTER_AI_SETTLE_MS = 1400;
 const MAINFLOW_CONTEXT_SNAPSHOT_KEY = '__bs_biotracker_mainflow_context_snapshot__';
 const DEBUG_LAST_TRACKER_REQUEST_KEY = '__bs_biotracker_debug_last_tracker_request__';
 const DEBUG_LAST_TRACKER_RESULT_KEY = '__bs_biotracker_debug_last_tracker_result__';
+
+/** 心跳：每处理完一条消息就刷新，避免长队列被看门狗误判为卡死 */
+function markTrackerRunProgress() {
+  globalThis[RUN_STARTED_AT_KEY] = Date.now();
+}
+
+/**
+ * 看门狗：请求若因为宿主代理挂起而永不返回，运行锁会一直留在 true，
+ * 之后所有手动/自动分析都会被 already_running 挡掉。超过单轮超时上限即视为死锁并放行。
+ */
+function isTrackerRunStale(settings) {
+  const startedAt = Number(globalThis[RUN_STARTED_AT_KEY]);
+  if (!Number.isFinite(startedAt) || startedAt <= 0) return true;
+  const timeoutMs = resolveApiTimeoutMs(settings);
+  const limitMs = (timeoutMs > 0 ? timeoutMs : 600000) + RUN_WATCHDOG_MARGIN_MS;
+  return Date.now() - startedAt > limitMs;
+}
 
 function getTrackerResumeIndexes(ctx, settings) {
   const chatKey = getChatKey(ctx);
@@ -834,14 +854,18 @@ export async function runTracker(ctx, deps, reason = 'manual') {
     return { skipped: true, reason: 'empty_chat' };
   }
   if (globalThis[RUN_RUNTIME_KEY]) {
-    chatState.lastRawResult = {
-      message: '已有一轮追踪请求正在执行，本次请求未重复发送。',
-      tool_calls: [],
-    };
-    chatState.lastOperationLogs = [];
-    saveSettings(ctx);
-    deps.renderStatusPanel(ctx);
-    return { skipped: true, reason: 'already_running' };
+    if (!isTrackerRunStale(settings)) {
+      chatState.lastRawResult = {
+        message: '已有一轮追踪请求正在执行，本次请求未重复发送。',
+        tool_calls: [],
+      };
+      chatState.lastOperationLogs = [];
+      saveSettings(ctx);
+      deps.renderStatusPanel(ctx);
+      return { skipped: true, reason: 'already_running' };
+    }
+    console.warn('[BS BioTracker] 上一轮追踪已超时未结束，强制释放运行锁');
+    globalThis[RUN_RUNTIME_KEY] = null;
   }
   if (registeredTargets.length === 0) {
     chatState.lastRawResult = {
@@ -896,12 +920,15 @@ export async function runTracker(ctx, deps, reason = 'manual') {
   if (reason === 'poll' && isFailedAutoRetryBlocked(ctx, chatState)) {
     return { skipped: true, reason: 'failed_message_blocked' };
   }
-  globalThis[RUN_RUNTIME_KEY] = true;
+  const runToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  globalThis[RUN_RUNTIME_KEY] = runToken;
+  markTrackerRunProgress();
   try {
     const { nextMessageIndex } =
       reason === 'manual' ? prepareManualReplay(ctx, chatState, chat.length) : reconcileChatStateSnapshots(ctx, chatState);
     let processedCount = 0;
     for (let index = nextMessageIndex; index < chat.length; index += 1) {
+      markTrackerRunProgress();
       await processTrackerMessage(ctx, settings, chatState, deps, reason, index);
       processedCount += 1;
     }
@@ -929,7 +956,11 @@ export async function runTracker(ctx, deps, reason = 'manual') {
     globalThis.toastr?.error?.(String(error?.message || error), '[BS BioTracker]');
     throw error;
   } finally {
-    globalThis[RUN_RUNTIME_KEY] = false;
+    // 被看门狗判死的旧轮次可能在新一轮开始后才走到这里，不能清掉别人的锁
+    if (globalThis[RUN_RUNTIME_KEY] === runToken) {
+      globalThis[RUN_RUNTIME_KEY] = null;
+      globalThis[RUN_STARTED_AT_KEY] = 0;
+    }
   }
 }
 
