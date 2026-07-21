@@ -79,8 +79,34 @@ test('the skill tile grid has its own styling', () => {
   }
   // 一行三格，格子多时列表内部滚动，不撑开整个手机屏
   assert.match(css, /\.bs-bt-skill-grid \{[\s\S]*?grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)[\s\S]*?max-height:[\s\S]*?overflow-y: auto/);
-  // 罗马数字要压过主题字体拿到衬线，必须直接命中 text 元素
-  assert.ok(css.includes('#bs-biotracker-settings .bs-bt-skill-tile-numeral text {'), '罗马数字缺少衬线字体规则');
+  assert.ok(css.includes('#bs-biotracker-settings .bs-bt-skill-tile-numeral text {'), '罗马数字缺少文字规则');
+});
+
+test('numerals follow each theme font instead of being forced to serif', () => {
+  // 不再维护「有衬线／无衬线」主题名单，也不再写死字体
+  assert.doesNotMatch(css, /--bsbt-font-numeral/, '不应再有独立的数字字体变量');
+  const rule = css.match(/\.bs-bt-skill-tile-numeral text \{[\s\S]*?\n\}/)?.[0] || '';
+  assert.ok(rule.length > 0, '找不到罗马数字的文字规则');
+  assert.doesNotMatch(rule, /font-family/, '数字字体应直接继承主题');
+
+  // 无衬线主题的大写 I 是光杆竖线，靠字距拉开才分得出 II 与 III。
+  // 必须用 em：fitSkillNumerals 改 font-size 时字距要跟着缩放。
+  assert.match(rule, /letter-spacing: 0\.16em/);
+});
+
+test('numerals are auto-fitted to the tile after render', () => {
+  const fit = controller.match(/function fitSkillNumerals\(root\) \{[\s\S]*?\n\}/)?.[0] || '';
+  assert.ok(fit.length > 0, '找不到自动缩放函数');
+  // 宽高都要收进 viewBox，取较小的缩放比
+  assert.match(fit, /Math\.min\(SKILL_NUMERAL_FIT_WIDTH \/ box\.width, SKILL_NUMERAL_FIT_HEIGHT \/ box\.height\)/);
+  // 缩放后要重新水平居中：字距会在末字后留一份空隙
+  assert.match(fit, /const nextX = 50 \+ \(50 - \(fitted\.x \+ fitted\.width \/ 2\)\)/);
+  // 元素不可见时 getBBox 量不到，必须安全跳过而不是抛错
+  assert.match(fit, /try \{[\s\S]*?getBBox\(\)[\s\S]*?\} catch \{[\s\S]*?return;/);
+
+  // 渲染后与打开面板时都要跑一次（面板隐藏时量不到）
+  assert.match(controller, /content\.innerHTML = renderTrackCharacterContent\(viewModel\);\n  fitSkillNumerals\(content\);/);
+  assert.match(controller, /ensureModalPosition\(modal\);[\s\S]{0,120}fitSkillNumerals\(modal\);/);
 });
 
 test('talent range is narrowed to +/-5 everywhere', async () => {

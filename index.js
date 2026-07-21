@@ -3320,8 +3320,9 @@ function formatSkillLevelNumeral(level) {
  */
 function renderSkillLevelNumeral(numeral, fillPercent, uniqueKey) {
   const clipId = `bsbt-skill-exp-${uniqueKey}`;
-  // 字数越多越要缩，否则 VIII 会撑出格子
-  const fontSize = numeral.length >= 4 ? 26 : (numeral.length === 3 ? 34 : 42);
+  // 保底字号：按最宽的主题字体（Courier）算，保证不撑出格子。
+  // 渲染后 fitSkillNumerals 会再按实际字形放大到填满，窄字体因此也能长到最大。
+  const fontSize = numeral.length >= 4 ? 36 : (numeral.length === 3 ? 48 : 52);
   const filled = Math.max(0, Math.min(100, Number(fillPercent) || 0));
   const fillHeight = 60 * (filled / 100);
   const text = (className) =>
@@ -3331,6 +3332,54 @@ function renderSkillLevelNumeral(numeral, fillPercent, uniqueKey) {
     ${text('bs-bt-skill-numeral-base')}
     <g clip-path="url(#${escapeHtml(clipId)})">${text('bs-bt-skill-numeral-fill')}</g>
   </svg>`;
+}
+
+// 罗马数字在 100x60 的 viewBox 里要占到的比例，四周留一点呼吸
+const SKILL_NUMERAL_FIT_WIDTH = 86;
+const SKILL_NUMERAL_FIT_HEIGHT = 46;
+const SKILL_NUMERAL_MIN_SIZE = 20;
+const SKILL_NUMERAL_MAX_SIZE = 96;
+
+/**
+ * 把罗马数字按实际字形放大到填满格子。
+ *
+ * 各主题字体宽窄差很多：同样 font-size 下 Courier 的 III 占 61/100 单位，
+ * 无衬线字体只占 28/100。写死字号的话，窄字体不但显小，三根竖线的间隙也只有 2px，
+ * II 与 III 难以分辨。按实测字形缩放后间隙能到 7~13px，各主题都能用自己的字体。
+ *
+ * 元素不可见时 getBBox 量不到（返回 0 或抛错），此时保留保底字号，
+ * 等下次在可见状态下渲染或打开面板时再补上。
+ */
+function fitSkillNumerals(root) {
+  const scope = root && typeof root.querySelectorAll === 'function' ? root : document;
+  scope.querySelectorAll('.bs-bt-skill-tile-numeral').forEach((svg) => {
+    const texts = [...svg.querySelectorAll('text')];
+    if (texts.length === 0) return;
+    const baseSize = Number(texts[0].getAttribute('font-size'));
+    if (!Number.isFinite(baseSize) || baseSize <= 0) return;
+    let box;
+    try {
+      box = texts[0].getBBox();
+    } catch {
+      return;
+    }
+    if (!box || !(box.width > 0) || !(box.height > 0)) return;
+    const scale = Math.min(SKILL_NUMERAL_FIT_WIDTH / box.width, SKILL_NUMERAL_FIT_HEIGHT / box.height);
+    const nextSize = Math.max(SKILL_NUMERAL_MIN_SIZE, Math.min(SKILL_NUMERAL_MAX_SIZE, baseSize * scale));
+    texts.forEach((node) => node.setAttribute('font-size', nextSize.toFixed(1)));
+
+    // 再量一次做水平居中：字距会在末字后多留一份空隙，各字体的左右边距也不同，
+    // 光靠 text-anchor="middle" 对齐的是排版原点而不是墨迹，会偏左。
+    let fitted;
+    try {
+      fitted = texts[0].getBBox();
+    } catch {
+      return;
+    }
+    if (!fitted || !(fitted.width > 0)) return;
+    const nextX = 50 + (50 - (fitted.x + fitted.width / 2));
+    texts.forEach((node) => node.setAttribute('x', nextX.toFixed(1)));
+  });
 }
 
 /**
@@ -4349,6 +4398,7 @@ function renderStatusPanel(ctx) {
   const current = characters.find((item) => item.name === selectedTrackName);
   const viewModel = buildTrackCharacterViewModel(current);
   content.innerHTML = renderTrackCharacterContent(viewModel);
+  fitSkillNumerals(content);
   content.querySelectorAll('[data-card-nav]').forEach((node) =>
     node.addEventListener('click', () => {
       const kind = String(node.getAttribute('data-card-nav') || '').trim();
@@ -5947,6 +5997,8 @@ function openModal(ctx) {
   modal.classList.add('is-open');
   modal.setAttribute('aria-hidden', 'false');
   ensureModalPosition(modal);
+  // 面板隐藏时 getBBox 量不到，渲染时的自动缩放会跳过，这里补一次
+  fitSkillNumerals(modal);
 
   const sphere = document.getElementById('bs-bt-floating-sphere');
   if (sphere && sphere.style.display !== 'none') {

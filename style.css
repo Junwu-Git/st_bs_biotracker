@@ -2473,11 +2473,13 @@
   height: 38px;
 }
 
-/* 罗马数字必须带衬线，否则 III 在无衬线／点阵主题下会糊成三根竖线。
-   要压过 `#bs-biotracker-settings *` 的主题字体，只能直接命中 text 元素。 */
+/* 罗马数字跟随各主题自己的字体（`#bs-biotracker-settings *` 已经把字体刷到 text 上）。
+   字间距是关键：无衬线主题的大写 I 是光杆竖线，靠原生字距 III 的间隙只有 2px，
+   与 II 难以分辨。拉开到 0.16em 后间隙约与笔画同宽，各主题都能用自己的字体。
+   用 em 而非绝对单位，fitSkillNumerals 改 font-size 时字距会跟着缩放。 */
 #bs-biotracker-settings .bs-bt-skill-tile-numeral text {
-  font-family: 'Times New Roman', 'Noto Serif TC', 'Songti TC', serif;
   font-weight: 700;
+  letter-spacing: 0.16em;
 }
 
 /* 未填满的部分留作淡色底，填实高度即经验进度 */
