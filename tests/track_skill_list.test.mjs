@@ -105,7 +105,8 @@ test('numerals are auto-fitted to the tile after render', () => {
   assert.match(fit, /try \{[\s\S]*?getBBox\(\)[\s\S]*?\} catch \{[\s\S]*?return;/);
 
   // 渲染后与打开面板时都要跑一次（面板隐藏时量不到）
-  assert.match(controller, /content\.innerHTML = renderTrackCharacterContent\(viewModel\);\n  fitSkillNumerals\(content\);/);
+  // \r?\n：Windows 上 checkout 会把工作区转成 CRLF，裸写 \n 会匹配不到
+  assert.match(controller, /content\.innerHTML = renderTrackCharacterContent\(viewModel\);\r?\n\s*fitSkillNumerals\(content\);/);
   assert.match(controller, /ensureModalPosition\(modal\);[\s\S]{0,120}fitSkillNumerals\(modal\);/);
 });
 

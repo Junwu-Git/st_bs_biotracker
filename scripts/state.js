@@ -671,6 +671,8 @@ function sanitizeChildrenList(value) {
     .map((item) => ({
       name: sanitizeString(item.name) ?? null,
       fathers: sanitizeString(item.fathers) ?? null,
+      // 代孕／寄生的归属标记；沿用 fetus 的同名语义
+      provider: sanitizeString(item.provider) ?? null,
       gender: sanitizeString(item.gender) ?? null,
       race: sanitizeString(item.race) ?? null,
       derivedType: sanitizeString(item.derivedType) ?? null,

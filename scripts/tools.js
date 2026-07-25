@@ -2114,10 +2114,16 @@ function appendChildrenFromFetuses(profile, fetuses) {
       childDerivedType = fatherDerivedType;
     }
 
-    if (fetus?.provider !== null && fetus?.provider !== undefined) continue;
+    // 代孕／寄生：孩子不属于承载者，但先如实记下并标注 provider。
+    // 之前是直接 continue 跳过，孩子记录会凭空消失——承载者不得、提供者也没有。
+    // 之后由 transferProviderChildren 在拿得到 chatState 的层级转交给 provider。
+    const provider = fetus?.provider === null || fetus?.provider === undefined
+      ? null
+      : String(fetus.provider).trim() || null;
     children.push({
       name: null,
       fathers: String(fetus?.fathers || '未知'),
+      provider,
       gender: String(fetus?.gender || '未知'),
       race: String(fetus?.race || '未知'),
       derivedType: childDerivedType,
@@ -2128,6 +2134,38 @@ function appendChildrenFromFetuses(profile, fetuses) {
     });
   }
   profile.children = children;
+}
+
+/**
+ * 把代孕／寄生产下的孩子转交给 provider。
+ *
+ * 分娩逻辑只拿得到单一角色的 profile，无法写进别人的资料，
+ * 所以先把孩子留在承载者名下并标注 provider，再由这里（有 chatState）转交。
+ * provider 尚未注册时保留在承载者名下且保留标记，等对方注册后仍可辨认，
+ * 总之不能像先前那样直接丢弃。
+ */
+function transferProviderChildren(chatState) {
+  const characters = chatState?.characters;
+  if (!characters || typeof characters !== 'object') return;
+  for (const [hostName, host] of Object.entries(characters)) {
+    const children = Array.isArray(host?.profile?.children) ? host.profile.children : null;
+    if (!children || children.length === 0) continue;
+    const kept = [];
+    let moved = false;
+    for (const child of children) {
+      const provider = String(child?.provider || '').trim();
+      const target = provider && provider !== hostName ? characters[provider] : null;
+      if (!target?.profile) {
+        kept.push(child);
+        continue;
+      }
+      // 已经在正确的人名下，不必再留 provider 标记
+      const { provider: _ignored, ...received } = child;
+      target.profile.children = [...(Array.isArray(target.profile.children) ? target.profile.children : []), received];
+      moved = true;
+    }
+    if (moved) host.profile.children = kept;
+  }
 }
 
 function resolveLaborStageHours(stage, fetusesCount, birthDifficulty) {
@@ -2859,6 +2897,7 @@ function applyChildbirth(chatState, args) {
   delete profile.__runtimeRef;
   next.profile = profile;
   chatState.characters[female] = syncCharacterStageFromProfile(next);
+  transferProviderChildren(chatState);
   return { applied: true, message: `bsChildbirth applied to ${female}.` };
 }
 
@@ -3516,6 +3555,7 @@ function applyPassedTime(chatState, args) {
     const result = applyTimeToCharacter(current, tick);
     chatState.characters[name] = result.character;
   }
+  transferProviderChildren(chatState);
   const elapsedMinutes = Math.round(totalMinutes);
   const previousMinutes = Math.max(0, Number(chatState.minutesPassed) || 0);
   chatState.minutesPassed = previousMinutes + elapsedMinutes;

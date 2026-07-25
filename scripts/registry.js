@@ -991,6 +991,7 @@ function sanitizeChildren(value) {
       return {
         name: item.name ?? item.babyName ?? null,
         fathers: item.fathers ?? null,
+        provider: item.provider ?? null,
         gender: item.gender ?? null,
         race: parsed.race || null,
         derivedType: item.derivedType ?? parsed.derivedType ?? null,
