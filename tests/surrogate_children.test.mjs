@@ -99,3 +99,153 @@ test('the provider marker survives chat-state persistence', () => {
 
   assert.equal(childrenOf(chatState, '宿主')[0].provider, '虫母');
 });
+
+function makeHost(name, race = '人类') {
+  const character = makeCharacter(name);
+  character.profile.base.race = race;
+  character.profile.base.stage = '卵泡期';
+  character.profile.pregnant.fetuses = [];
+  character.profile.pregnant.fetusesCount = 0;
+  return character;
+}
+
+test('implanting marks every embryo with its provider and starts the pregnancy', () => {
+  const chatState = state.createEmptyChatState();
+  chatState.characters['代孕者'] = makeHost('代孕者');
+  chatState.characters['委托母亲'] = makeHost('委托母亲');
+
+  const result = applyToolCall(chatState, {
+    name: 'bsImplantEmbryo',
+    arguments: { female: '代孕者', provider: '委托母亲', fathers: '委托父亲', count: 2 },
+  });
+
+  assert.equal(result.applied, true);
+  const carrier = chatState.characters['代孕者'].profile;
+  assert.equal(carrier.base.stage, '孕早期');
+  assert.equal(carrier.pregnant.fetuses.length, 2);
+  for (const fetus of carrier.pregnant.fetuses) {
+    assert.equal(fetus.provider, '委托母亲', '每个胚胎都要记住归属');
+    assert.equal(fetus.fathers, '委托父亲');
+  }
+});
+
+test('embryo race follows the provider, not the carrier', () => {
+  const chatState = state.createEmptyChatState();
+  chatState.characters['宿主'] = makeHost('宿主', '人类');
+  chatState.characters['虫母'] = makeHost('虫母', '虫族');
+
+  applyToolCall(chatState, {
+    name: 'bsImplantEmbryo',
+    arguments: { female: '宿主', provider: '虫母', count: 1 },
+  });
+
+  // 必须精确比对：按承载者算会得到「人类x虫族」，光用 /虫族/ 匹配是抓不出来的
+  const fetus = chatState.characters['宿主'].profile.pregnant.fetuses[0];
+  assert.equal(fetus.race, '虫族', `胚胎应是纯虫族血统，实际为 ${fetus.race}`);
+});
+
+test('same-race parents do not produce a self-hybrid race', () => {
+  const chatState = state.createEmptyChatState();
+  chatState.characters['代孕者'] = makeHost('代孕者', '人类');
+  chatState.characters['委托母亲'] = makeHost('委托母亲', '人类');
+
+  applyToolCall(chatState, {
+    name: 'bsImplantEmbryo',
+    arguments: { female: '代孕者', provider: '委托母亲', fathers: '委托父亲' },
+  });
+
+  // deriveFetusRace 少了去重时，同族生育会得到「人类x人类」
+  assert.equal(chatState.characters['代孕者'].profile.pregnant.fetuses[0].race, '人类');
+});
+
+test('a cross-species father still hybridises with the genetic mother', () => {
+  const chatState = state.createEmptyChatState();
+  chatState.characters['宿主'] = makeHost('宿主', '人类');
+  chatState.characters['虫母'] = makeHost('虫母', '虫族');
+
+  applyToolCall(chatState, {
+    name: 'bsImplantEmbryo',
+    arguments: { female: '宿主', provider: '虫母', fathers: '精灵战士', fatherRace: '精灵' },
+  });
+
+  const race = String(chatState.characters['宿主'].profile.pregnant.fetuses[0].race);
+  assert.match(race, /虫族/);
+  assert.match(race, /精灵/);
+  assert.doesNotMatch(race, /人类/, '承载者的种族不该混进血统');
+});
+
+test('an unregistered provider can still supply the race explicitly', () => {
+  const chatState = state.createEmptyChatState();
+  chatState.characters['宿主'] = makeHost('宿主', '人类');
+
+  applyToolCall(chatState, {
+    name: 'bsImplantEmbryo',
+    arguments: { female: '宿主', provider: '深渊母巢', race: '虫族', count: 3 },
+  });
+
+  const fetuses = chatState.characters['宿主'].profile.pregnant.fetuses;
+  assert.equal(fetuses.length, 3);
+  assert.match(String(fetuses[0].race), /虫族/);
+  assert.equal(fetuses[0].provider, '深渊母巢');
+});
+
+test('implanting is refused when the carrier is already pregnant', () => {
+  const chatState = state.createEmptyChatState();
+  chatState.characters['艾拉'] = makeCharacter('艾拉', [makeFetus()]);
+  chatState.characters['委托母亲'] = makeHost('委托母亲');
+
+  const result = applyToolCall(chatState, {
+    name: 'bsImplantEmbryo',
+    arguments: { female: '艾拉', provider: '委托母亲' },
+  });
+
+  assert.equal(result.applied, false);
+  assert.match(result.message, /already exists/);
+});
+
+test('implanting is refused when the provider is the carrier herself', () => {
+  const chatState = state.createEmptyChatState();
+  chatState.characters['艾拉'] = makeHost('艾拉');
+
+  const result = applyToolCall(chatState, {
+    name: 'bsImplantEmbryo',
+    arguments: { female: '艾拉', provider: '艾拉' },
+  });
+
+  assert.equal(result.applied, false);
+  assert.match(result.message, /must differ/);
+});
+
+test('an implanted pregnancy carried to term hands the children back', () => {
+  const chatState = state.createEmptyChatState();
+  chatState.characters['代孕者'] = makeHost('代孕者');
+  chatState.characters['委托母亲'] = makeHost('委托母亲');
+
+  applyToolCall(chatState, {
+    name: 'bsImplantEmbryo',
+    arguments: { female: '代孕者', provider: '委托母亲', fathers: '委托父亲', count: 2 },
+  });
+  applyToolCall(chatState, { name: 'bsChildbirth', arguments: { female: '代孕者' } });
+
+  // 端到端：植入 → 分娩 → 孩子回到委托方
+  assert.equal(childrenOf(chatState, '代孕者').length, 0);
+  assert.equal(childrenOf(chatState, '委托母亲').length, 2);
+});
+
+test('the rupture tool is hidden until someone can actually rupture', async () => {
+  const { getTrackerToolDefinitions } = await import('../scripts/tracker.js');
+  const settings = { diaryRecentLimit: 0 };
+  const names = (existing) => getTrackerToolDefinitions(settings, existing).map((tool) => tool.name);
+
+  // 平时挂着只是占用模型注意力，且执行层本来就会拒绝
+  assert.equal(names({ 艾拉: { profile: { base: { stage: '卵泡期' } } } }).includes('bsRuptureMembranes'), false);
+  assert.equal(names({ 艾拉: { profile: { base: { stage: '孕晚期' } } } }).includes('bsRuptureMembranes'), false);
+
+  for (const stage of ['产兆前驱', '第一产程', '第二产程']) {
+    assert.equal(
+      names({ 艾拉: { profile: { base: { stage } } } }).includes('bsRuptureMembranes'),
+      true,
+      `${stage} 应提供破水工具`,
+    );
+  }
+});

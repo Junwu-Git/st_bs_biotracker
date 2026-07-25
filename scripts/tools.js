@@ -419,6 +419,27 @@ export const TOOL_DEFINITIONS = Object.freeze([
     },
   },
   {
+    name: 'bsImplantEmbryo',
+    description: '把外源胚胎植入角色体内：代孕、胚胎移植、虫母注卵、寄生产卵等，凡是「孕育者不是遗传母亲」的情节都用这个。'
+      + 'provider 是胚胎真正的归属方（提供卵子的一方／虫母／委托母亲），分娩后孩子会转交给她；若她尚未注册，孩子会留在承载者名下并标注来源。'
+      + '胚胎种族依遗传母方推导而非承载者，所以虫母的卵放进人类宿主仍是虫族血统。'
+      + 'provider 若尚未注册，用 race 指明遗传母方种族；父方种族预设与遗传母方同族，跨种族时用 fatherRace 指明。'
+      + '承载者必须尚未怀孕也没有受精状态；自然受孕请勿使用本工具。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        female: { type: 'string' },
+        provider: { type: 'string' },
+        fathers: { type: 'string' },
+        count: { type: 'integer', minimum: 1, maximum: 50 },
+        race: { type: 'string' },
+        fatherRace: { type: 'string' },
+      },
+      required: ['female', 'provider'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'bsRuptureMembranes',
     description: '让角色破水（羊膜破裂）。只有在产兆前驱且宫压已达上限的 66%，或已在第一／第二产程时才会生效；条件不足会被拒绝，此时叙事不得写成已经破水。'
       + '产兆前驱破水会直接进入第一产程。剧情写到羊水流出、破水时必须调用本工具，让叙事与系统状态一致；系统未确认破水前不要擅自描写破水。',
@@ -658,7 +679,13 @@ function deriveFetusRace(motherRace, fatherRace) {
   const fatherParts = getRaceComponents(fatherRace);
   const combined = [...fatherParts, ...motherParts].filter(Boolean);
   if (combined.length === 0) return '人类';
-  return combined.join('x');
+  // 必须去重，否则同族生育会得到「人类x人类」这种自我混血的种族。
+  // race_prompt_context.js 的同名函数一直有去重，这里漏了。
+  const unique = [];
+  for (const part of combined) {
+    if (!unique.includes(part)) unique.push(part);
+  }
+  return unique.join('x');
 }
 
 function deriveFetusEmbryoType(race) {
@@ -767,18 +794,25 @@ function applyIdenticalSplit(profile) {
   pregnant.fetusesCount = fetuses.length;
 }
 
-function createSimpleFetus(profile, sperm, cycleStage) {
-  const motherRace = parseRaceDescriptor(profile?.base?.race || '人类').race || '人类';
+/**
+ * @param profile 承载妊娠的角色（决定孕育环境：体重倍率、亲和度种子）
+ * @param options.geneticProfile 提供卵子的一方；代孕／注卵时与承载者不同。
+ *        种族与衍生种族按她推导，否则虫母的卵放进人类宿主会被算成人类混血。
+ */
+function createSimpleFetus(profile, sperm, cycleStage, options = {}) {
+  const geneticProfile = options.geneticProfile || profile;
+  const motherRace = parseRaceDescriptor(geneticProfile?.base?.race || '人类').race || '人类';
   const fatherRace = parseRaceDescriptor(sperm?.race || motherRace || '人类').race || motherRace || '人类';
   const fetusRace = deriveFetusRace(motherRace, fatherRace);
   const gender = deriveFetusGender(fetusRace);
   const weightRatio = getConceptionWeightRatio(profile, sperm);
-  const motherDerivedType = profile?.base?.derivedType ? String(profile.base.derivedType) : null;
+  const motherDerivedType = geneticProfile?.base?.derivedType ? String(geneticProfile.base.derivedType) : null;
   const fatherDerivedType = sperm?.derivedType ? String(sperm.derivedType) : null;
   const derivedSeed = getDerivedTypeSeed(motherDerivedType, fatherDerivedType);
   return {
     fathers: String(sperm?.male || '未知'),
-    provider: null,
+    // 自然受精恒为 null；代孕／注卵由植入工具指定归属
+    provider: options.provider ? String(options.provider) : null,
     race: fetusRace,
     fatherRace,
     fatherDerivedType,
@@ -2803,6 +2837,94 @@ function applyAbortion(chatState, args) {
   return { applied: true, message: `bsAbortion applied to ${female}.` };
 }
 
+/**
+ * 植入外源胚胎：代孕、胚胎移植、虫母注卵、寄生产卵。
+ *
+ * 与自然受精的差别在于胚胎的遗传来源与承载者分离，因此：
+ * 种族依 provider 推导（虫母的卵不该被算成宿主的血统），
+ * 且每个胎儿都带上 provider，分娩时由 transferProviderChildren 把孩子转交回去。
+ */
+function applyImplantEmbryo(chatState, args) {
+  const female = String(args?.female || '').trim();
+  const character = chatState.characters?.[female];
+  if (!female || !character) {
+    return { applied: false, message: `bsImplantEmbryo skipped: unknown character ${female || '(empty)'}.` };
+  }
+  const provider = String(args?.provider || '').trim();
+  if (!provider) {
+    return { applied: false, message: `bsImplantEmbryo skipped for ${female}: provider is required.` };
+  }
+  if (provider === female) {
+    return { applied: false, message: `bsImplantEmbryo skipped for ${female}: provider must differ from the carrier; use natural conception instead.` };
+  }
+
+  const next = cloneValue(character);
+  const profile = next.profile || {};
+  const base = profile.base || {};
+  const pregnant = profile.pregnant || {};
+  const experience = profile.experience || {};
+  const notify = profile.notify || {};
+  const currentStage = String(base.stage || '');
+  const existingFetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+  const hasConceptionState = existingFetuses.length > 0
+    || clampNumber(base.fertilizationDays, 0, 9999, 0) > 0
+    || isPregnancyStage(currentStage);
+  if (hasConceptionState) {
+    return { applied: false, message: `bsImplantEmbryo skipped for ${female}: pregnancy/conception state already exists.` };
+  }
+
+  const count = Math.max(1, Math.min(50, Math.floor(Number(args?.count) || 1)));
+  const fathers = String(args?.fathers || '').trim() || '未知';
+  // 遗传来源：优先取 provider 已注册角色，其次用显式 race，最后才退回承载者
+  const providerCharacter = chatState.characters?.[provider];
+  const explicitRace = String(args?.race || '').trim();
+  const geneticProfile = providerCharacter?.profile
+    || (explicitRace ? { base: { race: explicitRace, derivedType: null } } : null);
+  // 父方种族：植入情节里通常不明，预设与遗传母方同族（自体繁殖／同族供体），
+  // 需要跨种族时由 fatherRace 明示。不可默认取承载者的种族。
+  const geneticRace = parseRaceDescriptor(explicitRace || geneticProfile?.base?.race || base.race || '人类').race || '人类';
+  const spermSeed = {
+    male: fathers,
+    race: parseRaceDescriptor(String(args?.fatherRace || '').trim() || geneticRace).race || geneticRace,
+    derivedType: null,
+  };
+
+  const fetuses = [];
+  for (let index = 0; index < count; index += 1) {
+    fetuses.push(createSimpleFetus(profile, spermSeed, '孕早期', { geneticProfile, provider }));
+  }
+
+  pregnant.fetuses = fetuses;
+  pregnant.fetusesCount = fetuses.length;
+  pregnant.pregnantDays = 0;
+  pregnant.effectivePregnantDays = 0;
+  pregnant.amnionDurability = 100;
+  pregnant.laborHours = 0;
+  pregnant.effectiveLaborHours = 0;
+  pregnant.laborPhase = null;
+  pregnant.laborFetusIndex = 0;
+  pregnant.laborPain = 0;
+  clearProdromalState(pregnant);
+  base.stage = '孕早期';
+  base.days = 0;
+  base.fertilizationDays = 0;
+  experience.pregnantExperience = clampNumber(experience.pregnantExperience, 0, 999, 0) + 1;
+
+  profile.base = base;
+  profile.pregnant = pregnant;
+  profile.experience = experience;
+  updateFetalEnergyDrain(profile);
+  profile.notify = {
+    ...notify,
+    firstly: `${female}进入了孕早期`,
+    secondly: `${female}被植入了${count}个来自${provider}的胚胎，孩子将归属${provider}`,
+  };
+
+  next.profile = profile;
+  chatState.characters[female] = syncCharacterStageFromProfile(next);
+  return { applied: true, message: `bsImplantEmbryo applied to ${female}: ${count} embryo(s) from ${provider}.` };
+}
+
 /** 破水只允许在已进入产兆前驱后作为转入正式产程的受控事件。 */
 const RUPTURE_ALLOWED_PRELABOR_STAGES = Object.freeze(['产兆前驱']);
 /** 产兆前驱中破水所需的宫压门槛。 */
@@ -4569,6 +4691,7 @@ export function applyToolCall(chatState, call) {
   if (name === 'bsSetMenstrualPhases') return applySetMenstrualPhases(chatState, args);
   if (name === 'bsExcreteMetabolism') return applyExcreteMetabolism(chatState, args);
   if (name === 'bsAbortion') return applyAbortion(chatState, args);
+  if (name === 'bsImplantEmbryo') return applyImplantEmbryo(chatState, args);
   if (name === 'bsRuptureMembranes') return applyRuptureMembranes(chatState, args);
   if (name === 'bsChildbirth') return applyChildbirth(chatState, args);
   if (name === 'bsMaternalFetalInteraction') return applyMaternalFetalInteraction(chatState, args);
