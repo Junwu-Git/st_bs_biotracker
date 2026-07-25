@@ -249,3 +249,20 @@ test('the rupture tool is hidden until someone can actually rupture', async () =
     );
   }
 });
+
+test('only surrogate children are offered for manual reassignment', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const controller = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+
+  // 自然生育的归属是既成事实，不该出现在搬移清单里
+  const filter = controller.match(/function getMovableChildEntries\(character\)[\s\S]*?\n\}/)?.[0] || '';
+  assert.match(filter, /String\(entry\.child\?\.provider \|\| ''\)\.trim\(\)\.length > 0/);
+
+  // 执行层也要挡，不能只靠 UI 过滤
+  const move = controller.match(/function moveChildRecord\(ctx, fromName, childIndex, toName\)[\s\S]*?\n\}/)?.[0] || '';
+  assert.match(move, /只有代孕或寄生所生的孩子可以搬移/);
+
+  // childSource 用 { motherName, childIndex } 定位，搬移后必须同步修正
+  assert.match(move, /source\.motherName = toName/);
+  assert.match(move, /source\.childIndex = index - 1/);
+});

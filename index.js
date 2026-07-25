@@ -4672,7 +4672,103 @@ function renderSelectedFullStateEditor(ctx) {
     output.value = '请选择角色查看完整变量。';
     setFullStateEditStatus('请选择角色后再编辑。');
   }
+  renderChildMoveControls(ctx);
   updateFullStateControls();
+}
+
+function setChildMoveStatus(message, isError = false) {
+  const node = document.getElementById('bs-bt-child-move-status');
+  if (!node) return;
+  node.textContent = String(message || '');
+  node.dataset.state = isError ? 'error' : 'normal';
+}
+
+function formatChildMoveLabel(child, index) {
+  const name = String(child?.name || '').trim() || `孩子 ${index + 1}`;
+  const provider = String(child?.provider || '').trim();
+  const registered = String(child?.registeredAs || '').trim();
+  const marks = [`来源 ${provider}`];
+  if (registered) marks.push(`已注册为 ${registered}`);
+  return `${name}（${marks.join('，')}）`;
+}
+
+/** 只有代孕／寄生（带 provider）的孩子需要搬移；自然生育的归属本来就没有疑义 */
+function getMovableChildEntries(character) {
+  const children = Array.isArray(character?.profile?.children) ? character.profile.children : [];
+  return children
+    .map((child, index) => ({ child, index }))
+    .filter((entry) => String(entry.child?.provider || '').trim().length > 0);
+}
+
+function renderChildMoveControls(ctx) {
+  const section = document.getElementById('bs-bt-child-move-section');
+  const sourceSelect = document.getElementById('bs-bt-child-move-source');
+  const targetSelect = document.getElementById('bs-bt-child-move-target');
+  if (!section || !sourceSelect || !targetSelect) return;
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const current = selectedFullStateName ? chatState.characters?.[selectedFullStateName] : null;
+  const movable = getMovableChildEntries(current);
+  const others = Object.keys(chatState.characters || {}).filter((name) => name !== selectedFullStateName);
+  // 没有代孕来的孩子、或没有别的角色可搬，这个区块就没有意义
+  section.hidden = movable.length === 0 || others.length === 0;
+  if (section.hidden) return;
+  sourceSelect.innerHTML = movable
+    .map(({ child, index }) => `<option value="${index}">${escapeHtml(formatChildMoveLabel(child, index))}</option>`)
+    .join('');
+  targetSelect.innerHTML = others
+    .map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)
+    .join('');
+  setChildMoveStatus('代孕或寄生所生的孩子留在承载者名下时，可在此搬给真正的家长。');
+}
+
+/**
+ * 把一笔孩子记录搬到另一个角色名下。
+ *
+ * childSource 是用 { motherName, childIndex } 定位的，所以搬移必须同步修正
+ * 所有指向该母亲的引用：被搬走那笔改指新家长，排在它后面的索引各减一，
+ * 否则已注册孩子的「注册来源」会指到别人身上。
+ */
+function moveChildRecord(ctx, fromName, childIndex, toName) {
+  const settings = getSettings(ctx);
+  const chatState = getChatState(ctx, settings);
+  const from = chatState.characters?.[fromName];
+  const to = chatState.characters?.[toName];
+  if (!from?.profile || !to?.profile) throw new Error('找不到来源或目标角色。');
+  const children = Array.isArray(from.profile.children) ? from.profile.children : [];
+  if (!Number.isInteger(childIndex) || childIndex < 0 || childIndex >= children.length) {
+    throw new Error('找不到要搬移的孩子记录。');
+  }
+  // 只开放代孕／寄生的孩子：自然生育的归属是既成事实，不该被搬走
+  if (!String(children[childIndex]?.provider || '').trim()) {
+    throw new Error('只有代孕或寄生所生的孩子可以搬移。');
+  }
+
+  const nextFromChildren = children.slice();
+  const [child] = nextFromChildren.splice(childIndex, 1);
+  // 已经搬到指定家长名下，代孕来源标记就完成任务了
+  const { provider: _provider, ...moved } = child;
+  const nextToChildren = [...(Array.isArray(to.profile.children) ? to.profile.children : []), moved];
+  from.profile.children = nextFromChildren;
+  to.profile.children = nextToChildren;
+  const movedIndex = nextToChildren.length - 1;
+
+  for (const character of Object.values(chatState.characters || {})) {
+    const source = character?.profile?.childSource;
+    if (!source || String(source.motherName || '') !== fromName) continue;
+    const index = Number(source.childIndex);
+    if (!Number.isInteger(index)) continue;
+    if (index === childIndex) {
+      source.motherName = toName;
+      source.childIndex = movedIndex;
+    } else if (index > childIndex) {
+      source.childIndex = index - 1;
+    }
+  }
+
+  recordChatStateSnapshot(ctx, chatState, { reason: 'manual_child_move' });
+  saveSettings(ctx);
+  return { child: moved, to: toName };
 }
 
 function isPlainObject(value) {
@@ -5025,6 +5121,7 @@ function renderFullStatePage(ctx) {
     setFullStateEditStatus('请选择角色后再编辑。');
     if (debugPanel) debugPanel.innerHTML = '<div class="bs-bt-connect-status">请选择角色后使用调试工具。</div>';
   }
+  renderChildMoveControls(ctx);
   updateFullStateControls();
   updateFullStateSubpage();
   closeFullStateConfirm();
@@ -6777,6 +6874,28 @@ async function ensureModal(ctx) {
   });
   document.getElementById('bs-bt-full-state-reset')?.addEventListener('click', () => {
     renderSelectedFullStateEditor(ctx);
+  });
+  document.getElementById('bs-bt-child-move-apply')?.addEventListener('click', () => {
+    if (!selectedFullStateName) return;
+    const childIndex = Number(document.getElementById('bs-bt-child-move-source')?.value);
+    const target = String(document.getElementById('bs-bt-child-move-target')?.value || '').trim();
+    if (!Number.isInteger(childIndex) || !target) {
+      setChildMoveStatus('请先选择要搬移的孩子与目标角色。', true);
+      return;
+    }
+    try {
+      const { child } = moveChildRecord(ctx, selectedFullStateName, childIndex, target);
+      renderStatusPanel(ctx);
+      renderFullStatePage(ctx);
+      updateMainFlowPrompt(ctx);
+      const name = String(child?.name || '').trim() || '该孩子';
+      setChildMoveStatus(`已把 ${name} 搬到 ${target} 名下。`);
+      globalThis.toastr?.success?.(`[BS BioTracker] 已把孩子搬给 ${target}`);
+    } catch (error) {
+      const message = String(error?.message || error);
+      setChildMoveStatus(message, true);
+      globalThis.toastr?.error?.(message, '[BS BioTracker]');
+    }
   });
   document.getElementById('bs-bt-full-state-confirm-yes')?.addEventListener('click', () => {
     if (!selectedFullStateName) return;
