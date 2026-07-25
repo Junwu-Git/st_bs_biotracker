@@ -1,0 +1,15 @@
+# 仓库内一律以 LF 保存。先前没有这个设定时，Windows 上 checkout 会把工作区
+# 转成 CRLF，测试里比对原始码的正则（如 /\n\}/）就会匹配不到而误报失败。
+* text=auto eol=lf
+
+# 二进位资产不得做任何换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
