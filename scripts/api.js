@@ -138,21 +138,68 @@ function createApiTimeoutError(timeoutMs) {
   return error;
 }
 
+const API_DEADLINE_MARKER = '__bs_biotracker_deadline__';
+
+export function isApiDeadlineError(error) {
+  return error?.[API_DEADLINE_MARKER] === true;
+}
+
+function createApiDeadlineError(deadlineMs) {
+  const error = new Error(`分析已超过总时限 ${Math.round(deadlineMs / 1000)} 秒（含重试），已自动终止。`);
+  error[API_DEADLINE_MARKER] = true;
+  return error;
+}
+
+/**
+ * 一整轮分析（含全部重试与各自的 JSON 纠错子请求）的总时限。
+ *
+ * 单次超时管的是「一个请求多久没响应」；总时限管的是「重试叠加后整轮最多跑多久」。
+ * 没有它时：单次超时设为 0（不限制）会让某次请求永远挂着；即便设了超时，
+ * 4 次尝试 × 2 个子请求也可能累计到十几分钟，手动按钮全程锁死无法终止。
+ * 单次超时为 0 时按默认超时估算总时限，保证再怎样也有个终点。
+ */
+export function resolveOverallDeadlineMs(settings) {
+  const perRequest = resolveApiTimeoutMs(settings);
+  const base = perRequest > 0 ? perRequest : DEFAULT_API_TIMEOUT_MS;
+  return base * (GLOBAL_API_MAX_RETRIES + 1);
+}
+
 async function fetchText(url, options = {}) {
-  const { timeoutMs, ...fetchOptions } = options;
+  const { timeoutMs, externalSignal, deadlineMs, ...fetchOptions } = options;
   const limitMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : 0;
-  let controller = null;
+  const canAbort = typeof AbortController === 'function';
+  const controller = canAbort && (limitMs > 0 || externalSignal) ? new AbortController() : null;
   let timer = null;
   let timedOut = false;
-  if (limitMs > 0 && typeof AbortController === 'function') {
-    controller = new AbortController();
+  let externalAborted = false;
+  let onExternalAbort = null;
+  if (controller) {
     fetchOptions.signal = controller.signal;
-    timer = setTimeout(() => {
-      timedOut = true;
-      try {
-        controller.abort();
-      } catch {}
-    }, limitMs);
+    if (limitMs > 0) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        try {
+          controller.abort();
+        } catch {}
+      }, limitMs);
+    }
+    if (externalSignal) {
+      // 总时限触发时，正在飞的这个请求也要一起中止，否则单次超时为 0 时它会永远挂着
+      if (externalSignal.aborted) {
+        externalAborted = true;
+        try {
+          controller.abort();
+        } catch {}
+      } else {
+        onExternalAbort = () => {
+          externalAborted = true;
+          try {
+            controller.abort();
+          } catch {}
+        };
+        externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+      }
+    }
   }
   try {
     const response = await fetch(url, fetchOptions);
@@ -161,10 +208,13 @@ async function fetchText(url, options = {}) {
     ));
     return { response, responseText };
   } catch (error) {
+    // 总时限优先：它触发时单次超时可能也顺带 abort，但要归因到「整轮超时」
+    if (externalAborted) throw createApiDeadlineError(Number(deadlineMs) || 0);
     if (timedOut) throw createApiTimeoutError(limitMs);
     throw error;
   } finally {
     if (timer) clearTimeout(timer);
+    if (onExternalAbort && externalSignal) externalSignal.removeEventListener('abort', onExternalAbort);
   }
 }
 
@@ -178,7 +228,7 @@ async function requestHostProxyModelList(apiBase, settings) {
   });
 }
 
-async function requestHostProxyChatCompletion(apiBase, settings, requestBody) {
+async function requestHostProxyChatCompletion(apiBase, settings, requestBody, runContext = {}) {
   const proxyBody = {
     messages: requestBody.messages,
     model: requestBody.model,
@@ -202,6 +252,8 @@ async function requestHostProxyChatCompletion(apiBase, settings, requestBody) {
     body: JSON.stringify(proxyBody),
     cache: 'no-cache',
     timeoutMs: resolveApiTimeoutMs(settings),
+    externalSignal: runContext.signal || null,
+    deadlineMs: runContext.deadlineMs || 0,
   });
 }
 
@@ -221,35 +273,61 @@ function summarizeModelText(text) {
 
 const GLOBAL_API_MAX_RETRIES = 3;
 
-function sleepMs(ms) {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+/** 可被信号中断的等待：总时限在重试间隔期间触发时，不必把这几秒也白等完 */
+function sleepMs(ms, signal) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, Math.max(0, Number(ms) || 0));
+    if (signal) {
+      if (signal.aborted) {
+        clearTimeout(timer);
+        resolve();
+        return;
+      }
+      signal.addEventListener('abort', () => {
+        clearTimeout(timer);
+        resolve();
+      }, { once: true });
+    }
+  });
 }
 
 function isNonRetriableApiError(error) {
   // 超时已经等满一整轮，立刻重试只会把卡住的时间乘上重试次数
   if (isApiTimeoutError(error)) return true;
+  // 总时限触发意味着整轮已经没有时间预算了，不能再开新一轮
+  if (isApiDeadlineError(error)) return true;
   const message = String(error?.message || error || '');
   // 配置/鉴权类错误重试无意义
   return /请先填写|尚未配置|API URL 或模型名称|401|403|Unauthorized|invalid.?api.?key|Incorrect API key/i.test(message);
 }
 
-/** 全局自动重试：首次失败后按 1s/2s/3s 间隔再试，最多 3 次（合计最多 4 轮） */
+/**
+ * 全局自动重试：首次失败后按 1s/2s/3s 间隔再试，最多 3 次（合计最多 4 轮）。
+ * 计数按「总轮次」显示（1/4…4/4），避免出现「3/3 满了却还有一轮在跑」的误解。
+ * overallSignal 触发（总时限到）时立刻停手，不再开新一轮。
+ */
 async function withGlobalApiRetries(task, options = {}) {
   const maxRetries = Math.max(0, Math.min(10, Math.floor(Number(options.maxRetries ?? GLOBAL_API_MAX_RETRIES) || 0)));
   const label = String(options.label || 'API');
+  const overallSignal = options.overallSignal || null;
+  const totalTries = maxRetries + 1;
   let lastError;
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    if (overallSignal?.aborted) {
+      lastError = createApiDeadlineError(Number(options.deadlineMs) || 0);
+      break;
+    }
     try {
       return await task(attempt);
     } catch (error) {
       lastError = error;
       if (isNonRetriableApiError(error) || attempt >= maxRetries) break;
       const delay = 1000 * (attempt + 1);
-      console.warn(`[BS BioTracker] ${label} 失败，将在 ${delay}ms 后重试 (${attempt + 1}/${maxRetries})`, error);
+      console.warn(`[BS BioTracker] ${label} 第 ${attempt + 1}/${totalTries} 次失败，将在 ${delay}ms 后重试`, error);
       try {
-        globalThis.toastr?.warning?.(`${label} 失败，${Math.round(delay / 1000)}s 后重试 (${attempt + 1}/${maxRetries})`, '[BS BioTracker]');
+        globalThis.toastr?.warning?.(`${label} 第 ${attempt + 1}/${totalTries} 次失败，${Math.round(delay / 1000)}s 后重试`, '[BS BioTracker]');
       } catch {}
-      await sleepMs(delay);
+      await sleepMs(delay, overallSignal);
     }
   }
   throw lastError;
@@ -561,7 +639,7 @@ function buildPresetSamplingBodyFromPreset(preset) {
   return body;
 }
 
-async function requestChatCompletion(apiBase, settings, body) {
+async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
   const logApiDebug = (phase, details = {}) => {
     try {
       const label = `[BS BioTracker][API debug] ${phase}`;
@@ -594,12 +672,12 @@ async function requestChatCompletion(apiBase, settings, body) {
       if (useHostProxy) {
         let proxyError = null;
         try {
-          ({ response, responseText } = await requestHostProxyChatCompletion(apiBase, settings, requestBody));
+          ({ response, responseText } = await requestHostProxyChatCompletion(apiBase, settings, requestBody, runContext));
         } catch (error) {
           proxyError = error;
           logApiDebug(`proxy_error:${attempt}`, { proxyError: error });
-          // 代理已经等满超时，直连只会再卡一次同样的时长
-          if (isApiTimeoutError(error)) throw error;
+          // 代理已经等满超时（或整轮时限已到），直连只会再卡一次同样的时长
+          if (isApiTimeoutError(error) || isApiDeadlineError(error)) throw error;
         }
         if (proxyError || (!response.ok && shouldFallbackFromHostProxy(responseText, response.status))) {
           transport = proxyError ? 'direct-after-proxy-error' : `direct-after-proxy-${response.status}`;
@@ -608,6 +686,8 @@ async function requestChatCompletion(apiBase, settings, body) {
             headers: getAuthHeaders(settings),
             body: requestText,
             timeoutMs: resolveApiTimeoutMs(settings),
+            externalSignal: runContext.signal || null,
+            deadlineMs: runContext.deadlineMs || 0,
           }));
         }
       } else {
@@ -616,6 +696,8 @@ async function requestChatCompletion(apiBase, settings, body) {
           headers: getAuthHeaders(settings),
           body: requestText,
           timeoutMs: resolveApiTimeoutMs(settings),
+          externalSignal: runContext.signal || null,
+          deadlineMs: runContext.deadlineMs || 0,
         }));
       }
       globalThis[DEBUG_LAST_API_RESPONSE_KEY] = {
@@ -645,7 +727,7 @@ async function requestChatCompletion(apiBase, settings, body) {
         requestText,
         error,
       });
-      if (isApiTimeoutError(error)) throw error;
+      if (isApiTimeoutError(error) || isApiDeadlineError(error)) throw error;
       throw new Error(`无法连接到 API。请检查 Base URL、API Key、服务是否启动；浏览器环境会优先通过酒馆后端代理。原始错误: ${String(error?.message || error)}`);
     } finally {
       globalThis.__bs_biotracker_async_request__ = previousAsyncFlag;
@@ -856,31 +938,50 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
     body,
   );
   const callLabel = safePayload?.target_character ? '注册请求' : '追踪请求';
-  return withGlobalApiRetries(async (globalAttempt) => {
-    const data = await requestChatCompletion(apiBase, settings, body);
-    const content = data?.choices?.[0]?.message?.content || '';
-    let parsed = extractJson(content);
-    if (parsed && typeof parsed === 'object') return parsed;
 
-    // 同一轮全局尝试内：先做一次「请只输出 JSON」纠错请求
-    const retryBody = {
-      model,
-      temperature: 0.1,
-      ...stPresetSampling,
-      messages: [
-        ...effectiveMessages,
-        { role: 'assistant', content: String(content || '') },
-        { role: 'user', content: buildJsonRetryInstruction() },
-      ],
-      ...(useFormattedOutputV4 ? { response_format: { type: 'json_object' } } : {}),
-    };
-    const retryData = await requestChatCompletion(apiBase, settings, retryBody);
-    const retryContent = retryData?.choices?.[0]?.message?.content || '';
-    parsed = extractJson(retryContent);
-    if (parsed && typeof parsed === 'object') return parsed;
+  // 整轮总时限：一个信号统管全部重试与子请求，到点后中止在飞的 fetch 并停止重试，
+  // 让手动按钮无论后端多离谱都能在有限时间内解禁。单次超时为 0 时它是唯一的终点保障。
+  const deadlineMs = resolveOverallDeadlineMs(settings);
+  const overallController = typeof AbortController === 'function' ? new AbortController() : null;
+  let overallTimer = null;
+  if (overallController && deadlineMs > 0) {
+    overallTimer = setTimeout(() => {
+      try {
+        overallController.abort();
+      } catch {}
+    }, deadlineMs);
+  }
+  const runContext = { signal: overallController?.signal || null, deadlineMs };
 
-    throw new Error(
-      `模型没有返回可解析的 JSON（全局尝试 ${globalAttempt + 1}/${GLOBAL_API_MAX_RETRIES + 1}）。原始回覆：${summarizeModelText(retryContent || content)}`,
-    );
-  }, { label: callLabel });
+  try {
+    return await withGlobalApiRetries(async (globalAttempt) => {
+      const data = await requestChatCompletion(apiBase, settings, body, runContext);
+      const content = data?.choices?.[0]?.message?.content || '';
+      let parsed = extractJson(content);
+      if (parsed && typeof parsed === 'object') return parsed;
+
+      // 同一轮全局尝试内：先做一次「请只输出 JSON」纠错请求
+      const retryBody = {
+        model,
+        temperature: 0.1,
+        ...stPresetSampling,
+        messages: [
+          ...effectiveMessages,
+          { role: 'assistant', content: String(content || '') },
+          { role: 'user', content: buildJsonRetryInstruction() },
+        ],
+        ...(useFormattedOutputV4 ? { response_format: { type: 'json_object' } } : {}),
+      };
+      const retryData = await requestChatCompletion(apiBase, settings, retryBody, runContext);
+      const retryContent = retryData?.choices?.[0]?.message?.content || '';
+      parsed = extractJson(retryContent);
+      if (parsed && typeof parsed === 'object') return parsed;
+
+      throw new Error(
+        `模型没有返回可解析的 JSON（全局尝试 ${globalAttempt + 1}/${GLOBAL_API_MAX_RETRIES + 1}）。原始回覆：${summarizeModelText(retryContent || content)}`,
+      );
+    }, { label: callLabel, overallSignal: overallController?.signal || null, deadlineMs });
+  } finally {
+    if (overallTimer) clearTimeout(overallTimer);
+  }
 }

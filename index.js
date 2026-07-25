@@ -56,6 +56,7 @@ import {
   getHostPreset,
   getHostPresetManager,
   getHostWorldBook,
+  isHostChatStateConfirmed,
   listHostPresets,
   loadHostWorldInfo,
   registerHostExtensionMenuItem,
@@ -118,6 +119,9 @@ const GROUP_CHAT_DELETED_HANDLER_KEY = '__bs_biotracker_group_chat_deleted_handl
 const GROUP_CHAT_CREATED_HANDLER_KEY = '__bs_biotracker_group_chat_created_handler__';
 const PENDING_CHAT_INHERIT_KEY = '__bs_biotracker_pending_chat_inherit__';
 const WORLDBOOK_RELOAD_TIMER_KEY = '__bs_biotracker_worldbook_reload_timer__';
+const HYDRATE_RETRY_TIMER_KEY = '__bs_biotracker_hydrate_retry_timer__';
+/** sidecar 读不到时的重试节奏；宿主句柄通常在头几百毫秒内就绪 */
+const HYDRATE_RETRY_DELAYS_MS = [400, 1200, 2500, 5000];
 const MAINFLOW_CONTEXT_SNAPSHOT_KEY = '__bs_biotracker_mainflow_context_snapshot__';
 const DEBUG_LAST_MAINFLOW_SNAPSHOT_KEY = '__bs_biotracker_debug_last_mainflow_snapshot__';
 const FETCH_CAPTURE_READY_KEY = '__bs_biotracker_fetch_capture_ready__';
@@ -128,6 +132,8 @@ let registryBreedingInferenceDraft = null;
  * 重开时再还原按钮与提示，否则会看到空白状态并重复触发请求。
  */
 const registryPendingOps = new Map();
+/** 繁育推演编辑器当前内容属于哪个角色；用来在改名后清掉不再适用的结果 */
+let registryInferenceResultName = '';
 /** 注册页最后一次初始化对应的聊天，用来区分「重开弹窗」与「换聊天」 */
 let registerPageChatKey = null;
 let registerManualRaceDraft = '人类';
@@ -303,12 +309,14 @@ function clearBreedingInferenceDraftFor(registeredName) {
   const name = String(registeredName || '').trim();
   if (!name || registryBreedingInferenceDraft?.targetName !== name) return;
   registryBreedingInferenceDraft = null;
+  registryInferenceResultName = '';
   setBreedingInferenceEditor('尚未执行繁育推演。直接注册不会生成繁育心理人设。');
   setBreedingInferenceStatus('');
 }
 
 function resetRegisterPageState() {
   registryBreedingInferenceDraft = null;
+  registryInferenceResultName = '';
   setRegisterTab('inference');
   setBreedingInferenceEditor('尚未执行繁育推演。直接注册不会生成繁育心理人设。');
   setBreedingInferenceStatus('');
@@ -591,7 +599,8 @@ function writeRegistrySkillSetup(ctx) {
     const raw = String(document.getElementById('bs-bt-register-skill-result')?.value || '').trim();
     if (!raw) throw new Error('请先生成技能／天赋，或填写要写入的 JSON。');
     parsed = JSON.parse(raw);
-    const character = applyRegistrySkillSetup(chatState, targetName, parsed);
+    const report = {};
+    const character = applyRegistrySkillSetup(chatState, targetName, parsed, report);
     recordChatStateSnapshot(ctx, chatState, { reason: 'registry_initial_skills' });
     saveSettings(ctx);
     resetPoller(ctx, trackerDeps);
@@ -599,8 +608,16 @@ function writeRegistrySkillSetup(ctx) {
     renderFullStatePage(ctx);
     renderSkillCatalogPage(ctx);
     updateMainFlowPrompt(ctx);
-    setRegisterSkillStatus(`已写入 ${character.name}：${character.profile.skills.length} 项技能、${character.profile.talents.length} 项天赋。`);
-    globalThis.toastr?.success?.(`[BS BioTracker] 已写入 ${character.name} 的技能／天赋`);
+    const skipped = Array.isArray(report.skipped) ? report.skipped : [];
+    const summary = `已写入 ${character.name}：${character.profile.skills.length} 项技能、${character.profile.talents.length} 项天赋。`;
+    // 图鉴里找不到的条目会被跳过而不是整份作废，但要让使用者知道少了什么
+    if (skipped.length > 0) {
+      setRegisterSkillStatus(`${summary}\n已跳过 ${skipped.length} 项图鉴中找不到的引用：${skipped.join('、')}。请在 skillDefinitions 补上定义后重新写入。`, true);
+      globalThis.toastr?.warning?.(`[BS BioTracker] 有 ${skipped.length} 项技能引用不存在，已跳过`);
+    } else {
+      setRegisterSkillStatus(summary);
+      globalThis.toastr?.success?.(`[BS BioTracker] 已写入 ${character.name} 的技能／天赋`);
+    }
   } catch (error) {
     const message = String(error?.message || error);
     setRegisterSkillStatus(message, true);
@@ -5999,6 +6016,12 @@ function openModal(ctx) {
   ensureModalPosition(modal);
   // 面板隐藏时 getBBox 量不到，渲染时的自动缩放会跳过，这里补一次
   fitSkillNumerals(modal);
+  // 开面板正是使用者要看「注册了谁」的时刻：按真源补一次载入，避免之前载入失败留下的空面板
+  ensureChatStateHydrated(ctx).then(() => {
+    renderStatusPanel(ctx);
+    renderFullStatePage(ctx);
+    fitSkillNumerals(modal);
+  }).catch((error) => console.warn('[BS BioTracker] 开启面板时载入状态失败', error));
 
   const sphere = document.getElementById('bs-bt-floating-sphere');
   if (sphere && sphere.style.display !== 'none') {
@@ -6500,6 +6523,16 @@ async function ensureModal(ctx) {
   document.getElementById('bs-bt-register-skill-generate')?.addEventListener('click', () => generateRegistrySkillSetup(ctx));
   document.getElementById('bs-bt-register-skill-write')?.addEventListener('click', () => writeRegistrySkillSetup(ctx));
   document.getElementById('bs-bt-register-source')?.addEventListener('change', () => syncRegisterChildSourceFields(ctx));
+  // 改角色名后，上一个角色的推演结果就不再适用；留着会被误认为是这个角色的结果。
+  // 以「编辑器内容属于谁」为准而不是 draft 是否存在——使用者看到的是编辑器内容。
+  document.getElementById('bs-bt-register-name')?.addEventListener('input', () => {
+    if (!registryInferenceResultName) return;
+    const currentName = String(document.getElementById('bs-bt-register-name')?.value || '').trim();
+    if (registryInferenceResultName === currentName) return;
+    registryBreedingInferenceDraft = null;
+    setBreedingInferenceEditor('尚未执行繁育推演。直接注册不会生成繁育心理人设。');
+    setBreedingInferenceStatus('角色名已变更，先前的繁育推演结果已清除。');
+  });
   document.querySelectorAll('#bs-bt-encyclopedia-tabs [data-encyclopedia-tab]').forEach((node) => {
     node.addEventListener('click', () => {
       closeRacePhysiologyEditor();
@@ -6524,6 +6557,11 @@ async function ensureModal(ctx) {
       return;
     }
     readSettingsFromForm(ctx);
+    // 先清掉上一次的结果：推演失败时只会更新状态栏，编辑器若留着旧内容，
+    // 看起来就像「推演 B 却返回了 A 的 JSON」。
+    registryBreedingInferenceDraft = null;
+    registryInferenceResultName = '';
+    setBreedingInferenceEditor(`正在推演 ${values.targetName}...`);
     beginRegistryOperation('inference', `正在推演 ${values.targetName} 的繁育心理...`);
     try {
       const result = await runRegistryBreedingInference(ctx, values);
@@ -6532,6 +6570,7 @@ async function ensureModal(ctx) {
         chatKey: getChatKey(ctx),
         result,
       };
+      registryInferenceResultName = values.targetName;
       setBreedingInferenceEditor(formatBreedingInferencePreview(result));
       setBreedingInferenceStatus('推演完成。可以直接在上方 JSON 文本框微调，再注册或套用。');
       globalThis.toastr?.success?.(`[BS BioTracker] 已完成 ${values.targetName} 的繁育推演`);
@@ -6539,6 +6578,8 @@ async function ensureModal(ctx) {
       registryBreedingInferenceDraft = null;
       console.error('[BS BioTracker] runRegistryBreedingInference failed', error);
       const message = String(error?.message || error);
+      // 失败后编辑器要回到空态，不能留下任何看似「本次结果」的内容
+      setBreedingInferenceEditor('尚未执行繁育推演。直接注册不会生成繁育心理人设。');
       setBreedingInferenceStatus(message, true);
       globalThis.toastr?.error?.(message, '[BS BioTracker]');
     } finally {
@@ -7026,20 +7067,59 @@ async function registerMenuItem(ctx) {
   if (!registered) ensureManualMenuItem(ctx);
 }
 
+/**
+ * 载入聊天状态，且永不抛出。
+ * TT 在没有活动角色时会抛 Failed to resolve active character id；原本只有 bootstrap 有容错，
+ * chatChanged 没有，一抛就把后面的面板刷新与主流程提示词更新一起中断掉。
+ */
+async function hydrateChatStateSafely(ctx) {
+  try {
+    await hydrateChatStateFromHost(ctx, getSettings(ctx));
+  } catch (error) {
+    const message = String(error?.message || error);
+    if (getHostKind() === 'tauritavern' && /failed to resolve active character id/i.test(message)) {
+      console.warn('[BS BioTracker] 当前没有活动角色；将在进入聊天后加载追踪状态。');
+      return;
+    }
+    console.warn('[BS BioTracker] 载入聊天追踪状态失败，稍后重试。', error);
+  }
+}
+
+/**
+ * 载入状态；若这次没能确认 sidecar 内容就安排重试。
+ *
+ * TT／Luker 上 sidecar 是唯一真源，读不到时面板会画成「没有注册角色」。
+ * 而重开存档若直接落在同一个聊天，不会触发 chatChanged，轮询又预设关闭，
+ * 于是没有任何东西会再载入一次——使用者只能看到空面板并以为要重新注册。
+ */
+async function ensureChatStateHydrated(ctx) {
+  clearTimeout(globalThis[HYDRATE_RETRY_TIMER_KEY]);
+  await hydrateChatStateSafely(ctx);
+  if (isHostChatStateConfirmed(ctx)) return;
+  let attempt = 0;
+  const retry = async () => {
+    await hydrateChatStateSafely(ctx);
+    if (isHostChatStateConfirmed(ctx)) {
+      renderStatusPanel(ctx);
+      renderFullStatePage(ctx);
+      updateMainFlowPrompt(ctx);
+      return;
+    }
+    attempt += 1;
+    if (attempt < HYDRATE_RETRY_DELAYS_MS.length) {
+      globalThis[HYDRATE_RETRY_TIMER_KEY] = setTimeout(retry, HYDRATE_RETRY_DELAYS_MS[attempt]);
+    }
+  };
+  globalThis[HYDRATE_RETRY_TIMER_KEY] = setTimeout(retry, HYDRATE_RETRY_DELAYS_MS[0]);
+}
+
 async function bootstrap() {
   const ctx = getContextSafe();
   if (!ctx) return;
   if (globalThis[BOOTSTRAP_RUNTIME_KEY]) return;
   globalThis[BOOTSTRAP_RUNTIME_KEY] = true;
   try {
-    try {
-      await hydrateChatStateFromHost(ctx, getSettings(ctx));
-    } catch (error) {
-      const isTauriLandingScreen = getHostKind() === 'tauritavern'
-        && /failed to resolve active character id/i.test(String(error?.message || error));
-      if (!isTauriLandingScreen) throw error;
-      console.warn('[BS BioTracker] 当前没有活动角色；将在进入聊天后加载追踪状态。');
-    }
+    await ensureChatStateHydrated(ctx);
     installMainflowRequestCapture();
     await ensureModal(ctx);
     await registerMenuItem(ctx);
@@ -7051,7 +7131,8 @@ async function bootstrap() {
       'chatChanged',
       globalThis[CHAT_CHANGED_HANDLER_KEY],
       async () => {
-        await hydrateChatStateFromHost(ctx, getSettings(ctx));
+        // 不能让载入失败中断后面的刷新，否则面板会停在上一个聊天或空状态
+        await ensureChatStateHydrated(ctx);
         if (globalThis[PENDING_CHAT_INHERIT_KEY]) {
           tryInheritForkedChatState(ctx, 'chat_changed');
         }

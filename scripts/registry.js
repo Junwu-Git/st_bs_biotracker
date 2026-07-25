@@ -834,6 +834,7 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
     '若角色补充设定明确描述的是一种未来也会持续生效、且倍率不为 1 的妊娠体质、祝福、诅咒、冻结或延长效果，即使角色当前未怀孕，也必须写入 bio.gestationModifierMultiplier、bio.gestationModifierName、bio.gestationModifierDescription；普通妊娠不得补写 bio。',
     '注意：未怀孕角色不要硬填 pregnantDescription；描述内容应遵守旧系统文字栏位语义，不要换行。',
     '只输出 JSON，不要输出额外解释。',
+    '【name】必须原样填写 payload.target_character，一字不差。那是用户指定要注册的角色名；即使它与角色卡名不同，也不得改用角色卡名、别名或称谓。',
     'JSON 结构必须是：',
     '{',
     '  "name": "string",',
@@ -1367,17 +1368,27 @@ export function applyRegistryResult(chatState, result, { allowBreedingPsychology
 export function buildRegistrySkillSystemPrompt(options = {}) {
   const skillPrompt = String(options.skillPrompt || '').trim();
   const inheritedTalentsLocked = Boolean(options.inheritedTalentsLocked);
+  const emptyCatalog = Boolean(options.emptyCatalog);
   return [
     '你是 AIRP 角色初始技能与天赋配置器。只处理 payload.target_character。',
     '根据角色卡、世界书、最近对话、已注册角色状态及用户提示，生成可供用户确认的初始技能／天赋 JSON。',
-    '先查阅 payload.skill_catalog。语义适合的技能必须复用其精确 name 或 id，不得用近义词建立重复技能。',
-    '只有现有图鉴确实无法表达所需技能时，才能放入 skillDefinitions；每个新定义必须同时提供 name 与明确说明技能范围的 description。',
+    emptyCatalog
+      ? '注意：payload.skill_catalog 目前是空的（这是本聊天的第一个角色）。因此 initialSkills 与 initialTalents 用到的每一个技能，都必须由你在本次 skillDefinitions 中完整定义，没有任何既有技能可以复用。'
+      : '先查阅 payload.skill_catalog。语义适合的技能必须复用其精确 name 或 id，不得用近义词建立重复技能。',
+    emptyCatalog
+      ? '每个新定义必须同时提供 name 与明确说明技能范围的 description，缺一不可。'
+      : '只有现有图鉴确实无法表达所需技能时，才能放入 skillDefinitions；每个新定义必须同时提供 name 与明确说明技能范围的 description。',
     'initialSkills 与 initialTalents 的 skill 必须使用图鉴中的精确 name/id，或本次 skillDefinitions 中的新技能精确 name。',
+    '【天赋同样需要技能作为载体】天赋不是独立的性格标签，而是「对某个技能的先天擅长／苦手」。'
+      + '因此 initialTalents 引用的技能若不在 payload.skill_catalog 中，必须先在本次 skillDefinitions 里定义它，否则该天赋会被丢弃。'
+      + '若某个先天特质无法对应到一个明确的技能，就不要写成天赋。',
     '技能 level 为 1-10。天赋 level 为 -5 到 5：正数为擅长，负数为苦手，0 为尚未形成。',
     '技能与天赋共用经验曲线 requiredExp(level)=100*level*level；Lv0 形成擅长／苦手 Lv1 均需 100 EXP。',
     inheritedTalentsLocked ? 'payload.existing_skill_setup.talents 是孩子出生后保留的既有天赋，属于固定继承内容。必须参考它们配置技能，不得在 initialTalents 中输出同一技能的不同等级、方向或经验。' : '',
     '没有充分依据的项目不要添加；不得把性格、身体状态或一次性事件滥列为技能。',
     skillPrompt ? '严格参考 payload.initial_skill_prompt 的额外要求。' : '用户没有提供额外要求，请仅依现有角色资料谨慎判断。',
+    '输出前请逐条自检：initialSkills 与 initialTalents 里的每一个 skill，都必须能在 payload.skill_catalog 或本次 skillDefinitions 中找到完全相同的名称。'
+      + '对不上的条目会被系统丢弃，请在输出前补上定义或删掉该条目。',
     '只输出 JSON，不要输出解释或 Markdown。结构必须是：',
     '{',
     '  "skillDefinitions": [{"name":"string","description":"string"}],',
@@ -1424,37 +1435,54 @@ export async function runRegistrySkillInference(ctx, options = {}) {
   };
   const inheritedTalentsLocked = Boolean(chatState.characters[targetName]?.profile?.childSource);
   payload.inherited_talents_locked = inheritedTalentsLocked;
-  const systemPrompt = options.skillSystemPrompt || buildRegistrySkillSystemPrompt({ skillPrompt, inheritedTalentsLocked });
+  const systemPrompt = options.skillSystemPrompt
+    || buildRegistrySkillSystemPrompt({
+      skillPrompt,
+      inheritedTalentsLocked,
+      // 图鉴为空＝本次是这个聊天的第一个角色，所有引用都只能来自本次 skillDefinitions
+      emptyCatalog: payload.skill_catalog.length === 0,
+    });
   const result = await callOpenAICompatible(settings, payload, systemPrompt);
   return sanitizeRegistrySkillInferenceResult(result);
 }
 
+/**
+ * 把模型给的初始技能／天赋对齐到技能图鉴。
+ *
+ * 解析不到的条目会被跳过而不是整份作废：模型很容易在 initialTalents 里引用
+ * 一个没有一并写进 skillDefinitions 的技能名（注册「第一个」角色时图鉴还是空的，
+ * 没有既有技能可复用，特别容易发生）。旧版任何一条解析失败就抛错，
+ * 于是整组技能与天赋一起丢失——使用者看到的就是「提示技能不存在」而且天赋角标不出现。
+ *
+ * 跳过的条目会收集在 skipped 里，交由呼叫端提示，不静默吞掉。
+ */
 export function normalizeInitialSkillTalentConfig(config, catalog) {
-  if (!config || typeof config !== 'object' || Array.isArray(config)) return { skills: [], talents: [] };
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return { skills: [], talents: [], skipped: [] };
+  const skipped = [];
   const resolveId = (entry) => {
     const reference = entry?.skillId ?? entry?.skill ?? entry?.name;
     const definition = resolveSkillDefinition(catalog, reference);
-    if (!definition) throw new Error(`技能图鉴中找不到：${String(reference || '(空白)')}`);
+    if (!definition) {
+      skipped.push(String(reference || '(空白)'));
+      return null;
+    }
     return definition.id;
   };
-  const skills = normalizeSkillList((Array.isArray(config.skills) ? config.skills : []).map((entry) => ({
-    skillId: resolveId(entry),
-    level: entry?.level,
-    exp: entry?.exp,
-  })));
-  const talents = normalizeTalentList((Array.isArray(config.talents) ? config.talents : []).map((entry) => ({
-    skillId: resolveId(entry),
-    level: entry?.level,
-    exp: entry?.exp,
-  })));
-  return { skills, talents };
+  const mapEntries = (list) => (Array.isArray(list) ? list : [])
+    .map((entry) => ({ skillId: resolveId(entry), level: entry?.level, exp: entry?.exp }))
+    .filter((entry) => entry.skillId !== null);
+  const skills = normalizeSkillList(mapEntries(config.skills));
+  const talents = normalizeTalentList(mapEntries(config.talents));
+  return { skills, talents, skipped };
 }
 
-export function applyInitialSkillTalentConfig(chatState, targetName, config) {
+export function applyInitialSkillTalentConfig(chatState, targetName, config, report = null) {
   const name = String(targetName || '').trim();
   const current = chatState.characters?.[name];
   if (!name || !current) throw new Error(`找不到已注册角色：${name || '(空白)'}`);
   const normalized = normalizeInitialSkillTalentConfig(config, chatState.skillCatalog);
+  // 解析不到的条目已被跳过，交给呼叫端提示使用者
+  if (report && typeof report === 'object') report.skipped = normalized.skipped || [];
   const next = {
     ...current,
     profile: {
@@ -1468,7 +1496,7 @@ export function applyInitialSkillTalentConfig(chatState, targetName, config) {
   return chatState.characters[name];
 }
 
-export function applyRegistrySkillSetup(chatState, targetName, result) {
+export function applyRegistrySkillSetup(chatState, targetName, result, report = null) {
   const name = String(targetName || '').trim();
   if (!name || !chatState.characters?.[name]) throw new Error(`找不到已注册角色：${name || '(空白)'}`);
   const workingState = {
@@ -1506,7 +1534,7 @@ export function applyRegistrySkillSetup(chatState, targetName, result) {
   let character = applyInitialSkillTalentConfig(workingState, name, {
     skills: initialSkills,
     talents: initialTalents,
-  });
+  }, report);
   if (childSource) {
     character.profile.childSource = {
       motherName: String(childSource.motherName || '').trim(),
@@ -1692,6 +1720,10 @@ export async function runRegistry(ctx, options = {}) {
       if (sourceChildContext.child.derivedType) result.profile.base.derivedType = String(sourceChildContext.child.derivedType);
       else delete result.profile.base.derivedType;
     }
+    // 使用者已经明确指定要注册谁，模型不得改名。
+    // payload 里同时有角色卡与 target_character，模型常把角色卡名当成 name 回传，
+    // 于是角色被注册成卡片名而不是输入的名字（重新注册一次又「好了」，其实只是这次没抽到）。
+    result.name = targetName;
     recordRegistryResultDebug(result);
     let character = applyRegistryResult(chatState, result, { allowBreedingPsychology: includeBreedingPsychology });
     if (sourceChildContext) character = applyRegistryChildInheritance(chatState, targetName, requestedSource).character;

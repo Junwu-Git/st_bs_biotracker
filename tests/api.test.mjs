@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
 
-import { callOpenAICompatible, fetchModelList, isApiTimeoutError, resolveApiTimeoutMs } from '../scripts/api.js';
+import { callOpenAICompatible, fetchModelList, isApiDeadlineError, isApiTimeoutError, resolveApiTimeoutMs, resolveOverallDeadlineMs } from '../scripts/api.js';
 
 const ORIGINAL_GLOBALS = {
   fetch: globalThis.fetch,
@@ -191,4 +191,65 @@ test('resolveApiTimeoutMs clamps input and treats 0 as unlimited', () => {
   assert.equal(resolveApiTimeoutMs({ apiTimeoutMs: 0 }), 0);
   assert.equal(resolveApiTimeoutMs({ apiTimeoutMs: 500 }), 1000);
   assert.equal(resolveApiTimeoutMs({ apiTimeoutMs: 99999999 }), 1800000);
+});
+
+test('resolveOverallDeadlineMs bounds even an unlimited per-request timeout', () => {
+  // 一整轮 = (maxRetries 3 + 1) 次，所以是单次超时的 4 倍
+  assert.equal(resolveOverallDeadlineMs({}), 180000 * 4);
+  assert.equal(resolveOverallDeadlineMs({ apiTimeoutMs: 30000 }), 120000);
+  // 单次超时设为 0（不限制）时仍有终点，不会永远挂着
+  assert.equal(resolveOverallDeadlineMs({ apiTimeoutMs: 0 }), 180000 * 4);
+});
+
+test('the retry counter counts total tries so 3/3 can no longer hide a 4th attempt', async () => {
+  const warnings = [];
+  const previousToastr = globalThis.toastr;
+  globalThis.toastr = { warning: (message) => warnings.push(String(message)) };
+  const badContent = { choices: [{ message: { content: '这不是 JSON' } }] };
+  const goodContent = { choices: [{ message: { content: JSON.stringify({ operations: [] }) } }] };
+  let call = 0;
+  installBrowserHost(async () => {
+    call += 1;
+    // 第 1 轮的 primary + JSON 纠错子请求都坏 → 触发一次重试；第 2 轮 primary 就好
+    return jsonResponse(call <= 2 ? badContent : goodContent);
+  });
+
+  try {
+    const result = await callOpenAICompatible({
+      apiUrl: 'https://relay.example.test/v1',
+      apiKey: 'k',
+      model: 'm',
+      apiTimeoutMs: 180000,
+    }, { recent_messages: [] }, 'Return JSON.');
+    assert.deepEqual(result, { operations: [] });
+    assert.equal(warnings.length, 1, '应只重试一次');
+    // 分母是总轮次 4，而不是旧的 maxRetries 3
+    assert.match(warnings[0], /第 1\/4 次失败/);
+    assert.doesNotMatch(warnings[0], /\/3 /);
+  } finally {
+    if (previousToastr === undefined) delete globalThis.toastr;
+    else globalThis.toastr = previousToastr;
+  }
+});
+
+test('the overall deadline terminates a run that keeps failing, without hanging forever', async () => {
+  const badContent = { choices: [{ message: { content: '仍然不是 JSON' } }] };
+  let calls = 0;
+  installBrowserHost(async () => {
+    calls += 1;
+    return jsonResponse(badContent);
+  });
+
+  // 单次超时 1s → 总时限 4s。响应很快但一直坏，重试在第 3 次的 3s 间隔里撞上总时限，
+  // 循环下一轮开头发现已到点，抛出总时限错误而不是继续无止境地试。
+  await assert.rejects(
+    callOpenAICompatible({
+      apiUrl: 'https://relay.example.test/v1',
+      apiKey: 'k',
+      model: 'm',
+      apiTimeoutMs: 1000,
+    }, { recent_messages: [] }, 'Return JSON.'),
+    (error) => isApiDeadlineError(error) && /总时限/.test(error.message),
+  );
+  assert.ok(calls > 0 && calls < 20, `请求次数应有界，实际 ${calls}`);
 });

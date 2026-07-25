@@ -874,6 +874,8 @@ export function createEmptyChatState() {
     lastAttemptedSignature: '',
     lastProcessedSignature: '',
     lastFailedSignature: '',
+    // 失败当下「整段对话」的签名，用来判断是否该挡下自动重试
+    lastFailedChatSignature: '',
     lastRunAt: 0,
     sceneSummary: '',
     minutesPassed: 0,
@@ -1108,11 +1110,15 @@ export function saveSettings(ctx) {
 
 export async function hydrateChatStateFromHost(ctx, settings) {
   if (!settings?.chatStates || typeof settings.chatStates !== 'object') return false;
-  const chatKey = await resolveHostChatId(ctx);
-  const localState = settings.chatStates[chatKey];
+  const initialKey = await resolveHostChatId(ctx);
+  const localState = settings.chatStates[initialKey];
   if (localState && !isChatStateEffectivelyEmpty(localState)) return false;
   const storedState = await loadHostChatState(ctx);
   if (!storedState || isChatStateEffectivelyEmpty(storedState)) return false;
+  // 载入过程本身可能才等到宿主句柄就绪，这时稳定 id 才算得出来。
+  // 必须用最终的 key 落盘：否则资料会留在 fallback key 下，
+  // 而面板之后是用稳定 id 去读的，等于载入了却还是显示「没有注册角色」。
+  const chatKey = await resolveHostChatId(ctx);
   settings.chatStates[chatKey] = storedState;
   saveHostSettings(ctx);
   return true;
@@ -1633,6 +1639,40 @@ export function buildMessageDigest(ctx, endIndexExclusive = null) {
   return hash.toString(16).padStart(8, '0');
 }
 
+/**
+ * 快照涵盖到的最后一则讯息的签名（杂凑过，避免快照膨胀）。
+ *
+ * 不用整段前缀 digest：TT 的聊天视图是稀疏阵列（`new Array(totalCount)` 只填入已载入的窗口），
+ * 对 0..count 做前缀杂凑会把未载入的洞一起算进去，结果随载入范围而变。
+ * 边界这一则才是决定快照有效性的关键，而且通常就在已载入范围内。
+ */
+export function buildBoundaryMessageSignature(ctx, messageCount) {
+  const chat = getHostChat(ctx);
+  const index = Math.floor(Number(messageCount) || 0) - 1;
+  if (index < 0 || index >= chat.length) return '';
+  const message = chat[index];
+  // 稀疏视图未载入处取不到讯息，回传空字串代表「无从比对」
+  if (!message) return '';
+  return hashStringFNV1a(buildMessageSignature(ctx, message)).toString(16).padStart(8, '0');
+}
+
+/**
+ * 快照的边界讯息是否仍与当前聊天一致。
+ *
+ * 只比 messageCount 会让「删楼后长度恰好对上」的旧快照被当成完全匹配，
+ * 于是从一个内容已经不同的基准继续跑，后续对账一路错下去。
+ *
+ * 但两种情况无从比对：旧快照没有这个栏位；TT 稀疏视图该位置尚未载入。
+ * 这时维持原本只比 messageCount 的行为——宁可放行，也不要误判为失效而触发不必要的整段回放。
+ */
+function isSnapshotBoundaryIntact(ctx, snapshot, messageCount) {
+  const recorded = String(snapshot?.boundarySignature || '');
+  if (!recorded) return true;
+  const current = buildBoundaryMessageSignature(ctx, messageCount);
+  if (!current) return true;
+  return recorded === current;
+}
+
 function buildMessageDigestFromSignatures(signatures, endIndexExclusive = null) {
   const list = Array.isArray(signatures) ? signatures : [];
   const end = Number.isInteger(endIndexExclusive) ? Math.max(0, Math.min(list.length, endIndexExclusive)) : list.length;
@@ -1994,6 +2034,7 @@ function trimChatStateSnapshots(chatState) {
     chatState.snapshots[0] = {
       messageCount: Number.isInteger(chatState.snapshots[0].messageCount) ? chatState.snapshots[0].messageCount : 0,
       messageDigest: String(chatState.snapshots[0].messageDigest || ''),
+      boundarySignature: String(chatState.snapshots[0].boundarySignature || ''),
       reason: String(chatState.snapshots[0].reason || 'state'),
       createdAt: Number(chatState.snapshots[0].createdAt || Date.now()),
       snapshotMode: 'full',
@@ -2040,6 +2081,7 @@ function createStoredSnapshotState(snapshots, payload, metadata = {}, cache = ne
   const baseRecord = {
     messageCount: Number.isInteger(metadata.messageCount) ? Math.max(0, metadata.messageCount) : 0,
     messageDigest: String(metadata.messageDigest || ''),
+    boundarySignature: String(metadata.boundarySignature || ''),
     reason: String(metadata.reason || 'state'),
     createdAt: Number(metadata.createdAt || Date.now()),
   };
@@ -2110,6 +2152,7 @@ function repackChatStateSnapshots(chatState) {
     const stored = createStoredSnapshotState(repackedSnapshots, payload, {
       messageCount: snapshot?.messageCount,
       messageDigest: snapshot?.messageDigest,
+      boundarySignature: snapshot?.boundarySignature,
       reason: snapshot?.reason,
       createdAt: snapshot?.createdAt,
     }, repackedCache);
@@ -2177,6 +2220,8 @@ export function recordChatStateSnapshot(ctx, chatState, options = {}) {
     {
       messageCount,
       messageDigest: hasAbsoluteHostChatView(ctx) ? '' : buildMessageDigest(ctx, messageCount),
+      // 前缀 digest 在 TT 稀疏视图下无法计算，边界签名两种宿主都能用
+      boundarySignature: buildBoundaryMessageSignature(ctx, messageCount),
       reason: String(options.reason || 'state'),
       createdAt: Date.now(),
     },
@@ -2202,6 +2247,8 @@ export function getLatestMatchingSnapshot(ctx, chatState, messageCount = null) {
     } else if (count > chatLength) {
       continue;
     }
+    // 长度对上还不够：边界讯息被删除或改写时，这个快照的基准已经不成立
+    if (!isSnapshotBoundaryIntact(ctx, snapshot, count)) continue;
     return snapshot;
   }
   return null;

@@ -1,4 +1,4 @@
-import { callOpenAICompatible, resolveApiTimeoutMs } from './api.js';
+import { callOpenAICompatible, resolveOverallDeadlineMs } from './api.js';
 import { buildMainFlowStatePrompt, buildTrackerSystemPrompt } from './tracker_prompt_context.js';
 import { DEFAULT_WEAR_STATE, sanitizeWearState } from './wardrobe_config.js';
 import { applyToolCallsResult, TOOL_DEFINITIONS } from './tools.js';
@@ -50,13 +50,13 @@ function markTrackerRunProgress() {
 
 /**
  * 看门狗：请求若因为宿主代理挂起而永不返回，运行锁会一直留在 true，
- * 之后所有手动/自动分析都会被 already_running 挡掉。超过单轮超时上限即视为死锁并放行。
+ * 之后所有手动/自动分析都会被 already_running 挡掉。超过整轮总时限即视为死锁并放行。
+ * 以总时限（含全部重试）为准，避免误判还在合法重试的长轮次、让 poll 抢跑造成并发。
  */
 function isTrackerRunStale(settings) {
   const startedAt = Number(globalThis[RUN_STARTED_AT_KEY]);
   if (!Number.isFinite(startedAt) || startedAt <= 0) return true;
-  const timeoutMs = resolveApiTimeoutMs(settings);
-  const limitMs = (timeoutMs > 0 ? timeoutMs : 600000) + RUN_WATCHDOG_MARGIN_MS;
+  const limitMs = resolveOverallDeadlineMs(settings) + RUN_WATCHDOG_MARGIN_MS;
   return Date.now() - startedAt > limitMs;
 }
 
@@ -70,10 +70,25 @@ function getTrackerResumeIndexes(ctx, settings) {
   }).filter((count) => count !== null);
 }
 
+/**
+ * 失败后是否该挡下自动重试。
+ *
+ * 旧版只拿「失败那一楼的签名」去比「整段对话最后一楼的签名」：
+ * 重放中间楼失败时两者永远对不上，于是轮询会无限重发同一个失败请求
+ * （删掉最新一楼后特别容易触发，因为回放会从较早的楼开始）。
+ * 改为记录失败当下整段对话的签名——只要对话没有任何变化，重试必然重复同一个失败。
+ * 对话一有变动（新楼、改写、删楼）签名就变，自动重试随即恢复；手动分析不受此限。
+ */
 export function isFailedAutoRetryBlocked(ctx, chatState) {
   const chat = getHostChat(ctx);
-  if (chat.length === 0 || !chatState?.lastFailedSignature) return false;
-  return chatState.lastFailedSignature === buildSignature(ctx, chat.length);
+  if (chat.length === 0) return false;
+  const currentChatSignature = buildSignature(ctx, chat.length);
+  const failedChatSignature = String(chatState?.lastFailedChatSignature || '');
+  if (failedChatSignature) return failedChatSignature === currentChatSignature;
+  // 旧存档没有这个栏位时，沿用原本的尾楼比对
+  const failedSignature = String(chatState?.lastFailedSignature || '');
+  if (!failedSignature) return false;
+  return failedSignature === currentChatSignature;
 }
 
 function normalizeWorldbookMode(value) {
@@ -664,7 +679,7 @@ export function buildTrackerPayload(ctx, settings, reason = 'manual', endIndexEx
 
 export function buildMainFlowPrompt(ctx, settings) {
   const chatState = getChatState(ctx, settings);
-  reconcileChatStateSnapshots(ctx, chatState);
+  reconcileChatStateSnapshots(ctx, chatState, settings);
   return buildMainFlowStatePrompt(buildTrackerPayload(ctx, settings, 'mainflow'));
 }
 
@@ -681,14 +696,35 @@ function normalizeTrackerResult(result) {
   };
 }
 
-function reconcileChatStateSnapshots(ctx, chatState) {
+/**
+ * 用 lastProcessedSignature 定位「上次处理到哪一楼」。
+ * 快照因为删楼／改写而失效时，仍能靠它找到续跑点，不必从第 0 楼重来。
+ */
+function findProcessedResumeCount(ctx, chatState, chatLength) {
+  const processed = String(chatState?.lastProcessedSignature || '');
+  if (!processed) return null;
+  for (let count = chatLength; count >= 1; count -= 1) {
+    if (buildSignature(ctx, count) === processed) return count;
+  }
+  return null;
+}
+
+function reconcileChatStateSnapshots(ctx, chatState, settings) {
   const matchedSnapshot = getLatestMatchingSnapshot(ctx, chatState);
   if (matchedSnapshot) {
     restoreChatStateFromSnapshot(chatState, matchedSnapshot);
+    return { nextMessageIndex: matchedSnapshot.messageCount };
   }
-  return {
-    nextMessageIndex: matchedSnapshot ? matchedSnapshot.messageCount : 0,
-  };
+  // 没有可用快照时绝不从第 0 楼重跑整个聊天：每一楼都是一次 LLM 请求，
+  // 长对话可以跑上几十分钟看起来完全卡死；而且缺少基准可回滚，
+  // 从头重放等于把历史变化重复叠加到当前状态上。
+  // 回放上限取 contextSize——payload 本来就只带这么多条，更早的楼没有对应上下文可分析。
+  const chatLength = getHostChat(ctx).length;
+  const budget = Math.max(1, Math.floor(Number(settings?.contextSize) || DEFAULT_SETTINGS.contextSize));
+  const floorIndex = Math.max(0, chatLength - budget);
+  const resumeCount = findProcessedResumeCount(ctx, chatState, chatLength);
+  if (resumeCount !== null) return { nextMessageIndex: Math.max(resumeCount, floorIndex) };
+  return { nextMessageIndex: floorIndex };
 }
 
 function prepareManualReplay(ctx, chatState, chatLength) {
@@ -814,7 +850,8 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
     payload.global_worldbooks = mergeTrackerWorldbookLists(globalBooks, additionalBooks);
   }
   chatState.lastRunAt = Date.now();
-  chatState.lastAttemptedSignature = buildSignature(ctx, messageIndex + 1);
+  const attemptedSignature = buildSignature(ctx, messageIndex + 1);
+  chatState.lastAttemptedSignature = attemptedSignature;
   saveSettings(ctx);
   const systemPrompt = buildTrackerSystemPrompt(settings.systemPrompt || DEFAULT_SYSTEM_PROMPT, settings.registryDescriptionGuides || null, payload);
   recordTrackerRequestDebug(systemPrompt, payload);
@@ -824,12 +861,38 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
     systemPrompt
   );
   recordTrackerResultDebug(rawResult);
+
+  // 请求往返期间使用者可能删除或改写了这一楼。此时结果已经不对应任何现存讯息，
+  // 照样套用会把状态写到不存在的楼上，还会记下一个与聊天对不起来的快照，
+  // 后续对账便一路错下去。先把宿主视图刷新到最新再比对签名，不一致就整份作废。
+  try {
+    await refreshHostChatView(ctx, {
+      resumeIndexes: getTrackerResumeIndexes(ctx, settings),
+      contextSize: settings.contextSize,
+    });
+  } catch (error) {
+    console.warn('[BS BioTracker] 分析后刷新聊天视图失败，改用现有视图比对', error);
+  }
+  if (buildSignature(ctx, messageIndex + 1) !== attemptedSignature) {
+    console.warn('[BS BioTracker] 该消息在分析期间被修改或删除，本次结果已作废');
+    chatState.lastRawResult = {
+      message: '该消息在分析期间被修改或删除，本次结果已作废，未写入任何状态。',
+      tool_calls: [],
+    };
+    chatState.lastOperationLogs = [];
+    chatState.lastAttemptedSignature = '';
+    saveSettings(ctx);
+    return { discarded: true };
+  }
+
   const result = normalizeTrackerResult(rawResult);
   applyToolCallsResult(ctx, result);
-  chatState.lastProcessedSignature = chatState.lastAttemptedSignature;
+  chatState.lastProcessedSignature = attemptedSignature;
   chatState.lastFailedSignature = '';
+  chatState.lastFailedChatSignature = '';
   recordChatStateSnapshot(ctx, chatState, { messageCount: messageIndex + 1, reason: 'tracker' });
   saveSettings(ctx);
+  return { discarded: false };
 }
 
 export async function runTracker(ctx, deps, reason = 'manual') {
@@ -925,15 +988,22 @@ export async function runTracker(ctx, deps, reason = 'manual') {
   markTrackerRunProgress();
   try {
     const { nextMessageIndex } =
-      reason === 'manual' ? prepareManualReplay(ctx, chatState, chat.length) : reconcileChatStateSnapshots(ctx, chatState);
+      reason === 'manual' ? prepareManualReplay(ctx, chatState, chat.length) : reconcileChatStateSnapshots(ctx, chatState, settings);
     let processedCount = 0;
+    let discarded = false;
     for (let index = nextMessageIndex; index < chat.length; index += 1) {
       markTrackerRunProgress();
-      await processTrackerMessage(ctx, settings, chatState, deps, reason, index);
+      const outcome = await processTrackerMessage(ctx, settings, chatState, deps, reason, index);
+      // 聊天在分析途中被改动：后面的索引已经不可信，交给下一轮重新对账
+      if (outcome?.discarded) {
+        discarded = true;
+        break;
+      }
       processedCount += 1;
     }
     deps.renderStatusPanel(ctx);
     deps.updateMainFlowPrompt?.(ctx);
+    if (discarded) return { skipped: true, reason: 'message_changed_during_run', processedCount };
     if (reason === 'poll' && processedCount === 0) return;
     const toolCalls = Array.isArray(chatState.lastRawResult?.tool_calls) ? chatState.lastRawResult.tool_calls : [];
     emitTrackerUpdateCue({
@@ -946,6 +1016,9 @@ export async function runTracker(ctx, deps, reason = 'manual') {
     console.error('[BS BioTracker] runTracker failed', error);
     recordTrackerResultDebug(null, error);
     chatState.lastFailedSignature = chatState.lastAttemptedSignature || buildSignature(ctx, chat.length);
+    // 记下失败当下「整段对话」的签名：只要对话没变，自动重试就该被挡住。
+    // 失败可能发生在回放的中间楼，只比对尾楼会让轮询无限重发。
+    chatState.lastFailedChatSignature = buildSignature(ctx, getHostChat(ctx).length);
     chatState.lastRawResult = {
       error: String(error?.message || error),
       tool_calls: [],

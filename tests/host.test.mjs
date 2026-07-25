@@ -716,3 +716,217 @@ test('derived type overrides affect base types and custom subtypes', () => {
   assert.equal(raceConfig.getDerivedTypeFluxProfile('不死').fluxName, '死气');
   assert.equal(raceConfig.getDerivedTypeIntroductionLine('不死'), '');
 });
+
+test('an unhydrated blank state never overwrites an existing TauriTavern sidecar', async () => {
+  resetGlobals();
+  const writes = [];
+  const handle = {
+    stableId: async () => 'stable-chat-guard',
+    store: {
+      // store 尚未就绪：hydrate 拿不到内容（既不是 not-found，也读不到资料）
+      getJson: async () => { throw new Error('Chat store is not ready yet'); },
+      setJson: async ({ value }) => { writes.push(value); },
+    },
+  };
+  const ctx = { chatId: 'fallback-guard', extensionSettings: {}, saveSettingsDebounced() {} };
+  globalThis.SillyTavern = { getContext: () => ctx };
+  globalThis.__TAURITAVERN__ = { ready: Promise.resolve(), api: { chat: { current: { handle: () => handle } } } };
+
+  const settings = state.getSettings(ctx);
+  // hydrate 失败 → 内存里只会是一份刚建出来的空状态
+  assert.equal(await state.hydrateChatStateFromHost(ctx, settings), false);
+  state.getChatState(ctx, settings);
+  state.saveSettings(ctx);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+
+  // 关键：一次 setJson 都不能发生，否则真实注册资料就被空状态洗掉了
+  assert.deepEqual(writes, [], '未确认存档内容前不得写入空状态');
+});
+
+test('a blank state may be persisted once the sidecar content is confirmed', async () => {
+  resetGlobals();
+  const writes = [];
+  const handle = {
+    stableId: async () => 'stable-chat-confirmed',
+    store: {
+      // 确认这个聊天没有存档
+      getJson: async () => { throw new Error('Not found: Chat store entry not found'); },
+      setJson: async ({ value }) => { writes.push(value); },
+    },
+  };
+  const ctx = { chatId: 'fallback-confirmed', extensionSettings: {}, saveSettingsDebounced() {} };
+  globalThis.SillyTavern = { getContext: () => ctx };
+  globalThis.__TAURITAVERN__ = { ready: Promise.resolve(), api: { chat: { current: { handle: () => handle } } } };
+
+  const settings = state.getSettings(ctx);
+  assert.equal(await state.hydrateChatStateFromHost(ctx, settings), false);
+  state.getChatState(ctx, settings);
+  state.saveSettings(ctx);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+
+  // 已确认没有存档 → 写空无害，使用者主动「清除」也才能落盘
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0].chatState.characters, {});
+});
+
+test('real registration data still saves normally while unhydrated', async () => {
+  resetGlobals();
+  const writes = [];
+  const handle = {
+    stableId: async () => 'stable-chat-nonblank',
+    store: {
+      getJson: async () => { throw new Error('Chat store is not ready yet'); },
+      setJson: async ({ value }) => { writes.push(value); },
+    },
+  };
+  const ctx = { chatId: 'fallback-nonblank', extensionSettings: {}, saveSettingsDebounced() {} };
+  globalThis.SillyTavern = { getContext: () => ctx };
+  globalThis.__TAURITAVERN__ = { ready: Promise.resolve(), api: { chat: { current: { handle: () => handle } } } };
+
+  const settings = state.getSettings(ctx);
+  await state.hydrateChatStateFromHost(ctx, settings);
+  const chatState = state.getChatState(ctx, settings);
+  chatState.characters.Alice = { name: 'Alice', initialized: true };
+  state.saveSettings(ctx);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+
+  // 守卫只挡空状态，有资料照写不误
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].chatState.characters.Alice.initialized, true);
+});
+
+test('a chat store handle that appears late is waited for instead of read as missing', async () => {
+  resetGlobals();
+  let handle = null;
+  const ctx = { chatId: 'fallback-late', extensionSettings: {}, saveSettingsDebounced() {} };
+  globalThis.SillyTavern = { getContext: () => ctx };
+  globalThis.__TAURITAVERN__ = {
+    ready: Promise.resolve(),
+    // 重开存档时常见：主体已 ready，但该聊天的 handle 稍后才挂上
+    api: { chat: { current: { handle: () => handle } } },
+  };
+  setTimeout(() => {
+    handle = {
+      stableId: async () => 'stable-chat-late',
+      store: {
+        getJson: async () => ({
+          version: 1,
+          chatState: { characters: { Alice: { initialized: true } }, snapshots: [] },
+        }),
+        setJson: async () => {},
+      },
+    };
+  }, 300);
+
+  const settings = state.getSettings(ctx);
+  assert.equal(await state.hydrateChatStateFromHost(ctx, settings), true, '应等到句柄就绪并载入资料');
+  assert.equal(host.isHostChatStateConfirmed(ctx), true);
+  assert.equal(settings.chatStates['stable-chat-late'].characters.Alice.initialized, true);
+});
+
+test('an unreadable store leaves the chat unconfirmed so callers retry', async () => {
+  resetGlobals();
+  const handle = {
+    stableId: async () => 'stable-chat-unreadable',
+    store: {
+      getJson: async () => { throw new Error('Chat store is not ready yet'); },
+      setJson: async () => {},
+    },
+  };
+  const ctx = { chatId: 'fallback-unreadable', extensionSettings: {}, saveSettingsDebounced() {} };
+  globalThis.SillyTavern = { getContext: () => ctx };
+  globalThis.__TAURITAVERN__ = { ready: Promise.resolve(), api: { chat: { current: { handle: () => handle } } } };
+
+  const settings = state.getSettings(ctx);
+  assert.equal(await state.hydrateChatStateFromHost(ctx, settings), false);
+  // 读取失败 ≠ 确认没有存档；未确认才能让上层安排重试而不是画成「没有注册角色」
+  assert.equal(host.isHostChatStateConfirmed(ctx), false);
+});
+
+test('native SillyTavern is always confirmed and never waits on a sidecar', async () => {
+  resetGlobals();
+  const ctx = { chatId: 'native-chat', extensionSettings: {}, saveSettingsDebounced() {} };
+  globalThis.SillyTavern = { getContext: () => ctx };
+  assert.equal(host.getHostKind(), 'sillytavern');
+  assert.equal(host.isHostChatStateConfirmed(ctx), true);
+  assert.equal(await host.loadHostChatState(ctx), null);
+});
+
+function installTauriHostWithStore(store, stableId) {
+  const handle = { stableId: async () => stableId, store };
+  const ctx = { chatId: `${stableId}-fallback`, extensionSettings: {}, saveSettingsDebounced() {} };
+  globalThis.SillyTavern = { getContext: () => ctx };
+  globalThis.__TAURITAVERN__ = {
+    ready: Promise.resolve(),
+    api: { chat: { current: { handle: () => handle } } },
+  };
+  return ctx;
+}
+
+test('a listable store skips the probe entirely when the sidecar is absent', async () => {
+  resetGlobals();
+  let getJsonCalls = 0;
+  const ctx = installTauriHostWithStore({
+    listKeys: async () => ({ keys: ['some-other-key'] }),
+    getJson: async () => { getJsonCalls += 1; throw new Error('Not found: Chat store entry not found'); },
+    setJson: async () => {},
+  }, 'stable-listable-missing');
+
+  const settings = state.getSettings(ctx);
+  assert.equal(await state.hydrateChatStateFromHost(ctx, settings), false);
+  // 关键：确认不存在就不该再读，宿主才不会弹那个吓人的后端错误
+  assert.equal(getJsonCalls, 0, '已知不存在时不应触发 getJson');
+  assert.equal(host.isHostChatStateConfirmed(ctx), true, '确认过不存在，之后写空才安全');
+});
+
+test('a listable store still reads through when the sidecar is present', async () => {
+  resetGlobals();
+  let getJsonCalls = 0;
+  const ctx = installTauriHostWithStore({
+    listKeys: async () => ['chat-state-v1'],
+    getJson: async () => {
+      getJsonCalls += 1;
+      return { version: 1, chatState: { characters: { Alice: { initialized: true } }, snapshots: [] } };
+    },
+    setJson: async () => {},
+  }, 'stable-listable-present');
+
+  const settings = state.getSettings(ctx);
+  assert.equal(await state.hydrateChatStateFromHost(ctx, settings), true);
+  assert.equal(getJsonCalls, 1);
+  assert.equal(settings.chatStates['stable-listable-present'].characters.Alice.initialized, true);
+});
+
+test('a store without any list method falls back to the original read path', async () => {
+  resetGlobals();
+  let getJsonCalls = 0;
+  const ctx = installTauriHostWithStore({
+    // 没有任何列举方法：行为必须与加入这项优化之前完全一致
+    getJson: async () => {
+      getJsonCalls += 1;
+      return { version: 1, chatState: { characters: { Bob: { initialized: true } }, snapshots: [] } };
+    },
+    setJson: async () => {},
+  }, 'stable-no-lister');
+
+  const settings = state.getSettings(ctx);
+  assert.equal(await state.hydrateChatStateFromHost(ctx, settings), true);
+  assert.equal(getJsonCalls, 1, '无从检查时仍要照常读取');
+});
+
+test('a failing list method degrades to the original read path', async () => {
+  resetGlobals();
+  let getJsonCalls = 0;
+  const ctx = installTauriHostWithStore({
+    listKeys: async () => { throw new Error('list unsupported'); },
+    getJson: async () => {
+      getJsonCalls += 1;
+      return { version: 1, chatState: { characters: { Carol: { initialized: true } }, snapshots: [] } };
+    },
+    setJson: async () => {},
+  }, 'stable-broken-lister');
+
+  const settings = state.getSettings(ctx);
+  assert.equal(await state.hydrateChatStateFromHost(ctx, settings), true);
+  assert.equal(getJsonCalls, 1, '列举失败不得让载入跟着失败');
+});

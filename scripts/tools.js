@@ -419,6 +419,19 @@ export const TOOL_DEFINITIONS = Object.freeze([
     },
   },
   {
+    name: 'bsRuptureMembranes',
+    description: '让角色破水（羊膜破裂）。只有在产兆前驱且宫压已达上限的 66%，或已在第一／第二产程时才会生效；条件不足会被拒绝，此时叙事不得写成已经破水。'
+      + '产兆前驱破水会直接进入第一产程。剧情写到羊水流出、破水时必须调用本工具，让叙事与系统状态一致；系统未确认破水前不要擅自描写破水。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        female: { type: 'string' },
+      },
+      required: ['female'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'bsChildbirth',
     description: '让角色立即结束分娩并进入产后恢复，并把剩余胎儿转为 children 记录。外部直接调用视为手术产；产程自然结束时则记为自然产。',
     input_schema: {
@@ -1912,14 +1925,23 @@ function updateAdvisoryNotify(profile, female) {
   if (['临产期', '逾期', '产兆前驱', '第一产程', '第二产程'].includes(stage)) {
     const amnion = clampNumber(pregnant.amnionDurability, -100, 100, 0);
     if (amnion > 0) {
-      reminders.push(`${female}的膜耐性尚有${Math.round(amnion)}%，还未到破水时机`);
+      // 陈述句会被当成背景资讯忽略，必须写成禁令：设定上产程前羊膜恒不破，
+      // 模型却很常自行写出破水，导致叙事与系统状态脱节。
+      // 但只在真的能破水的阶段才指向工具——临产期／逾期调用必被拒，
+      // 提示它去调等于教它做一件必定失败的事。
+      const canRupture = RUPTURE_ALLOWED_PRELABOR_STAGES.includes(stage) || ['第一产程', '第二产程'].includes(stage);
+      reminders.push(canRupture
+        ? `${female}尚未破水（膜耐性还有${Math.round(amnion)}%）：禁止描写破水、羊水流出或羊膜破裂。若剧情确实需要破水，必须先调用 bsRuptureMembranes，成功后才可如此描写`
+        : `${female}尚未破水（膜耐性还有${Math.round(amnion)}%）：禁止描写破水、羊水流出或羊膜破裂。此阶段无法破水，必须先进入产兆前驱`);
     } else if (stage !== '第三产程') {
       reminders.push(`${female}已破水`);
     }
   }
 
   if (stage === '产兆前驱') {
-    reminders.push(`${female}正处于产兆前驱阶段，可优先使用 bsMaternalFetalInteraction（direction=maternal）尝试延后分娩`);
+    reminders.push(Boolean(profile?.immune?.realisticLabor)
+      ? `${female}正处于产兆前驱阶段，可使用 bsMaternalFetalInteraction（direction=maternal）尝试延后分娩；真实产程下分娩只能延后、无法取消，累计延后到上限后必然进入产程`
+      : `${female}正处于产兆前驱阶段，可优先使用 bsMaternalFetalInteraction（direction=maternal）尝试延后分娩`);
   }
 
   profile.notify = {
@@ -2177,6 +2199,9 @@ function applyLaborAmnionWear(profile, female, options = {}) {
 function getProdromalInitialHours(profile) {
   return 48 * clampNumber(profile?.bio?.birthDifficulty, 0.1, 100, 1);
 }
+
+/** 真实产程下产兆前驱的累计延后上限（占初始时长的比例）：只能拖，拖不掉 */
+const REALISTIC_PRODROMAL_DELAY_CAP_RATIO = 1.0;
 
 function clearProdromalState(pregnant) {
   pregnant.prodromalOriginStage = null;
@@ -2740,6 +2765,81 @@ function applyAbortion(chatState, args) {
   return { applied: true, message: `bsAbortion applied to ${female}.` };
 }
 
+/** 破水只允许在已进入产兆前驱后作为转入正式产程的受控事件。 */
+const RUPTURE_ALLOWED_PRELABOR_STAGES = Object.freeze(['产兆前驱']);
+/** 产兆前驱中破水所需的宫压门槛。 */
+const RUPTURE_PRESSURE_RATIO = 0.66;
+
+/**
+ * 破水。
+ *
+ * 设定上产程前 amnionDurability 恒 ≥ 1（任何磨损只让羊膜变薄），
+ * 所以模型经常写出系统层面不可能发生的破水叙事，两边就此脱节。
+ * 这里给出唯一一条受控入口：条件足够才破，并直接推进第一产程；
+ * 条件不足则明确拒绝，让模型知道该改写叙事而不是继续假设已破水。
+ */
+function applyRuptureMembranes(chatState, args) {
+  const female = String(args?.female || '').trim();
+  const character = chatState.characters?.[female];
+  if (!female || !character) {
+    return { applied: false, message: `bsRuptureMembranes skipped: unknown character ${female || '(empty)'}.` };
+  }
+
+  const next = cloneValue(character);
+  const profile = next.profile || {};
+  const base = profile.base || {};
+  const pregnant = profile.pregnant || {};
+  const notify = profile.notify || {};
+  const stage = String(base.stage || '');
+  const inPrelabor = RUPTURE_ALLOWED_PRELABOR_STAGES.includes(stage);
+  const inLabor = ['第一产程', '第二产程'].includes(stage);
+
+  if (!inPrelabor && !inLabor) {
+    return {
+      applied: false,
+      message: `bsRuptureMembranes skipped for ${female}: stage ${stage || '(none)'} cannot rupture; do not narrate rupture yet.`,
+    };
+  }
+
+  if (clampNumber(pregnant.amnionDurability, -100, 100, 0) <= 0) {
+    return { applied: false, message: `bsRuptureMembranes skipped for ${female}: already ruptured.` };
+  }
+
+  if (inPrelabor) {
+    const pressureCap = getUterinePressureCap(profile);
+    const currentPressure = clampNumber(base.uterinePressure, 0, pressureCap, 0);
+    if (currentPressure < pressureCap * RUPTURE_PRESSURE_RATIO) {
+      return {
+        applied: false,
+        message: `bsRuptureMembranes skipped for ${female}: uterine pressure too low to rupture; do not narrate rupture yet.`,
+      };
+    }
+  }
+
+  pregnant.amnionDurability = 0;
+  profile.pregnant = pregnant;
+
+  if (inPrelabor) {
+    base.stage = '第一产程';
+    base.days = 0;
+    beginLaborPhase(pregnant, '潜伏期', 0);
+    updateLaborPain(profile, '第一产程', '潜伏期', 0);
+    clearProdromalState(pregnant);
+    profile.notify = {
+      ...notify,
+      firstly: `${female}进入了第一产程`,
+      secondly: `${female}破水了，分娩正式开始`,
+    };
+  } else {
+    profile.notify = { ...notify, secondly: `${female}破水了` };
+  }
+
+  profile.base = base;
+  next.profile = profile;
+  chatState.characters[female] = syncCharacterStageFromProfile(next);
+  return { applied: true, message: `bsRuptureMembranes applied to ${female}.` };
+}
+
 function applyChildbirth(chatState, args) {
   const female = String(args?.female || '').trim();
   const character = chatState.characters?.[female];
@@ -2774,6 +2874,7 @@ function applyLaborResistance(profile, female) {
     };
     return { applied: false, message: `bsMaternalFetalInteraction skipped for ${female}: not in prodromal stage.` };
   }
+  const realisticLabor = Boolean(profile?.immune?.realisticLabor);
   const vitality = clampNumber(base.vitality, 0, 9999, 100);
   const uterinePressure = clampNumber(base.uterinePressure, 0, 9999, 0);
   const fetalEnergyDrain = clampNumber(pregnant.fetalEnergyDrain, 0, 9999, 0);
@@ -2806,9 +2907,20 @@ function applyLaborResistance(profile, female) {
 
   const initialHours = getProdromalInitialHours(profile);
   const rawDeltaHours = (successCount * 6) - (failureCount * 12);
-  const deltaHours = Math.max(rawDeltaHours, -(initialHours * 0.75));
+  let deltaHours = Math.max(rawDeltaHours, -(initialHours * 0.75));
+
+  // 真实产程：分娩只能延后、不能取消。累计延后上限为初始时长的 100%，
+  // 到顶后再怎么抵抗成功也不会继续往后推，也不会退回妊娠阶段。
+  const currentProgress = Math.max(0, clampNumber(pregnant.prodromalDelayProgressHours, 0, 9999, 0));
+  const delayCapped = realisticLabor && deltaHours > 0;
+  if (delayCapped) {
+    const delayCap = initialHours * REALISTIC_PRODROMAL_DELAY_CAP_RATIO;
+    deltaHours = Math.max(0, Math.min(deltaHours, delayCap - currentProgress));
+  }
+  const atDelayCap = delayCapped && deltaHours <= 0;
+
   const remainingHours = clampNumber(pregnant.prodromalRemainingHours, 0, 9999, initialHours) + deltaHours;
-  const progressHours = Math.max(0, clampNumber(pregnant.prodromalDelayProgressHours, 0, 9999, 0) + deltaHours);
+  const progressHours = Math.max(0, currentProgress + deltaHours);
   pregnant.prodromalRemainingHours = Math.max(0, remainingHours);
   pregnant.prodromalDelayProgressHours = progressHours;
   updateLaborPain(profile, '产兆前驱', null, 1 - (Math.max(0, remainingHours) / initialHours));
@@ -2829,7 +2941,8 @@ function applyLaborResistance(profile, female) {
     return { applied: true, message: `bsMaternalFetalInteraction applied to ${female}: prodromal duration exhausted.` };
   }
 
-  if (progressHours >= initialHours) {
+  // 真实产程下分娩不可取消：即使抵抗再成功，也不会退回妊娠阶段
+  if (progressHours >= initialHours && !realisticLabor) {
     const target = derivePregnancyStageState(clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0), 1);
     const reducedPressure = Math.floor(uterinePressure * 0.25);
     base.stage = target.stage;
@@ -2852,7 +2965,9 @@ function applyLaborResistance(profile, female) {
 
   profile.notify = {
     ...notify,
-    thirdly: `${female}的抵抗判定为${successCount}次成功、${failureCount}次失败，产兆前驱时间变动${deltaHours >= 0 ? '+' : ''}${deltaHours.toFixed(1)}小时，剩余约${Math.ceil(remainingHours)}小时`,
+    thirdly: atDelayCap
+      ? `${female}的抵抗判定为${successCount}次成功、${failureCount}次失败，但分娩已无法再延后，剩余约${Math.ceil(remainingHours)}小时`
+      : `${female}的抵抗判定为${successCount}次成功、${failureCount}次失败，产兆前驱时间变动${deltaHours >= 0 ? '+' : ''}${deltaHours.toFixed(1)}小时，剩余约${Math.ceil(remainingHours)}小时`,
   };
   return { applied: true, message: `bsMaternalFetalInteraction applied to ${female}: prodromal duration adjusted.` };
 }
@@ -4414,6 +4529,7 @@ export function applyToolCall(chatState, call) {
   if (name === 'bsSetMenstrualPhases') return applySetMenstrualPhases(chatState, args);
   if (name === 'bsExcreteMetabolism') return applyExcreteMetabolism(chatState, args);
   if (name === 'bsAbortion') return applyAbortion(chatState, args);
+  if (name === 'bsRuptureMembranes') return applyRuptureMembranes(chatState, args);
   if (name === 'bsChildbirth') return applyChildbirth(chatState, args);
   if (name === 'bsMaternalFetalInteraction') return applyMaternalFetalInteraction(chatState, args);
   if (name === 'bsDebugInjectPregnancy') return applyDebugInjectPregnancy(chatState, args);
