@@ -5,10 +5,13 @@ import test, { afterEach } from 'node:test';
 import * as state from '../scripts/state.js';
 import {
   applyRegistrySkillSetup,
+  buildBreedingInferenceSystemPrompt,
   buildRegistrySkillSystemPrompt,
   buildRegistrySystemPrompt,
   normalizeInitialSkillTalentConfig,
+  resolveRegistryTargetName,
   runRegistry,
+  runRegistryBreedingInference,
 } from '../scripts/registry.js';
 
 const ORIGINAL_FETCH = globalThis.fetch;
@@ -116,4 +119,57 @@ test('an empty catalog is called out because every reference must be defined in-
   const normal = buildRegistrySkillSystemPrompt({});
   assert.doesNotMatch(normal, /目前是空的/);
   assert.match(normal, /只有现有图鉴确实无法表达所需技能时/);
+});
+
+function makeCompleteStageProfiles() {
+  const stages = ['0', '1_25', '26_50', '51_75', '76_100', '100_plus'];
+  const makeAxis = (axis) => Object.fromEntries(stages.map((stage) => [stage, `测试角色在 ${axis} ${stage} 的长期表现。`]));
+  return {
+    mens: Object.fromEntries(['mastery', 'desire', 'autonomy'].map((axis) => [axis, makeAxis(axis)])),
+    preg: Object.fromEntries(['cognition', 'bonding', 'stance'].map((axis) => [axis, makeAxis(axis)])),
+  };
+}
+
+test('breeding inference pins target_character to the typed name instead of user or card name', async () => {
+  const ctx = {
+    chatId: 'breeding-target-chat',
+    name1: '陆素素',
+    name2: '卡片角色',
+    characterId: 0,
+    characters: [{ name: '卡片角色', description: '角色卡描述', avatar: 'card.png' }],
+    chat: [{ is_user: true, name: 'user', mes: '一段剧情。' }],
+    extensionSettings: {},
+    saveSettingsDebounced() {},
+  };
+  globalThis.SillyTavern = { getContext: () => ctx };
+  const settings = state.getSettings(ctx);
+  settings.apiUrl = 'https://example.test/v1';
+  settings.model = 'test-model';
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    async text() {
+      return JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({
+          target_character: 'user',
+          pregnancy_status: 'mens',
+          mens: { mastery_value: 50, desire_value: 50, autonomy_value: 50, isChaste: false, hasContraception: false },
+          preg: null,
+          stageProfiles: makeCompleteStageProfiles(),
+        }) } }],
+      });
+    },
+  });
+
+  const prompt = buildBreedingInferenceSystemPrompt(settings, { targetName: '陆素素' });
+  assert.match(prompt, /唯一目标是「陆素素」/);
+  const result = await runRegistryBreedingInference(ctx, { targetName: '{{user}}', declaredRace: '人类' });
+  assert.equal(result.target_character, '陆素素');
+});
+test('registry target resolves ST user aliases to the current user name', () => {
+  const ctx = { name1: '沈祁苓' };
+  for (const alias of ['user', '{user}', '{{user}}', '<user>']) {
+    assert.equal(resolveRegistryTargetName(ctx, alias), '沈祁苓', `${alias} 应解析为当前 user 名`);
+  }
+  assert.equal(resolveRegistryTargetName(ctx, '陆素素'), '陆素素', '普通角色名不应变化');
 });

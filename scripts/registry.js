@@ -59,6 +59,31 @@ const DEBUG_LAST_REGISTRY_REQUEST_KEY = '__bs_biotracker_debug_last_registry_req
 const DEBUG_LAST_REGISTRY_RESULT_KEY = '__bs_biotracker_debug_last_registry_result__';
 const DEBUG_LAST_BREEDING_INFERENCE_REQUEST_KEY = '__bs_biotracker_debug_last_breeding_inference_request__';
 const DEBUG_LAST_BREEDING_INFERENCE_RESULT_KEY = '__bs_biotracker_debug_last_breeding_inference_result__';
+const ST_USER_TARGET_ALIASES = new Set(['user', '{user}', '{{user}}', '<user>']);
+
+/**
+ * 角色名输入允许直接使用 ST 的 user 宏。这个名称会成为 state 的实际 key，
+ * 所以必须在推演、注册和套用的每一条入口统一解析，不能只靠 API payload 展开。
+ */
+export function resolveRegistryTargetName(ctx, value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  let resolved = raw;
+  for (const method of ['substituteParamsExtended', 'substituteParams']) {
+    try {
+      const next = ctx?.[method]?.(raw);
+      if (typeof next === 'string' && next.trim()) {
+        resolved = next.trim();
+        break;
+      }
+    } catch {}
+  }
+  const userName = String(ctx?.name1 || '').trim();
+  if (ST_USER_TARGET_ALIASES.has(resolved.toLowerCase()) || ST_USER_TARGET_ALIASES.has(raw.toLowerCase())) {
+    return userName || resolved;
+  }
+  return resolved;
+}
 
 function normalizeWorldbookMode(value) {
   const mode = String(value || 'exclude').trim();
@@ -309,6 +334,7 @@ function recordBreedingInferenceResultDebug(result, error = null) {
 }
 
 export function buildBreedingInferenceSystemPrompt(settings, options = {}) {
+  const targetName = String(options.targetName || '').trim();
   const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings?.registryCustomNotes || '')).trim();
   const declaredRace = String(options.declaredRace || '').trim();
   const breedingInferencePrompt = String(options.breedingInferencePrompt || '').trim();
@@ -321,6 +347,7 @@ export function buildBreedingInferenceSystemPrompt(settings, options = {}) {
   return [
     '你是 AIRP 角色繁育推演器。',
     '你的任务不是注册角色，而是在注册前根据角色卡、世界书、最近对话与用户补充，推演该角色的繁育心理底盘。',
+    targetName ? `本次唯一目标是「${targetName}」。target_character 必须逐字填写「${targetName}」，不得填写 user、角色卡名或任何其他角色。` : '',
     '繁育推演描述的是较稳定的人格、经历、认知与关系倾向，不是当下短暂情绪；不要因为角色刚害羞、刚哭、刚受伤就大幅改写长期心理轴。',
     '若资料能支持判断，必须给出数值；只有完全没有线索时才使用 null。',
     '如果角色当前未怀孕或没有明确初登场怀孕迹象，填写 mens；如果角色当前已怀孕、假孕、产兆前驱或产程中，填写 preg。mens 与 preg 二选一，另一项用 null。',
@@ -446,6 +473,11 @@ async function runBreedingInference(settings, payload, options = {}) {
   try {
     const rawResult = await callOpenAICompatible(settings, payload, systemPrompt);
     const result = normalizeBreedingInferenceResult(rawResult);
+    // 角色卡、最近对话中会同时出现 user 与其他人物；target_character 是 UI 的
+    // 明确输入，不能把模型回传的猜测当成目标来源，否则结果会显示成 user。
+    if (result && typeof result === 'object' && !Array.isArray(result)) {
+      result.target_character = String(payload?.target_character || '').trim();
+    }
     const stageProfiles = normalizePsychologyStageProfiles(result?.stageProfiles);
     const missing = getMissingPsychologyStageProfileKeys(stageProfiles);
     if (missing.length > 0) {
@@ -661,6 +693,8 @@ export async function runRegistryDiaryInference(ctx, options = {}) {
 export async function runRegistryBreedingInference(ctx, options = {}) {
   const settings = getSettings(ctx);
   const chatState = getChatState(ctx, settings);
+  const targetName = resolveRegistryTargetName(ctx, options.targetName);
+  if (!targetName) throw new Error('繁育推演需要 targetName');
   const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings.registryCustomNotes || '')).trim();
   const requestedSource = options.sourceChild || null;
   const sourceChildContext = requestedSource ? resolveRegistryChildSource(chatState, requestedSource) : null;
@@ -671,6 +705,7 @@ export async function runRegistryBreedingInference(ctx, options = {}) {
   const breedingInferencePrompt = String(options.breedingInferencePrompt || '').trim();
   const payload = await buildRegistryPayload(ctx, settings, chatState, {
     ...options,
+    targetName,
     reason: options.reason || 'breeding_inference',
     customNotes,
     declaredRace,
@@ -681,6 +716,7 @@ export async function runRegistryBreedingInference(ctx, options = {}) {
   payload.breeding_inference_prompt = breedingInferencePrompt;
   return runBreedingInference(settings, payload, {
     ...options,
+    targetName,
     customNotes,
     declaredRace,
     breedingInferencePrompt,
@@ -1610,7 +1646,7 @@ export function applyBreedingInferenceResult(chatState, targetName, inference) {
 export function applyRegistryBreedingInference(ctx, options = {}) {
   const settings = getSettings(ctx);
   const chatState = getChatState(ctx, settings);
-  const targetName = String(options.targetName || '').trim();
+  const targetName = resolveRegistryTargetName(ctx, options.targetName);
   const character = applyBreedingInferenceResult(chatState, targetName, options.breedingInference);
   recordChatStateSnapshot(ctx, chatState, { reason: 'breeding_inference_apply' });
   saveSettings(ctx);
@@ -1651,7 +1687,7 @@ export function applyRegistryChildInheritance(chatState, targetName, source = {}
 export async function runRegistry(ctx, options = {}) {
   const settings = getSettings(ctx);
   const chatState = getChatState(ctx, settings);
-  const targetName = String(options.targetName || '').trim();
+  const targetName = resolveRegistryTargetName(ctx, options.targetName);
   const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings.registryCustomNotes || '')).trim();
   if (!targetName) throw new Error('runRegistry 需要 targetName');
   const requestedSource = options.sourceChild || null;

@@ -4,6 +4,7 @@ import {
   applyRegistryBreedingInference,
   applyRegistrySkillSetup,
   resolveRegistryChildSource,
+  resolveRegistryTargetName,
   runRegistry,
   runRegistryBreedingInference,
   runRegistryDiaryInference,
@@ -311,6 +312,7 @@ function clearBreedingInferenceDraftFor(registeredName) {
   registryBreedingInferenceDraft = null;
   registryInferenceResultName = '';
   setBreedingInferenceEditor('尚未执行繁育推演。直接注册不会生成繁育心理人设。');
+  setBreedingInferenceTarget('');
   setBreedingInferenceStatus('');
 }
 
@@ -319,6 +321,7 @@ function resetRegisterPageState() {
   registryInferenceResultName = '';
   setRegisterTab('inference');
   setBreedingInferenceEditor('尚未执行繁育推演。直接注册不会生成繁育心理人设。');
+  setBreedingInferenceTarget('');
   setBreedingInferenceStatus('');
   setWardrobePrepStatus('角色必须已注册，才能准备衣柜与当前穿着。');
   setDiaryStatus('角色必须已注册，且同一故事日尚未写过日记。');
@@ -905,10 +908,12 @@ function renderRegisterChildSourceOptions(ctx) {
   syncRegisterChildSourceFields(ctx);
 }
 
-function getRegisterFormValues() {
+function getRegisterFormValues(ctx = getContextSafe()) {
   const sourceChildKey = String(document.getElementById('bs-bt-register-source')?.value || '');
+  const rawTargetName = String(document.getElementById('bs-bt-register-name')?.value || '').trim();
   return {
-    targetName: String(document.getElementById('bs-bt-register-name')?.value || '').trim(),
+    targetName: resolveRegistryTargetName(ctx, rawTargetName),
+    rawTargetName,
     declaredRace: String(document.getElementById('bs-bt-register-race')?.value || '').trim(),
     customNotes: String(document.getElementById('bs-bt-register-custom-notes')?.value || '').trim(),
     breedingInferencePrompt: String(document.getElementById('bs-bt-breeding-inference-prompt')?.value || '').trim(),
@@ -933,6 +938,14 @@ function setBreedingInferenceEditor(message, isError = false) {
   el.dataset.state = isError ? 'error' : 'normal';
 }
 
+function setBreedingInferenceTarget(targetName = '') {
+  const el = document.getElementById('bs-bt-breeding-inference-target');
+  if (!el) return;
+  const name = String(targetName || '').trim();
+  el.hidden = !name;
+  el.textContent = name ? `本次推演目标：${name}。新角色请到“注册”页注册；已注册角色可直接套用。` : '';
+}
+
 function formatBreedingInferencePreview(result) {
   if (!result || typeof result !== 'object') return '尚未执行繁育推演。';
   return JSON.stringify(result, null, 2);
@@ -952,6 +965,9 @@ function getApplicableBreedingInferenceDraft(values) {
   try {
     const edited = JSON.parse(raw);
     if (!edited || typeof edited !== 'object' || Array.isArray(edited)) throw new Error('繁育推演 JSON 必须是对象');
+    // target_character 是展示与模型自检字段，目标一律以表单输入为准，
+    // 避免手动微调 JSON 时把另一角色的名称误带入注册流程。
+    edited.target_character = values.targetName;
     return edited;
   } catch (error) {
     throw new Error(`繁育推演 JSON 无法解析：${String(error?.message || error)}`);
@@ -4355,9 +4371,12 @@ function renderStatusPanel(ctx) {
   list.innerHTML = '';
   if (latestCall) {
     const toolCalls = Array.isArray(chatState.lastRawResult?.tool_calls) ? chatState.lastRawResult.tool_calls : [];
+    const characterChecks = Array.isArray(chatState.lastRawResult?.character_checks) ? chatState.lastRawResult.character_checks : [];
     const operationLogs = Array.isArray(chatState.lastOperationLogs) ? chatState.lastOperationLogs : [];
-    if (toolCalls.length > 0 || operationLogs.length > 0) {
+    if (toolCalls.length > 0 || characterChecks.length > 0 || operationLogs.length > 0) {
       const toolCallView = { tool_calls: toolCalls };
+      if (characterChecks.length > 0) toolCallView.character_checks = characterChecks;
+      if (chatState.lastRawResult?.character_check_coverage) toolCallView.character_check_coverage = chatState.lastRawResult.character_check_coverage;
       if (chatState.lastRawResult?.message) toolCallView.message = chatState.lastRawResult.message;
       if (chatState.lastRawResult?.error) toolCallView.error = chatState.lastRawResult.error;
       latestCall.innerHTML = [
@@ -4379,26 +4398,23 @@ function renderStatusPanel(ctx) {
     return;
   }
 
-  const activeNames = characters.filter((item) => item?.profile?.base?.isHere !== false).map((item) => item.name).filter(Boolean);
-  if (!activeNames.includes(selectedTrackName)) selectedTrackName = '';
+  const characterNames = characters.map((item) => item?.name).filter(Boolean);
+  if (!characterNames.includes(selectedTrackName)) selectedTrackName = '';
   if (!TRACK_SUBPAGES.includes(selectedTrackSubpage)) selectedTrackSubpage = 'overview';
 
   for (const item of characters) {
     const name = item.name;
     const stage = String(item?.profile?.base?.stage || '未设定');
-    const isDisabled = item?.profile?.base?.isHere === false;
+    const isOffscreen = item?.profile?.base?.isHere === false;
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = `bs-bt-track-character-button${name === selectedTrackName ? ' is-active' : ''}`;
-    button.disabled = isDisabled;
-    button.innerHTML = `<span class="bs-bt-track-character-name">${escapeHtml(name)}</span><span class="bs-bt-track-character-stage">${escapeHtml(stage)}</span>`;
-    if (!isDisabled) {
-      button.addEventListener('click', () => {
-        selectedTrackName = name;
-        renderStatusPanel(ctx);
-        setView('track-char');
-      });
-    }
+    button.className = `bs-bt-track-character-button${name === selectedTrackName ? ' is-active' : ''}${isOffscreen ? ' is-offscreen' : ''}`;
+    button.innerHTML = `<span class="bs-bt-track-character-name">${escapeHtml(name)}</span><span class="bs-bt-track-character-stage">${escapeHtml(stage)}${isOffscreen ? ' · 离场' : ''}</span>`;
+    button.addEventListener('click', () => {
+      selectedTrackName = name;
+      renderStatusPanel(ctx);
+      setView('track-char');
+    });
     list.appendChild(button);
   }
 
@@ -6651,10 +6667,11 @@ async function ensureModal(ctx) {
   // 以「编辑器内容属于谁」为准而不是 draft 是否存在——使用者看到的是编辑器内容。
   document.getElementById('bs-bt-register-name')?.addEventListener('input', () => {
     if (!registryInferenceResultName) return;
-    const currentName = String(document.getElementById('bs-bt-register-name')?.value || '').trim();
+    const currentName = resolveRegistryTargetName(ctx, document.getElementById('bs-bt-register-name')?.value || '');
     if (registryInferenceResultName === currentName) return;
     registryBreedingInferenceDraft = null;
     setBreedingInferenceEditor('尚未执行繁育推演。直接注册不会生成繁育心理人设。');
+    setBreedingInferenceTarget('');
     setBreedingInferenceStatus('角色名已变更，先前的繁育推演结果已清除。');
   });
   document.querySelectorAll('#bs-bt-encyclopedia-tabs [data-encyclopedia-tab]').forEach((node) => {
@@ -6686,6 +6703,7 @@ async function ensureModal(ctx) {
     registryBreedingInferenceDraft = null;
     registryInferenceResultName = '';
     setBreedingInferenceEditor(`正在推演 ${values.targetName}...`);
+    setBreedingInferenceTarget(values.targetName);
     beginRegistryOperation('inference', `正在推演 ${values.targetName} 的繁育心理...`);
     try {
       const result = await runRegistryBreedingInference(ctx, values);
@@ -6704,6 +6722,7 @@ async function ensureModal(ctx) {
       const message = String(error?.message || error);
       // 失败后编辑器要回到空态，不能留下任何看似「本次结果」的内容
       setBreedingInferenceEditor('尚未执行繁育推演。直接注册不会生成繁育心理人设。');
+      setBreedingInferenceTarget('');
       setBreedingInferenceStatus(message, true);
       globalThis.toastr?.error?.(message, '[BS BioTracker]');
     } finally {

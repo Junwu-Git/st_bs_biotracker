@@ -1442,6 +1442,17 @@
   white-space: nowrap;
 }
 
+#bs-biotracker-settings .bs-bt-inference-target {
+  margin: 0 0 10px;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--bsbt-border-color, #1a1a1a) 42%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bsbt-lcd-bg, #87a96b) 30%, transparent);
+  font-size: 0.9em;
+  font-weight: 700;
+  word-break: break-word;
+}
+
 #bs-biotracker-settings #bs-bt-encyclopedia-tabs {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -1544,6 +1555,11 @@
 #bs-biotracker-settings .bs-bt-track-character-button[disabled] {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+#bs-biotracker-settings .bs-bt-track-character-button.is-offscreen {
+  opacity: 0.62;
+  border-style: dashed;
 }
 
 #bs-biotracker-settings .bs-bt-track-dashboard[hidden] {

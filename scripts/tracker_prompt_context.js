@@ -277,6 +277,17 @@ export function buildTrackerSystemPrompt(basePrompt = '', descriptionGuides = nu
       '- 若主流上下文快照与 tracker 工具调用规则、变量语义说明、existing_state 或 available_tools 冲突，必须以后者为准。',
     ].join('\n'));
   }
+  const priorityNames = Array.isArray(payload?.priority_character_names)
+    ? payload.priority_character_names.map((name) => String(name || '').trim()).filter(Boolean)
+    : [];
+  if (priorityNames.length > 0) {
+    parts.push([
+      '[优先追踪角色]',
+      `- 本轮先检查：${priorityNames.join('、')}。`,
+      '- 这些名字是优先级，不是过滤器；其余已注册角色仍须依剧情和时间正常检查。',
+      '- 若剧情明确显示某角色进入当前场景、开始参与当前互动或重新同行，调用 bsSetCharacterPresence，参数必须为 {"female":"角色名","isPresent":true}；明确离开、失联或转为幕外时才传 false。不要以 isHere 作为参数名，也不要无依据切换。',
+    ].join('\n'));
+  }
   const embryoTypeLorePrompt = buildEmbryoTypeLorePrompt(payload || {});
   if (embryoTypeLorePrompt) parts.push(embryoTypeLorePrompt);
   if (!diaryEnabled) {
@@ -293,6 +304,17 @@ export function buildTrackerSystemPrompt(basePrompt = '', descriptionGuides = nu
       '[descriptions 更新勤勉规则]',
       '- 若调用 bsSetDescription，先逐字段检查；所有受本轮影响的既有字段必须一并更新。省略只允许用于已确认完全不变的字段。',
     ].join('\n'));
+
+  const trackedNames = Array.isArray(payload?.tracked_females)
+    ? payload.tracked_females.map((name) => String(name || '').trim()).filter(Boolean)
+    : [];
+  if (trackedNames.length > 0) {
+    parts.push([
+      '[逐角色检查清单]',
+      `- 本轮必须在 character_checks 中逐一列出：${trackedNames.join('、')}。每名恰好一笔。`,
+      '- status 只能是 no_change、updated、present 或 offscreen；清单只用于核对，任何实际状态变更仍必须同时用 tool_calls 调用对应工具。',
+    ].join('\n'));
+  }
 
   const pregnantInitNames = collectPregnantDescriptionInitNames(payload);
   const pregnantGuide = String(descriptionGuides?.pregnantDescription || '').trim();

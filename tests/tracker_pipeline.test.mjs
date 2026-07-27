@@ -217,3 +217,20 @@ test('a failed reference in a simulated reply is logged and leaves state untouch
   assert.match(logs[0].message, /unknown main item/);
   assert.equal(settings.chatStates[CHAT_KEY].characters['艾拉'].profile.outfit.mainItemId, 1);
 });
+
+test('priority names focus the tracker without excluding other registered characters', () => {
+  const ctx = makeContext();
+  const settings = state.getSettings(ctx);
+  settings.targetNames = '艾拉\n幕外子,不存在';
+
+  const payload = buildTrackerPayload(ctx, settings);
+  assert.deepEqual(payload.priority_character_names, ['艾拉', '幕外子']);
+  assert.deepEqual(payload.tracked_females.sort(), ['艾拉', '贝拉', '幕外子'].sort());
+
+  const prompt = buildTrackerSystemPrompt(state.DEFAULT_SYSTEM_PROMPT, null, payload);
+  assert.match(prompt, /\[优先追踪角色\]/);
+  assert.match(prompt, /艾拉、幕外子/);
+  assert.match(prompt, /不是过滤器/);
+  assert.match(prompt, /\[逐角色检查清单\]/);
+  assert.match(prompt, /每名恰好一笔/);
+});

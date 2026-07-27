@@ -247,3 +247,34 @@ test('boundary signatures survive snapshot repacking', () => {
     '重新打包后仍应保留边界签名',
   );
 });
+
+test('legacy operations with function-style calls apply a presence update', async () => {
+  const ctx = makeCtx([{ is_user: false, name: 'Alice', mes: '艾拉回到队伍身边。' }]);
+  globalThis.SillyTavern = { getContext: () => ctx };
+  const settings = state.getSettings(ctx);
+  settings.apiUrl = 'https://example.test/v1';
+  settings.model = 'test-model';
+  const chatState = state.getChatState(ctx, settings);
+  chatState.characters['艾拉'] = {
+    name: '艾拉', initialized: true, profile: { base: { isHere: false } },
+  };
+
+  globalThis.fetch = async () => jsonResponse({
+    choices: [{ message: { content: JSON.stringify({
+      character_checks: [{ female: '艾拉', status: 'present' }],
+      operations: [{
+        function: {
+          name: 'bsSetCharacterPresence',
+          arguments: JSON.stringify({ female: '艾拉', isPresent: true }),
+        },
+      }],
+    }) } }],
+  });
+
+  await runTracker(ctx, makeDeps(), 'manual');
+  assert.equal(chatState.characters['艾拉'].profile.base.isHere, true);
+  assert.equal(chatState.lastOperationLogs[0]?.applied, true, chatState.lastOperationLogs[0]?.message);
+  assert.equal(chatState.lastOperationLogs[0]?.name, 'bsSetCharacterPresence');
+  assert.deepEqual(chatState.lastRawResult?.character_checks, [{ female: '艾拉', status: 'present' }]);
+  assert.deepEqual(chatState.lastRawResult?.character_check_coverage?.missing, []);
+});

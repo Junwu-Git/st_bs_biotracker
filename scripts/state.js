@@ -89,8 +89,12 @@ export const DEFAULT_SYSTEM_PROMPT = [
   '      "name": "string",',
   '      "arguments": {}',
   '    }',
+  '  ],',
+  '  "character_checks": [',
+  '    { "female": "string", "status": "no_change|updated|present|offscreen" }',
   '  ]',
   '}',
+  'character_checks 是逐角色检查清单：必须对 tracked_females 中每名角色恰好输出一笔；只写本轮检查结论，不直接改变状态。真正更新仍必须用 tool_calls。',
   '可用工具会通过 available_tools 传入。只能调用其中存在的工具，参数名必须完全匹配。',
   '没有足够依据时，tool_calls 返回空数组。',
   '如果对话明确发生了时间流逝，优先调用 bsPassedTime。',
@@ -101,7 +105,7 @@ export const DEFAULT_SYSTEM_PROMPT = [
   '性交留精用 bsAddSperm；排出残留精液用 bsDrainSperm；缓解生理需求用 bsExcreteMetabolism。',
   '跨日、重大事件或 notify 提醒时，可用 bsWriteDiary 为角色追加主观日记。',
   '月经阶段、排卵期、假孕期切换用 bsSetMenstrualPhases；不要用它覆盖正在进行的受精、真妊娠或产程。',
-  '流产用 bsAbortion；立即结束分娩用 bsChildbirth；角色在场状态变化用 bsSetCharacterPresence。',
+  '流产用 bsAbortion；立即结束分娩用 bsChildbirth；角色在场状态变化用 bsSetCharacterPresence，参数必须为 female 和 isPresent（布尔值 true/false，不要使用 isHere）。角色明确回到当前场景、重新同行或参与当前互动时应设为 true；明确离开、失联或转为幕外时才设为 false。',
   '母胎互动用 bsMaternalFetalInteraction；每名角色在每个新小时内仅允许一次成功的母胎互动变化，重复调用会被跳过。direction=fetal 时须传 change，表示胎儿对母体的亲近或排斥并改变 affinity，不补充营养。direction=maternal 时不传 change，表示母体安抚胎儿，系统随机判定 affinity 变化；若成功且有待安抚不适，小幅变化补回 1 点营养，大幅变化补回 2 点营养。若处于产兆前驱则表示分娩抵抗。',
   '不要编造怀孕天数、胎数、流产、分娩或其他高影响事件。',
 ].join('\n');
@@ -1589,25 +1593,29 @@ export async function loadGlobalWorldBook(ctx, name) {
 
 export function getTargetNames(ctx, settings) {
   const names = String(settings.targetNames || '')
-    .split(',')
+    .split(/[\n,，]+/)
     .map((item) => item.trim())
     .filter(Boolean);
-  if (names.length > 0) return names;
-  const cardName = getHostCharacters(ctx)[ctx.characterId]?.name;
-  return cardName ? [cardName] : [];
+  return [...new Set(names)];
 }
 
 export function getRegisteredTargetNames(ctx, settings, chatState = null) {
   const state = chatState || getChatState(ctx, settings);
-  const targetNames = getTargetNames(ctx, settings);
-  const registeredNames = Object.entries(state?.characters || {})
+  return Object.entries(state?.characters || {})
     .filter(([, item]) => item?.initialized)
     .map(([name]) => name);
-  if (targetNames.length === 0) return registeredNames;
-  const filtered = targetNames
+}
+
+/**
+ * 追踪重点是提示模型优先检查的角色，不是过滤器；未点名的已注册角色仍会同步推进。
+ */
+export function getPriorityCharacterNames(ctx, settings, chatState = null) {
+  const state = chatState || getChatState(ctx, settings);
+  const targetNames = getTargetNames(ctx, settings);
+  if (targetNames.length === 0) return [];
+  return targetNames
     .map((name) => resolveRegisteredCharacterName(state, name))
     .filter((name, index, list) => name && list.indexOf(name) === index);
-  return filtered.length > 0 ? filtered : registeredNames;
 }
 
 function normalizeCharacterLookupName(value) {
@@ -1961,12 +1969,23 @@ export function summarizeRawResult(value) {
         return item;
       })
     : [];
+  const characterChecks = Array.isArray(value.character_checks)
+    ? value.character_checks.slice(0, MAX_SNAPSHOT_DEBUG_ITEMS).map((check) => ({
+        female: String(check?.female || ''),
+        status: String(check?.status || ''),
+      }))
+    : [];
+  const coverage = value.character_check_coverage && typeof value.character_check_coverage === 'object'
+    ? summarizeSnapshotDebugValue(value.character_check_coverage)
+    : undefined;
   const message = typeof value.message === 'string' ? value.message.slice(0, MAX_RAW_RESULT_TEXT_LENGTH) : undefined;
   const error = typeof value.error === 'string' ? value.error.slice(0, MAX_RAW_RESULT_TEXT_LENGTH) : undefined;
   const result = {};
   if (message) result.message = message;
   if (error) result.error = error;
   if (toolCalls.length > 0) result.tool_calls = toolCalls;
+  if (characterChecks.length > 0) result.character_checks = characterChecks;
+  if (coverage) result.character_check_coverage = coverage;
   return Object.keys(result).length > 0 ? result : null;
 }
 

@@ -15,6 +15,7 @@ import {
   getCharacterAdditionalWorldBookNames,
   getChatKey,
   getChatState,
+  getPriorityCharacterNames,
   getRegisteredTargetNames,
   getSettings,
   getLatestMatchingSnapshot,
@@ -678,6 +679,7 @@ export function buildTrackerPayload(ctx, settings, reason = 'manual', endIndexEx
     character_worldbook: payloadWorldBook,
     mainflow_context_snapshot: mainflowContextSnapshot,
     tracked_females: getRegisteredTargetNames(ctx, settings, chatState),
+    priority_character_names: getPriorityCharacterNames(ctx, settings, chatState),
     skill_catalog: Array.isArray(chatState.skillCatalog) ? chatState.skillCatalog : [],
     existing_state: buildTrackerStateView(existingState, settings),
     available_tools: getTrackerToolDefinitions(settings, existingState),
@@ -695,16 +697,65 @@ export function buildMainFlowPrompt(ctx, settings) {
   return buildMainFlowStatePrompt(buildTrackerPayload(ctx, settings, 'mainflow'));
 }
 
+function normalizeTrackerCall(call) {
+  if (!call || typeof call !== 'object') return call;
+  const functionCall = call.function && typeof call.function === 'object' ? call.function : null;
+  return {
+    ...call,
+    name: String(call.name || call.tool_name || call.tool || call.operation || functionCall?.name || '').trim(),
+    arguments: call.arguments ?? call.args ?? call.parameters ?? call.params ?? functionCall?.arguments ?? {},
+  };
+}
+
+function getTrackerToolCalls(result) {
+  const candidates = [
+    result?.tool_calls,
+    result?.toolCalls,
+    result?.calls,
+    result?.operations,
+    result?.actions,
+    result?.data?.tool_calls,
+    result?.data?.toolCalls,
+    result?.data?.operations,
+  ];
+  const calls = candidates.find((value) => Array.isArray(value));
+  return Array.isArray(calls) ? calls.map(normalizeTrackerCall) : [];
+}
+
+function getCharacterChecks(result) {
+  const candidates = [
+    result?.character_checks,
+    result?.characterChecks,
+    result?.checks,
+    result?.data?.character_checks,
+    result?.data?.characterChecks,
+  ];
+  const checks = candidates.find((value) => Array.isArray(value));
+  if (!Array.isArray(checks)) return [];
+  return checks.map((check) => ({
+    female: String(check?.female || check?.name || '').trim(),
+    status: String(check?.status || check?.result || '').trim(),
+  })).filter((check) => check.female);
+}
+
+function buildCharacterCheckCoverage(expectedNames, checks) {
+  const expected = [...new Set((Array.isArray(expectedNames) ? expectedNames : []).map((name) => String(name || '').trim()).filter(Boolean))];
+  const checked = [...new Set((Array.isArray(checks) ? checks : []).map((check) => String(check?.female || '').trim()).filter(Boolean))];
+  return {
+    expected,
+    checked,
+    missing: expected.filter((name) => !checked.includes(name)),
+  };
+}
+
 function normalizeTrackerResult(result) {
   if (!result || typeof result !== 'object') {
     throw new Error('Tracker response must be a JSON object.');
   }
-  const directToolCalls = Array.isArray(result.tool_calls) ? result.tool_calls : null;
-  const altToolCalls = Array.isArray(result.toolCalls) ? result.toolCalls : null;
-  const altCalls = Array.isArray(result.calls) ? result.calls : null;
   return {
     ...result,
-    tool_calls: directToolCalls || altToolCalls || altCalls || [],
+    tool_calls: getTrackerToolCalls(result),
+    character_checks: getCharacterChecks(result),
   };
 }
 
@@ -898,6 +949,7 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
   }
 
   const result = normalizeTrackerResult(rawResult);
+  result.character_check_coverage = buildCharacterCheckCoverage(payload.tracked_females, result.character_checks);
   applyToolCallsResult(ctx, result);
   chatState.lastProcessedSignature = attemptedSignature;
   chatState.lastFailedSignature = '';
