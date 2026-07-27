@@ -16,6 +16,7 @@ import {
   getEmbryoTypeByRace,
   getMergedRacePhysiologyProfile,
   getRaceComponents,
+  getRaceDescriptorComponents,
   parseRaceDescriptor,
 } from './race_config.js';
 import {
@@ -1092,8 +1093,8 @@ function getRegistryEmbryoTypeRecoveryCoefficient(embryoType) {
 }
 
 function deriveRegisteredFetusRace(motherRace, fatherRace) {
-  const motherParts = getRaceComponents(motherRace);
-  const fatherParts = getRaceComponents(fatherRace);
+  const motherParts = getRaceDescriptorComponents(motherRace);
+  const fatherParts = getRaceDescriptorComponents(fatherRace);
   const combined = [...fatherParts, ...motherParts].filter(Boolean);
   if (combined.length === 0) return '人类';
   const unique = [];

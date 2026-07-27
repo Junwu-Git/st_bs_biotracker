@@ -507,9 +507,10 @@ export function syncCharacterStageFromProfile(characterState) {
   const currentStage = String(base.stage || '');
 
   if (fetuses.length > 0) {
-    const fertilizationDays = Math.max(0, Number(base.fertilizationDays) || 0);
+    const pregnantDays = Math.max(0, Number(pregnant.pregnantDays) || 0);
     const effectivePregnantDays = Math.max(0, Number(pregnant.effectivePregnantDays) || 0);
-    if (fertilizationDays > 0 && effectivePregnantDays <= 0) {
+    // 刚移入／刚受精时 fertilizationDays 可以正好是 0；只要产科孕日仍为 0，就尚未着床。
+    if (pregnantDays <= 0 && effectivePregnantDays <= 0) {
       const fallbackStage = PREGNANCY_STAGES.includes(currentStage) ? '排卵期' : currentStage;
       next.profile.base = {
         ...base,
@@ -648,6 +649,30 @@ function sanitizeFetusList(value) {
         const next = sanitizeString(item[field]);
         if (next !== undefined) fetus[field] = next;
       }
+      const embryoId = sanitizeInteger(item.embryoId, { min: 1, max: 999999 });
+      if (embryoId !== null) fetus.embryoId = embryoId;
+      fetus.fusionCheckedWith = Array.isArray(item.fusionCheckedWith)
+        ? [...new Set(item.fusionCheckedWith
+          .map((value) => sanitizeInteger(value, { min: 1, max: 999999 }))
+          .filter((value) => value !== null))]
+        : [];
+      fetus.providerSources = Array.isArray(item.providerSources)
+        ? [...new Set(item.providerSources.map(sanitizeString).filter(Boolean))]
+        : [];
+      if (item.chimera && typeof item.chimera === 'object' && !Array.isArray(item.chimera)) {
+        fetus.chimera = {
+          sourceCount: sanitizeInteger(item.chimera.sourceCount, { min: 2, max: 50 }) ?? 2,
+          fatherSources: Array.isArray(item.chimera.fatherSources)
+            ? [...new Set(item.chimera.fatherSources.map(sanitizeString).filter(Boolean))]
+            : [],
+          maternalSources: Array.isArray(item.chimera.maternalSources)
+            ? [...new Set(item.chimera.maternalSources.map(sanitizeString).filter(Boolean))]
+            : [],
+          genderSources: Array.isArray(item.chimera.genderSources)
+            ? item.chimera.genderSources.map(sanitizeString).filter(Boolean)
+            : [],
+        };
+      }
       const numberFields = {
         weight: { min: 0.33, max: 3.0 },
         tendencyAngle: { min: 0, max: 360 },
@@ -673,6 +698,23 @@ function sanitizeChildrenList(value) {
       fathers: sanitizeString(item.fathers) ?? null,
       // 代孕／寄生的归属标记；沿用 fetus 的同名语义
       provider: sanitizeString(item.provider) ?? null,
+      providerSources: Array.isArray(item.providerSources)
+        ? [...new Set(item.providerSources.map(sanitizeString).filter(Boolean))]
+        : [],
+      chimera: item.chimera && typeof item.chimera === 'object' && !Array.isArray(item.chimera)
+        ? {
+          sourceCount: sanitizeInteger(item.chimera.sourceCount, { min: 2, max: 50 }) ?? 2,
+          fatherSources: Array.isArray(item.chimera.fatherSources)
+            ? [...new Set(item.chimera.fatherSources.map(sanitizeString).filter(Boolean))]
+            : [],
+          maternalSources: Array.isArray(item.chimera.maternalSources)
+            ? [...new Set(item.chimera.maternalSources.map(sanitizeString).filter(Boolean))]
+            : [],
+          genderSources: Array.isArray(item.chimera.genderSources)
+            ? item.chimera.genderSources.map(sanitizeString).filter(Boolean)
+            : [],
+        }
+        : null,
       gender: sanitizeString(item.gender) ?? null,
       race: sanitizeString(item.race) ?? null,
       derivedType: sanitizeString(item.derivedType) ?? null,

@@ -1017,18 +1017,28 @@ export function parseRaceDescriptor(rawRace) {
   };
 }
 
-export function getBaseRaceName(race) {
+export function getRaceDescriptorComponents(race) {
   const value = parseRaceDescriptor(race).race;
+  if (!value) return [];
+  return value.split(/[xX]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function getBaseRaceComponentName(component) {
+  const value = String(component || '').trim();
   if (!value) return '';
-  const subtypeMatch = value.match(/^(.+?)-(.+)$/);
-  if (subtypeMatch) return subtypeMatch[1];
-  return value;
+  const separatorIndex = value.indexOf('-');
+  return separatorIndex >= 0 ? value.slice(0, separatorIndex).trim() : value;
+}
+
+export function getBaseRaceName(race) {
+  const [first = ''] = getRaceDescriptorComponents(race);
+  return getBaseRaceComponentName(first);
 }
 
 export function getRaceComponents(race) {
-  const baseRace = getBaseRaceName(race);
-  if (!baseRace) return [];
-  return baseRace.split(/[xX]/).map((item) => item.trim()).filter(Boolean);
+  return getRaceDescriptorComponents(race)
+    .map((component) => getBaseRaceComponentName(component))
+    .filter(Boolean);
 }
 
 function mergeGenderRatioValues(values) {

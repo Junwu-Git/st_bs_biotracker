@@ -309,11 +309,14 @@ function buildPromptFacingCharacterState(item, diaryLimit = 0) {
       ...(hasFetuses ? { nutrition: Number.isFinite(Number(pregnant.nutrition)) ? Number(pregnant.nutrition) : 0 } : {}),
       ...(hasFetuses ? { symptomReliefPending: Number.isFinite(Number(pregnant.symptomReliefPending)) ? Number(pregnant.symptomReliefPending) : 0 } : {}),
       ...getPromptFacingMetabolismSymptoms(pregnant),
-      fetuses: pregnant.fetuses.map((fetus) => ({
-        ...fetus,
-        tendencyAngleText: getTendencyAngleText(fetus?.tendencyAngle),
-        race: undefined,
-      })),
+      fetuses: pregnant.fetuses.map((fetus) => {
+        const { embryoId: _embryoId, fusionCheckedWith: _fusionCheckedWith, ...visibleFetus } = fetus;
+        return {
+          ...visibleFetus,
+          tendencyAngleText: getTendencyAngleText(fetus?.tendencyAngle),
+          race: undefined,
+        };
+      }),
     };
   } else {
     profile.pregnant = {

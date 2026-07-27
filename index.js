@@ -4700,6 +4700,24 @@ function getMovableChildEntries(character) {
     .filter((entry) => String(entry.child?.provider || '').trim().length > 0);
 }
 
+function getChildMoveTargets(child) {
+  const sources = Array.isArray(child?.providerSources)
+    ? child.providerSources.map((value) => String(value || '').trim()).filter(Boolean)
+    : [];
+  const provider = String(child?.provider || '').trim();
+  return [...new Set(sources.length > 0 ? sources : [provider].filter(Boolean))];
+}
+
+function syncChildMoveTarget(sourceSelect, targetSelect, movable) {
+  const selectedIndex = Number(sourceSelect?.value);
+  const entry = movable.find((candidate) => candidate.index === selectedIndex) || movable[0];
+  const targets = Array.isArray(entry?.targets) ? entry.targets : [];
+  targetSelect.innerHTML = targets
+    .map((target) => `<option value="${escapeHtml(target)}">${escapeHtml(target)}</option>`)
+    .join('');
+  targetSelect.disabled = targets.length <= 1;
+}
+
 function renderChildMoveControls(ctx) {
   const section = document.getElementById('bs-bt-child-move-section');
   const sourceSelect = document.getElementById('bs-bt-child-move-source');
@@ -4708,18 +4726,22 @@ function renderChildMoveControls(ctx) {
   const settings = getSettings(ctx);
   const chatState = getChatState(ctx, settings);
   const current = selectedFullStateName ? chatState.characters?.[selectedFullStateName] : null;
-  const movable = getMovableChildEntries(current);
-  const others = Object.keys(chatState.characters || {}).filter((name) => name !== selectedFullStateName);
-  // 没有代孕来的孩子、或没有别的角色可搬，这个区块就没有意义
-  section.hidden = movable.length === 0 || others.length === 0;
+  // 只能转交给 provider／providerSources 指定且已经注册的归属方。
+  const movable = getMovableChildEntries(current)
+    .map((entry) => ({
+      ...entry,
+      targets: getChildMoveTargets(entry.child)
+        .filter((target) => target !== selectedFullStateName && Boolean(chatState.characters?.[target]?.profile)),
+    }))
+    .filter((entry) => entry.targets.length > 0);
+  section.hidden = movable.length === 0;
   if (section.hidden) return;
   sourceSelect.innerHTML = movable
     .map(({ child, index }) => `<option value="${index}">${escapeHtml(formatChildMoveLabel(child, index))}</option>`)
     .join('');
-  targetSelect.innerHTML = others
-    .map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)
-    .join('');
-  setChildMoveStatus('代孕或寄生所生的孩子留在承载者名下时，可在此搬给真正的家长。');
+  syncChildMoveTarget(sourceSelect, targetSelect, movable);
+  sourceSelect.onchange = () => syncChildMoveTarget(sourceSelect, targetSelect, movable);
+  setChildMoveStatus('只能转交给 provider 指定且已注册的归属方；双母嵌合体可选择其中一位。');
 }
 
 /**
@@ -4733,21 +4755,26 @@ function moveChildRecord(ctx, fromName, childIndex, toName) {
   const settings = getSettings(ctx);
   const chatState = getChatState(ctx, settings);
   const from = chatState.characters?.[fromName];
-  const to = chatState.characters?.[toName];
-  if (!from?.profile || !to?.profile) throw new Error('找不到来源或目标角色。');
+  if (!from?.profile) throw new Error('找不到来源角色。');
   const children = Array.isArray(from.profile.children) ? from.profile.children : [];
   if (!Number.isInteger(childIndex) || childIndex < 0 || childIndex >= children.length) {
     throw new Error('找不到要搬移的孩子记录。');
   }
   // 只开放代孕／寄生的孩子：自然生育的归属是既成事实，不该被搬走
-  if (!String(children[childIndex]?.provider || '').trim()) {
-    throw new Error('只有代孕或寄生所生的孩子可以搬移。');
+  const providers = getChildMoveTargets(children[childIndex]);
+  if (providers.length === 0) {
+    throw new Error('只有代孕、寄生或多母源嵌合所生的孩子可以搬移。');
   }
+  if (!providers.includes(toName)) {
+    throw new Error('孩子只能搬给 provider 指定的归属方。');
+  }
+  const to = chatState.characters?.[toName];
+  if (!to?.profile) throw new Error('provider 指定的归属方尚未注册。');
 
   const nextFromChildren = children.slice();
   const [child] = nextFromChildren.splice(childIndex, 1);
   // 已经搬到指定家长名下，代孕来源标记就完成任务了
-  const { provider: _provider, ...moved } = child;
+  const { provider: _provider, providerSources: _providerSources, ...moved } = child;
   const nextToChildren = [...(Array.isArray(to.profile.children) ? to.profile.children : []), moved];
   from.profile.children = nextFromChildren;
   to.profile.children = nextToChildren;

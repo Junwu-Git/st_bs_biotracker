@@ -50,6 +50,7 @@ import {
   getEmbryoTypeByRace,
   getMergedRacePhysiologyProfile,
   parseRaceDescriptor,
+  getRaceDescriptorComponents,
   getRaceComponents as getConfiguredRaceComponents,
 } from './race_config.js';
 import {
@@ -340,7 +341,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
   },
   {
     name: 'bsAddSperm',
-    description: '向单一角色体内加入或扣除精液，用于性交后留下受孕机会。',
+    description: '向单一角色体内加入或扣除精液，用于性交后留下受孕机会。race 使用 [derivedType-装饰子项]race-装饰子项 格式，混血种族以 X 分隔；父系 derivedType 直接从这个字符串解析。',
     input_schema: {
       type: 'object',
       properties: {
@@ -423,8 +424,9 @@ export const TOOL_DEFINITIONS = Object.freeze([
     description: '把外源胚胎植入角色体内：代孕、胚胎移植、虫母注卵、寄生产卵等，凡是「孕育者不是遗传母亲」的情节都用这个。'
       + 'provider 是胚胎真正的归属方（提供卵子的一方／虫母／委托母亲），分娩后孩子会转交给她；若她尚未注册，孩子会留在承载者名下并标注来源。'
       + '胚胎种族依遗传母方推导而非承载者，所以虫母的卵放进人类宿主仍是虫族血统。'
+      + 'race 与 fatherRace 使用 [derivedType-装饰子项]race-装饰子项 格式，混血种族以 X 分隔。母系 derivedType 永远来自承载者；父系优先取 fatherRace，未写时才取 race。'
       + 'provider 若尚未注册，用 race 指明遗传母方种族；父方种族预设与遗传母方同族，跨种族时用 fatherRace 指明。'
-      + '承载者必须尚未怀孕也没有受精状态；自然受孕请勿使用本工具。',
+      + '工具加入的是尚未着床的受精卵，可在同一着床窗口重复调用；第一颗会启动共用 fertilizationDays，之后由 bsPassedTime 推进并统一着床。已进入妊娠阶段后不可再加入。自然受孕请勿使用本工具。',
     input_schema: {
       type: 'object',
       properties: {
@@ -675,8 +677,9 @@ function isSameRaceGroup(leftRace, rightRace) {
 }
 
 function deriveFetusRace(motherRace, fatherRace) {
-  const motherParts = getRaceComponents(motherRace);
-  const fatherParts = getRaceComponents(fatherRace);
+  // 血统显示保留每个种族的 -装饰子项；生理运算另用 getRaceComponents 取基础种族。
+  const motherParts = getRaceDescriptorComponents(motherRace);
+  const fatherParts = getRaceDescriptorComponents(fatherRace);
   const combined = [...fatherParts, ...motherParts].filter(Boolean);
   if (combined.length === 0) return '人类';
   // 必须去重，否则同族生育会得到「人类x人类」这种自我混血的种族。
@@ -762,42 +765,228 @@ function updateDerivedTypeProgress(profile, tick) {
 function cloneIdenticalFetus(fetus) {
   return {
     ...fetus,
+    embryoId: null,
+    fusionCheckedWith: [],
+    providerSources: Array.isArray(fetus?.providerSources) ? [...fetus.providerSources] : undefined,
+    chimera: fetus?.chimera ? cloneValue(fetus.chimera) : undefined,
     tendencyAngle: randomInt(0, 360),
     affinity: 0,
   };
 }
 
-function applyIdenticalSplit(profile) {
+function uniqueNonEmptyStrings(values) {
+  const result = [];
+  for (const value of values || []) {
+    const text = String(value ?? '').trim();
+    if (text && !result.includes(text)) result.push(text);
+  }
+  return result;
+}
+
+function getNextEmbryoId(fetuses) {
+  return fetuses.reduce((max, fetus) => {
+    const value = Number(fetus?.embryoId);
+    return Number.isInteger(value) && value > max ? value : max;
+  }, 0) + 1;
+}
+
+function ensureEmbryoMetadata(pregnant) {
+  const fetuses = Array.isArray(pregnant?.fetuses) ? pregnant.fetuses : [];
+  const used = new Set();
+  let nextId = getNextEmbryoId(fetuses);
+  for (const fetus of fetuses) {
+    let id = Number(fetus?.embryoId);
+    if (!Number.isInteger(id) || id <= 0 || used.has(id)) {
+      id = nextId;
+      nextId += 1;
+    }
+    fetus.embryoId = id;
+    used.add(id);
+  }
+  for (const fetus of fetuses) {
+    fetus.fusionCheckedWith = [...new Set(
+      (Array.isArray(fetus?.fusionCheckedWith) ? fetus.fusionCheckedWith : [])
+        .map(Number)
+        .filter((id) => Number.isInteger(id) && id > 0 && id !== fetus.embryoId),
+    )];
+  }
+  return fetuses;
+}
+
+function getFetusFatherSources(fetus) {
+  return uniqueNonEmptyStrings(
+    Array.isArray(fetus?.chimera?.fatherSources)
+      ? fetus.chimera.fatherSources
+      : String(fetus?.fathers || '').split(/\s*[×Xx]\s*/),
+  );
+}
+
+function getFetusMaternalSources(fetus, carrierName) {
+  if (Array.isArray(fetus?.providerSources) && fetus.providerSources.length > 0) {
+    return uniqueNonEmptyStrings(fetus.providerSources);
+  }
+  const provider = String(fetus?.provider || '').trim();
+  return uniqueNonEmptyStrings([provider || carrierName]);
+}
+
+function combineRaceDescriptors(...values) {
+  return uniqueNonEmptyStrings(values.flatMap((value) => getRaceDescriptorComponents(value))).join('x') || '人类';
+}
+
+export function calculateChimeraFusionProbability(fetusA, fetusB) {
+  const derivedA = String(fetusA?.fatherDerivedType || '').trim();
+  const derivedB = String(fetusB?.fatherDerivedType || '').trim();
+  let derivedMultiplier = 1;
+  if (derivedA && derivedB) {
+    if (derivedA !== derivedB) return 0;
+    derivedMultiplier = 1.5;
+  } else if (derivedA || derivedB) {
+    derivedMultiplier = 0.5;
+  }
+
+  const raceA = String(fetusA?.race || '人类');
+  const raceB = String(fetusB?.race || '人类');
+  const physiologyA = getMergedRacePhysiologyProfile(raceA);
+  const physiologyB = getMergedRacePhysiologyProfile(raceB);
+  const identicalA = clampNumber(physiologyA?.identicalProbability, 0, 100, 5);
+  const identicalB = clampNumber(physiologyB?.identicalProbability, 0, 100, 5);
+  const difficultyA = clampNumber(physiologyA?.impregnationDifficulty, 0.1, 100, 1);
+  const difficultyB = clampNumber(physiologyB?.impregnationDifficulty, 0.1, 100, 1);
+  const identicalFactor = Math.sqrt(identicalA * identicalB);
+  const difficultyFactor = 2 / (1 + Math.sqrt(difficultyA * difficultyB));
+  const typeMultiplier = String(fetusA?.embryoType || deriveFetusEmbryoType(raceA))
+    === String(fetusB?.embryoType || deriveFetusEmbryoType(raceB)) ? 1 : 0.25;
+  return clampNumber(identicalFactor * difficultyFactor * typeMultiplier * derivedMultiplier, 0, 75, 0);
+}
+
+function createChimeraFetus(profile, carrierName, fetusA, fetusB, embryoId) {
+  const fathers = uniqueNonEmptyStrings([...getFetusFatherSources(fetusA), ...getFetusFatherSources(fetusB)]);
+  const maternalSources = uniqueNonEmptyStrings([
+    ...getFetusMaternalSources(fetusA, carrierName),
+    ...getFetusMaternalSources(fetusB, carrierName),
+  ]);
+  const genderSources = [String(fetusA?.gender || '未知'), String(fetusB?.gender || '未知')];
+  const hasMale = genderSources.includes('男');
+  const hasFemale = genderSources.includes('女');
+  const gender = hasMale && hasFemale
+    ? '待定'
+    : (genderSources[0] === genderSources[1] ? genderSources[0] : (genderSources.includes('双') ? '双' : genderSources[0]));
+  const fatherDerivedType = fetusA?.fatherDerivedType || fetusB?.fatherDerivedType || null;
+  const race = combineRaceDescriptors(fetusA?.race, fetusB?.race);
+  const motherDerivedType = profile?.base?.derivedType ? String(profile.base.derivedType) : null;
+  const derivedSeed = getDerivedTypeSeed(motherDerivedType, fatherDerivedType);
+  const providerSources = maternalSources.length > 1
+    ? maternalSources
+    : maternalSources.filter((source) => source !== carrierName);
+  return {
+    embryoId,
+    fusionCheckedWith: [],
+    fathers: fathers.join(' × ') || '未知',
+    provider: providerSources.length === 0 ? null : providerSources.join(' × '),
+    providerSources,
+    race,
+    fatherRace: combineRaceDescriptors(fetusA?.fatherRace, fetusB?.fatherRace),
+    fatherDerivedType,
+    gender,
+    embryoType: deriveFetusEmbryoType(race),
+    weight: (clampNumber(fetusA?.weight, 0.33, 3, 1) + clampNumber(fetusB?.weight, 0.33, 3, 1)) / 2,
+    tendencyAngle: randomInt(0, 360),
+    affinity: derivedSeed.affinity,
+    maternalDerivedTypeProgress: derivedSeed.progress,
+    chimera: {
+      sourceCount: (Number(fetusA?.chimera?.sourceCount) || 1) + (Number(fetusB?.chimera?.sourceCount) || 1),
+      fatherSources: fathers,
+      maternalSources,
+      genderSources,
+    },
+  };
+}
+
+function applyChimeraFusion(profile, carrierName) {
   const pregnant = profile.pregnant || {};
-  const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
-  if (fetuses.length === 0) return;
+  const fetuses = ensureEmbryoMetadata(pregnant);
+  if (clampNumber(profile?.base?.fertilizationDays, 0, 9999, 0) <= 1 || fetuses.length < 2) return;
 
-  const splitRate = clampNumber(profile?.bio?.identicalProbability, 0, 100, 5) / 100;
-  if (splitRate <= 0) return;
-
-  const baseFetus = fetuses[fetuses.length - 1];
-  let targetCount = 1;
-  if (Math.random() < splitRate) {
-    targetCount = 2;
-    if (Math.random() < splitRate * splitRate) {
-      targetCount = 3;
-      if (Math.random() < splitRate * splitRate * splitRate) {
-        targetCount = 4;
+  const candidates = fetuses.filter((fetus) => !fetus?.chimera);
+  const pairs = [];
+  for (let left = 0; left < candidates.length; left += 1) {
+    for (let right = left + 1; right < candidates.length; right += 1) {
+      const fetusA = candidates[left];
+      const fetusB = candidates[right];
+      if (!fetusA.fusionCheckedWith.includes(fetusB.embryoId)
+        && !fetusB.fusionCheckedWith.includes(fetusA.embryoId)) {
+        pairs.push([fetusA, fetusB]);
       }
     }
   }
-
-  while (fetuses.length < targetCount) {
-    fetuses.push(cloneIdenticalFetus(baseFetus));
+  shuffleInPlace(pairs);
+  const consumed = new Set();
+  const fused = [];
+  let nextId = getNextEmbryoId(fetuses);
+  for (const [fetusA, fetusB] of pairs) {
+    fetusA.fusionCheckedWith.push(fetusB.embryoId);
+    fetusB.fusionCheckedWith.push(fetusA.embryoId);
+    if (consumed.has(fetusA.embryoId) || consumed.has(fetusB.embryoId)) continue;
+    const probability = calculateChimeraFusionProbability(fetusA, fetusB);
+    if (probability > 0 && Math.random() < probability / 100) {
+      consumed.add(fetusA.embryoId);
+      consumed.add(fetusB.embryoId);
+      fused.push(createChimeraFetus(profile, carrierName, fetusA, fetusB, nextId));
+      nextId += 1;
+    }
   }
-  pregnant.fetuses = fetuses;
-  pregnant.fetusesCount = fetuses.length;
+  if (fused.length > 0) pregnant.fetuses = [...fetuses.filter((fetus) => !consumed.has(fetus.embryoId)), ...fused];
+  pregnant.fetusesCount = pregnant.fetuses.length;
+}
+
+function resolvePendingChimeraGenders(fetuses) {
+  for (const fetus of fetuses) {
+    if (fetus?.gender !== '待定') continue;
+    const roll = Math.random();
+    fetus.gender = roll < 0.4 ? '男' : roll < 0.8 ? '女' : '双';
+  }
+}
+
+function applyIdenticalSplit(profile) {
+  const pregnant = profile.pregnant || {};
+  const fetuses = ensureEmbryoMetadata(pregnant);
+  if (fetuses.length === 0) return;
+
+  const result = [];
+  let nextId = getNextEmbryoId(fetuses);
+  for (const baseFetus of fetuses) {
+    result.push(baseFetus);
+    const physiology = getMergedRacePhysiologyProfile(baseFetus?.race);
+    const splitRate = clampNumber(
+      physiology?.identicalProbability,
+      0,
+      100,
+      clampNumber(profile?.bio?.identicalProbability, 0, 100, 5),
+    ) / 100;
+    let targetCount = 1;
+    if (splitRate > 0 && Math.random() < splitRate) {
+      targetCount = 2;
+      if (Math.random() < splitRate * splitRate) {
+        targetCount = 3;
+        if (Math.random() < splitRate * splitRate * splitRate) targetCount = 4;
+      }
+    }
+    while (targetCount > 1) {
+      const clone = cloneIdenticalFetus(baseFetus);
+      clone.embryoId = nextId;
+      nextId += 1;
+      result.push(clone);
+      targetCount -= 1;
+    }
+  }
+  pregnant.fetuses = result;
+  pregnant.fetusesCount = result.length;
 }
 
 /**
  * @param profile 承载妊娠的角色（决定孕育环境：体重倍率、亲和度种子）
  * @param options.geneticProfile 提供卵子的一方；代孕／注卵时与承载者不同。
- *        种族与衍生种族按她推导，否则虫母的卵放进人类宿主会被算成人类混血。
+ *        胎儿种族按她推导；母系衍生类型始终来自实际孕育胚胎的承载者。
  */
 function createSimpleFetus(profile, sperm, cycleStage, options = {}) {
   const geneticProfile = options.geneticProfile || profile;
@@ -806,13 +995,16 @@ function createSimpleFetus(profile, sperm, cycleStage, options = {}) {
   const fetusRace = deriveFetusRace(motherRace, fatherRace);
   const gender = deriveFetusGender(fetusRace);
   const weightRatio = getConceptionWeightRatio(profile, sperm);
-  const motherDerivedType = geneticProfile?.base?.derivedType ? String(geneticProfile.base.derivedType) : null;
+  const motherDerivedType = profile?.base?.derivedType ? String(profile.base.derivedType) : null;
   const fatherDerivedType = sperm?.derivedType ? String(sperm.derivedType) : null;
   const derivedSeed = getDerivedTypeSeed(motherDerivedType, fatherDerivedType);
   return {
+    embryoId: null,
+    fusionCheckedWith: [],
     fathers: String(sperm?.male || '未知'),
     // 自然受精恒为 null；代孕／注卵由植入工具指定归属
     provider: options.provider ? String(options.provider) : null,
+    providerSources: options.provider ? [String(options.provider)] : [],
     race: fetusRace,
     fatherRace,
     fatherDerivedType,
@@ -1221,56 +1413,62 @@ function processSimpleConception(profile, tick, notify, name) {
   const deltaDays = tick.deltaDays;
   const fullDays = tick.passedDays;
   const passedHours = tick.passedHours;
+  const allowsNaturalConception = [...MENSTRUAL_STAGES, '产后恢复'].includes(stage);
 
-  if (![...MENSTRUAL_STAGES, '产后恢复'].includes(stage)) return;
-
-  if (stage === '排卵期' && fullDays > 0) {
-    base.eggs = clampNumber(base.eggs, 0, 99, 0) + (getNaturalOvulationDailyAmount(profile) * fullDays);
-  }
-
-  if (stage === '月经期' && passedHours > 0) {
-    base.eggs = 0;
-  } else if (base.eggs > 0 && fullDays > 0 && stage !== '排卵期') {
-    base.eggs = Math.max(0, clampNumber(base.eggs, 0, 99, 0) - fullDays);
-  }
-
-  const sperms = Array.isArray(base.sperms) ? base.sperms.map((item) => ({ ...item })) : [];
-  const availableSperms = sperms.filter((item) => clampNumber(item?.value, 0, 999999, 0) > 0);
-  let eggs = clampNumber(base.eggs, 0, 99, 0);
-  const femaleDifficulty = clampNumber(profile?.bio?.impregnationDifficulty, 0.1, 100, 1.0);
-
-  while (eggs > 0 && availableSperms.length > 0) {
-    const totalSperm = availableSperms.reduce((sum, item) => sum + clampNumber(item?.value, 0, 999999, 0), 0);
-    let winner = null;
-    for (const sperm of availableSperms) {
-      const share = totalSperm > 0 ? clampNumber(sperm?.value, 0, 999999, 0) / totalSperm : 0;
-      const maleDifficulty = clampNumber(getMergedRacePhysiologyProfile(sperm?.race)?.impregnationDifficulty, 0.1, 100, 1.0);
-      const isSameRace = isSameRaceGroup(profile?.base?.race, sperm?.race);
-      let effectiveDifficulty = isSameRace ? femaleDifficulty : (femaleDifficulty + maleDifficulty);
-      const femaleEmbryoType = deriveFetusEmbryoType(profile?.base?.race);
-      const maleEmbryoType = deriveFetusEmbryoType(sperm?.race);
-      if (femaleEmbryoType !== maleEmbryoType) effectiveDifficulty *= 1.5;
-      const spermBaseChance = Math.max(0.001, Math.min(0.8, (deltaDays * 12 * 0.5) / effectiveDifficulty));
-      const spermChance = Math.max(0.001, Math.min(0.8, spermBaseChance * share));
-      if (Math.random() <= spermChance) {
-        winner = sperm;
-        break;
-      }
+  if (allowsNaturalConception) {
+    if (stage === '排卵期' && fullDays > 0) {
+      base.eggs = clampNumber(base.eggs, 0, 99, 0) + (getNaturalOvulationDailyAmount(profile) * fullDays);
     }
-    if (winner) {
-      pregnant.fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
-      pregnant.fetuses.push(createSimpleFetus(profile, winner, stage));
-      notify.secondly = `${name}受精成功`;
-      eggs -= 1;
+
+    if (stage === '月经期' && passedHours > 0) {
+      base.eggs = 0;
+    } else if (base.eggs > 0 && fullDays > 0 && stage !== '排卵期') {
+      base.eggs = Math.max(0, clampNumber(base.eggs, 0, 99, 0) - fullDays);
+    }
+
+    const sperms = Array.isArray(base.sperms) ? base.sperms.map((item) => ({ ...item })) : [];
+    const availableSperms = sperms.filter((item) => clampNumber(item?.value, 0, 999999, 0) > 0);
+    let eggs = clampNumber(base.eggs, 0, 99, 0);
+    const femaleDifficulty = clampNumber(profile?.bio?.impregnationDifficulty, 0.1, 100, 1.0);
+
+    while (eggs > 0 && availableSperms.length > 0) {
+      const totalSperm = availableSperms.reduce((sum, item) => sum + clampNumber(item?.value, 0, 999999, 0), 0);
+      let winner = null;
+      for (const sperm of availableSperms) {
+        const share = totalSperm > 0 ? clampNumber(sperm?.value, 0, 999999, 0) / totalSperm : 0;
+        const maleDifficulty = clampNumber(getMergedRacePhysiologyProfile(sperm?.race)?.impregnationDifficulty, 0.1, 100, 1.0);
+        const isSameRace = isSameRaceGroup(profile?.base?.race, sperm?.race);
+        let effectiveDifficulty = isSameRace ? femaleDifficulty : (femaleDifficulty + maleDifficulty);
+        const femaleEmbryoType = deriveFetusEmbryoType(profile?.base?.race);
+        const maleEmbryoType = deriveFetusEmbryoType(sperm?.race);
+        if (femaleEmbryoType !== maleEmbryoType) effectiveDifficulty *= 1.5;
+        const spermBaseChance = Math.max(0.001, Math.min(0.8, (deltaDays * 12 * 0.5) / effectiveDifficulty));
+        const spermChance = Math.max(0.001, Math.min(0.8, spermBaseChance * share));
+        if (Math.random() <= spermChance) {
+          winner = sperm;
+          break;
+        }
+      }
+      if (winner) {
+        pregnant.fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+        pregnant.fetuses.push(createSimpleFetus(profile, winner, stage));
+        notify.secondly = `${name}受精成功`;
+        eggs -= 1;
+      }
       break;
     }
-    break;
+    base.eggs = eggs;
   }
 
-  base.eggs = eggs;
-
-  if (Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0) {
+  const hasPreimplantationEmbryos = !isPregnancyStage(stage)
+    && Array.isArray(pregnant.fetuses)
+    && pregnant.fetuses.length > 0;
+  if (hasPreimplantationEmbryos) {
+    ensureEmbryoMetadata(pregnant);
     base.fertilizationDays = clampNumber(base.fertilizationDays, 0, 9999, 0) + deltaDays;
+    const beforeFusionCount = pregnant.fetuses.length;
+    applyChimeraFusion(profile, name);
+    if (pregnant.fetuses.length < beforeFusionCount) notify.secondly = `${name}的早期受精卵发生了融合`;
     if (base.fertilizationDays >= getImplantationDays(profile)) {
       const vitality = clampNumber(base.vitality, 0, 200, 100);
       const implantationFailChance = vitality < 100 ? (100 - vitality) / 100 : 0;
@@ -1284,6 +1482,7 @@ function processSimpleConception(profile, tick, notify, name) {
         const obstetricPregnantDays = base.fertilizationDays + getObstetricPregnancyOffsetDays(profile);
         const gestationSpeed = clampNumber(getGestationEffectiveSpeed(profile), 0, 20, 1);
         applyIdenticalSplit(profile);
+        resolvePendingChimeraGenders(pregnant.fetuses);
         base.stage = '孕早期';
         base.days = 0;
         base.fertilizationDays = 0;
@@ -1297,14 +1496,13 @@ function processSimpleConception(profile, tick, notify, name) {
         notify.firstly = `${name}进入了孕早期`;
       }
     }
-  } else {
+  } else if (!isPregnancyStage(stage)) {
     base.fertilizationDays = 0;
   }
 
   pregnant.fetusesCount = Array.isArray(pregnant.fetuses) ? pregnant.fetuses.length : 0;
   updateFetalEnergyDrain(profile);
 }
-
 function normalizeToolCallArguments(value) {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value;
   if (typeof value !== 'string') return {};
@@ -2158,6 +2356,8 @@ function appendChildrenFromFetuses(profile, fetuses) {
       name: null,
       fathers: String(fetus?.fathers || '未知'),
       provider,
+      providerSources: Array.isArray(fetus?.providerSources) ? [...fetus.providerSources] : [],
+      chimera: fetus?.chimera ? cloneValue(fetus.chimera) : null,
       gender: String(fetus?.gender || '未知'),
       race: String(fetus?.race || '未知'),
       derivedType: childDerivedType,
@@ -2187,14 +2387,20 @@ function transferProviderChildren(chatState) {
     const kept = [];
     let moved = false;
     for (const child of children) {
-      const provider = String(child?.provider || '').trim();
+      const providerSources = uniqueNonEmptyStrings(child?.providerSources);
+      // 多母源嵌合体默认登记在孕育者名下，只允许之后手动转移给其中一位母源。
+      if (providerSources.length > 1) {
+        kept.push(child);
+        continue;
+      }
+      const provider = providerSources[0] || String(child?.provider || '').trim();
       const target = provider && provider !== hostName ? characters[provider] : null;
       if (!target?.profile) {
         kept.push(child);
         continue;
       }
       // 已经在正确的人名下，不必再留 provider 标记
-      const { provider: _ignored, ...received } = child;
+      const { provider: _ignored, providerSources: _sources, ...received } = child;
       target.profile.children = [...(Array.isArray(target.profile.children) ? target.profile.children : []), received];
       moved = true;
     }
@@ -2840,9 +3046,9 @@ function applyAbortion(chatState, args) {
 /**
  * 植入外源胚胎：代孕、胚胎移植、虫母注卵、寄生产卵。
  *
- * 与自然受精的差别在于胚胎的遗传来源与承载者分离，因此：
- * 种族依 provider 推导（虫母的卵不该被算成宿主的血统），
- * 且每个胎儿都带上 provider，分娩时由 transferProviderChildren 把孩子转交回去。
+ * 与自然受精的差别在于胚胎的遗传来源与承载者分离。工具只把受精卵加入
+ * 共用 fertilizationDays 窗口，不直接完成着床；遗传资料由 race/fatherRace 描述，
+ * provider 只记录母源归属。单一母源出生后自动转交，多母源嵌合体留在孕母名下。
  */
 function applyImplantEmbryo(chatState, args) {
   const female = String(args?.female || '').trim();
@@ -2862,69 +3068,60 @@ function applyImplantEmbryo(chatState, args) {
   const profile = next.profile || {};
   const base = profile.base || {};
   const pregnant = profile.pregnant || {};
-  const experience = profile.experience || {};
   const notify = profile.notify || {};
   const currentStage = String(base.stage || '');
-  const existingFetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
-  const hasConceptionState = existingFetuses.length > 0
-    || clampNumber(base.fertilizationDays, 0, 9999, 0) > 0
-    || isPregnancyStage(currentStage);
-  if (hasConceptionState) {
-    return { applied: false, message: `bsImplantEmbryo skipped for ${female}: pregnancy/conception state already exists.` };
+  if (isPregnancyStage(currentStage)) {
+    return { applied: false, message: `bsImplantEmbryo skipped for ${female}: implantation has already completed.` };
   }
 
   const count = Math.max(1, Math.min(50, Math.floor(Number(args?.count) || 1)));
   const fathers = String(args?.fathers || '').trim() || '未知';
-  // 遗传来源：优先取 provider 已注册角色，其次用显式 race，最后才退回承载者
+  // provider 只负责归属；遗传资料来自 race/fatherRace 描述符。
+  // race 未提供时，已注册 provider 的状态仅作为兼容性预设，不依赖 provider 名称一定可解析。
   const providerCharacter = chatState.characters?.[provider];
   const explicitRace = String(args?.race || '').trim();
-  const geneticProfile = providerCharacter?.profile
-    || (explicitRace ? { base: { race: explicitRace, derivedType: null } } : null);
-  // 父方种族：植入情节里通常不明，预设与遗传母方同族（自体繁殖／同族供体），
-  // 需要跨种族时由 fatherRace 明示。不可默认取承载者的种族。
-  const geneticRace = parseRaceDescriptor(explicitRace || geneticProfile?.base?.race || base.race || '人类').race || '人类';
+  const providerRace = String(providerCharacter?.profile?.base?.race || '').trim();
+  const geneticDescriptor = explicitRace
+    ? parseRaceDescriptor(explicitRace)
+    : {
+      race: parseRaceDescriptor(providerRace || base.race || '人类').race || '人类',
+      derivedType: providerCharacter?.profile?.base?.derivedType
+        ? String(providerCharacter.profile.base.derivedType)
+        : null,
+    };
+  const geneticRace = geneticDescriptor.race || '人类';
+  const fatherRaceText = String(args?.fatherRace || '').trim();
+  const fatherDescriptor = parseRaceDescriptor(fatherRaceText || geneticRace);
+  const geneticProfile = { base: { race: geneticRace } };
   const spermSeed = {
     male: fathers,
-    race: parseRaceDescriptor(String(args?.fatherRace || '').trim() || geneticRace).race || geneticRace,
-    derivedType: null,
+    race: fatherDescriptor.race || geneticRace,
+    // 所有外部遗传衍生类型都占父系槽：fatherRace 明示者优先，否则退回卵源 race。
+    derivedType: fatherDescriptor.derivedType || geneticDescriptor.derivedType || null,
   };
 
-  const fetuses = [];
+  const existingFetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+  ensureEmbryoMetadata(pregnant);
   for (let index = 0; index < count; index += 1) {
-    fetuses.push(createSimpleFetus(profile, spermSeed, '孕早期', { geneticProfile, provider }));
+    existingFetuses.push(createSimpleFetus(profile, spermSeed, currentStage, { geneticProfile, provider }));
   }
-
-  pregnant.fetuses = fetuses;
-  pregnant.fetusesCount = fetuses.length;
-  pregnant.pregnantDays = 0;
-  pregnant.effectivePregnantDays = 0;
-  pregnant.amnionDurability = 100;
-  pregnant.laborHours = 0;
-  pregnant.effectiveLaborHours = 0;
-  pregnant.laborPhase = null;
-  pregnant.laborFetusIndex = 0;
-  pregnant.laborPain = 0;
-  clearProdromalState(pregnant);
-  base.stage = '孕早期';
-  base.days = 0;
-  base.fertilizationDays = 0;
-  experience.pregnantExperience = clampNumber(experience.pregnantExperience, 0, 999, 0) + 1;
+  pregnant.fetuses = existingFetuses;
+  ensureEmbryoMetadata(pregnant);
+  pregnant.fetusesCount = existingFetuses.length;
+  if (existingFetuses.length === count) base.fertilizationDays = 0;
 
   profile.base = base;
   profile.pregnant = pregnant;
-  profile.experience = experience;
   updateFetalEnergyDrain(profile);
   profile.notify = {
     ...notify,
-    firstly: `${female}进入了孕早期`,
-    secondly: `${female}被植入了${count}个来自${provider}的胚胎，孩子将归属${provider}`,
+    secondly: `${female}加入了${count}个来自${provider}的受精卵，正等待共同著床窗口`,
   };
 
   next.profile = profile;
   chatState.characters[female] = syncCharacterStageFromProfile(next);
-  return { applied: true, message: `bsImplantEmbryo applied to ${female}: ${count} embryo(s) from ${provider}.` };
+  return { applied: true, message: `bsImplantEmbryo applied to ${female}: ${count} pre-implantation embryo(s) from ${provider}.` };
 }
-
 /** 破水只允许在已进入产兆前驱后作为转入正式产程的受控事件。 */
 const RUPTURE_ALLOWED_PRELABOR_STAGES = Object.freeze(['产兆前驱']);
 /** 产兆前驱中破水所需的宫压门槛。 */
@@ -4212,7 +4409,7 @@ function applyAddSperm(chatState, args) {
   const next = cloneValue(character);
   const base = next.profile?.base || {};
   const sperms = Array.isArray(base.sperms) ? base.sperms.map((item) => ({ ...item })) : [];
-  const maleDerivedType = chatState.characters?.[male]?.profile?.base?.derivedType ?? null;
+  const maleDerivedType = parsedRace.derivedType || null;
   const existing = sperms.find((item) => String(item?.male || '') === male);
   if (existing) {
     existing.value = Math.max(0, clampNumber(existing.value, 0, 999999, 0) + amount);

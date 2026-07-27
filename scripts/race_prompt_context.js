@@ -1,4 +1,4 @@
-import { getDerivedTypeFluxProfile, getDerivedTypeIntroductionLine, getDerivedTypeMetabolismExemptions, getEmbryoTypeByRace, getMergedRacePhysiologyProfile, getRaceComponents, getRaceIntroductionLine, getRacePhysiologyProfile } from './race_config.js';
+import { getDerivedTypeFluxProfile, getDerivedTypeIntroductionLine, getDerivedTypeMetabolismExemptions, getEmbryoTypeByRace, getMergedRacePhysiologyProfile, getRaceComponents, getRaceDescriptorComponents, getRaceIntroductionLine, getRacePhysiologyProfile } from './race_config.js';
 
 function formatNumber(value, digits = 2) {
   const num = Number(value);
@@ -122,8 +122,8 @@ function isSameRaceGroup(leftRace, rightRace) {
 }
 
 function deriveFetusRace(motherRace, fatherRace) {
-  const motherParts = getRaceComponents(motherRace);
-  const fatherParts = getRaceComponents(fatherRace);
+  const motherParts = getRaceDescriptorComponents(motherRace);
+  const fatherParts = getRaceDescriptorComponents(fatherRace);
   const combined = [...fatherParts, ...motherParts].filter(Boolean);
   if (combined.length === 0) return '人类';
   const unique = [];
