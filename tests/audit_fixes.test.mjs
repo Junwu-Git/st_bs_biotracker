@@ -157,3 +157,27 @@ test('格式化输出开关：使用者关掉时一律不启用，不被模型�
   assert.equal(shouldUseResponseFormat({ formattedOutputV4: false }, 'deepseek-chat'), false);
   assert.equal(shouldInjectV4Instruction({ formattedOutputV4: false }, 'deepseek-chat'), false);
 });
+
+test('characters 用 null-proto：保留名不再被当成角色对象', async () => {
+  const { createEmptyChatState } = await import('../scripts/state.js');
+  const cs = createEmptyChatState();
+  assert.equal(Object.getPrototypeOf(cs.characters), null, '新状态 characters 应为 null-proto');
+  // 模型幻觉出保留名时应干净 skip，而不是取到继承来的内建属性再当角色对象崩掉
+  for (const name of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+    const result = applyToolCall(cs, { name: 'bsSetCharacterPresence', arguments: { female: name, isPresent: true } });
+    assert.equal(result.applied, false, `female=${name} 应被当作未知角色跳过`);
+    assert.match(result.message, /unknown character/, `female=${name} 应回报未知角色`);
+  }
+  assert.equal(Object.getPrototypeOf(cs.characters), null, '写入后原型仍为 null');
+  assert.equal({}.evil, undefined, '全局 Object.prototype 未被改动');
+});
+
+test('存量 characters 读取时迁移为 null-proto 且保留合法角色', async () => {
+  const { getChatState } = await import('../scripts/state.js');
+  const settings = { chatStates: {} };
+  const oldState = { characters: { A: { name: 'A' } } };
+  settings.chatStates['c'] = oldState;
+  const st = getChatState({ chatId: 'c' }, settings);
+  assert.equal(Object.getPrototypeOf(st.characters), null, '存量 characters 应迁移为 null-proto');
+  assert.equal(st.characters.A?.name, 'A', '存量合法角色应保留');
+});

@@ -930,7 +930,9 @@ export function createEmptyChatState() {
     minutesPassed: 0,
     skillCatalog: [],
     nextSkillId: 1,
-    characters: {},
+    // null-proto：角色名直接作键，模型吐出 constructor/toString/__proto__ 之类的名字时
+    // 不会取到继承来的内建属性（那会让本该 skip 的调用变成拿函数当角色对象崩掉）
+    characters: Object.create(null),
     lastRawResult: null,
     lastOperationLogs: [],
     snapshots: [],
@@ -1188,6 +1190,19 @@ export function getChatState(ctx, settings) {
   if (!settings.chatStates[chatKey]) settings.chatStates[chatKey] = createEmptyChatState();
   const chatState = settings.chatStates[chatKey];
   let shouldSave = false;
+  // 存量状态迁移：早期 characters 是普通 {}，读取时重建为 null-proto
+  const rawCharacters = chatState.characters;
+  if (!rawCharacters || typeof rawCharacters !== 'object') {
+    chatState.characters = Object.create(null);
+    shouldSave = true;
+  } else if (Object.getPrototypeOf(rawCharacters) !== null) {
+    const migrated = Object.create(null);
+    for (const key of Object.keys(rawCharacters)) {
+      migrated[key] = rawCharacters[key];
+    }
+    chatState.characters = migrated;
+    shouldSave = true;
+  }
   const normalizedSkillCatalog = normalizeSkillCatalog(chatState.skillCatalog);
   if (JSON.stringify(chatState.skillCatalog || []) !== JSON.stringify(normalizedSkillCatalog)) shouldSave = true;
   chatState.skillCatalog = normalizedSkillCatalog;

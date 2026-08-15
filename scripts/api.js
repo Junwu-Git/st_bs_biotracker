@@ -743,6 +743,10 @@ function buildPresetSamplingBodyFromPreset(preset) {
 
 async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
   const logApiDebug = (phase, details = {}) => {
+    // 默认关闭：完整 request/response 含聊天内容，同页任何脚本（其他扩展、角色卡的
+    // TH 脚本经 window.parent）都读得到。排查时在控制台执行：
+    //   globalThis.__bs_biotracker_debug_api__ = true
+    if (!globalThis.__bs_biotracker_debug_api__) return;
     try {
       const label = `[BS BioTracker][API debug] ${phase}`;
       if (typeof console.groupCollapsed === 'function') console.groupCollapsed(label);
@@ -804,16 +808,19 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
           deadlineMs: runContext.deadlineMs || 0,
         }));
       }
-      globalThis[DEBUG_LAST_API_RESPONSE_KEY] = {
-        capturedAt: Date.now(),
-        attempt,
-        transport,
-        url: transport === 'host-proxy' ? '/api/backends/chat-completions/generate' : url,
-        status: response.status,
-        ok: response.ok,
-        responseText,
-        requestText,
-      };
+      // 调试快照同样默认关闭，避免无条件把完整请求/响应暂存在 globalThis
+      if (globalThis.__bs_biotracker_debug_api__) {
+        globalThis[DEBUG_LAST_API_RESPONSE_KEY] = {
+          capturedAt: Date.now(),
+          attempt,
+          transport,
+          url: transport === 'host-proxy' ? '/api/backends/chat-completions/generate' : url,
+          status: response.status,
+          ok: response.ok,
+          responseText,
+          requestText,
+        };
+      }
       logApiDebug(`response:${attempt}`, {
         transport,
         url: transport === 'host-proxy' ? '/api/backends/chat-completions/generate' : url,
