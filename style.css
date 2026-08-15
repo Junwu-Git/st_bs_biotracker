@@ -791,6 +791,17 @@
   color: inherit;
 }
 
+/* 设置项下方的小字解释：宿主默认 small 是低对比灰，在浅色屏上几乎不可读；
+   统一用辅助文字色（各主题经 --bsbt-off-text 自适应）保证可读性 */
+#bs-biotracker-settings .settings_section small {
+  color: var(--bsbt-off-text);
+  font-size: 11.5px;
+  line-height: 1.45;
+  display: block;
+  margin-top: 4px;
+  opacity: 0.95;
+}
+
 #bs-biotracker-settings .sysHR {
   margin: 2px 0;
   border: 0;

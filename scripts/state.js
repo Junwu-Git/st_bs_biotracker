@@ -1059,18 +1059,24 @@ export function getSettings(ctx) {
   const settings = root[MODULE_NAME];
   const useHostChatStore = ['tauritavern', 'luker'].includes(getHostKind());
   if (useHostChatStore) {
-    const descriptor = Object.getOwnPropertyDescriptor(settings, 'chatStates');
-    const runtimeChatStates = descriptor && descriptor.enumerable === false && settings.chatStates && typeof settings.chatStates === 'object'
-      ? settings.chatStates
-      : {};
-    if (descriptor) delete settings.chatStates;
-    Object.defineProperty(settings, 'chatStates', {
-      value: runtimeChatStates,
-      writable: true,
-      configurable: true,
-      enumerable: false,
-    });
-    if (!descriptor || descriptor.enumerable !== false) shouldSave = true;
+    // TT/Luker 下 chatStates 与宿主 sidecar 绑定，属性描述符可能特殊（旧数据/宿主注入）。
+    // 重定义失败不该拖垮整个设置读取——否则连主题切换这种纯 UI 操作都会「点了没反应」。
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(settings, 'chatStates');
+      const runtimeChatStates = descriptor && descriptor.enumerable === false && settings.chatStates && typeof settings.chatStates === 'object'
+        ? settings.chatStates
+        : {};
+      if (descriptor) delete settings.chatStates;
+      Object.defineProperty(settings, 'chatStates', {
+        value: runtimeChatStates,
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
+      if (!descriptor || descriptor.enumerable !== false) shouldSave = true;
+    } catch (error) {
+      console.warn('[BS BioTracker] unable to normalize chatStates for host store, continuing', error);
+    }
   }
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
     if (useHostChatStore && key === 'chatStates') continue;

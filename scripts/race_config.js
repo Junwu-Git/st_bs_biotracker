@@ -1036,21 +1036,28 @@ export function getBaseRaceName(race) {
 }
 
 export function getRaceComponents(race) {
+  // 同基种族带不同装饰子项（如「兽耳族-兔x兽耳族-猫」）时按基种族去重，避免平均时双重加权
+  const seen = new Set();
   return getRaceDescriptorComponents(race)
     .map((component) => getBaseRaceComponentName(component))
-    .filter(Boolean);
+    .filter((name) => {
+      if (!name || seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    });
 }
 
 function mergeGenderRatioValues(values) {
+  // 双性优先于数值平均：多一套器官是稳定的身体构造，混血时应当保留，
+  // 否则「史莱姆x人类」会被平均成普通男女，双性只剩嵌合体那条 20% 的路径。
+  // 无性不比照办理——它是「少一套」的减法，让触手怪x人类的后代全部绝育过重。
+  if (values.some((value) => value === null)) return null;
+
   const normalValues = values.filter((value) => Number.isFinite(value) && value >= 0 && value <= 100);
   if (normalValues.length > 0) {
     return normalValues.reduce((sum, value) => sum + value, 0) / normalValues.length;
   }
-
-  const hasHerm = values.some((value) => value === null);
-  const hasAsexual = values.some((value) => value === -1);
-  if (hasHerm) return null;
-  if (hasAsexual) return -1;
+  if (values.some((value) => value === -1)) return -1;
   return 50;
 }
 
@@ -1087,6 +1094,8 @@ export function getMergedRacePhysiologyProfile(race) {
   }
 
   merged.genderRatio = mergeGenderRatioValues(profiles.map((profile) => profile.genderRatio));
+  // 存在未收录的混血成分：不静默丢弃，标记出来让提示词明确「数值仅供参考」
+  if (profiles.length < parts.length) merged.hasUnknownRace = true;
   return merged;
 }
 

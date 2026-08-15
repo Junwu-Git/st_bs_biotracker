@@ -333,6 +333,19 @@ function recordBreedingInferenceResultDebug(result, error = null) {
   };
 }
 
+/**
+ * 提示词插值防线：剥离换行、闭合标签与控制字符——注册提示词模板内插的
+ * declared_race/custom_notes/user_instruction 来自用户输入，含换行或闭合标签可破坏模板行。
+ * 与 race_prompt_context.sanitizePromptText 同规则。
+ */
+function sanitizePromptText(value) {
+  return String(value ?? '')
+    .replace(/[\r\n\t]/g, ' ')
+    .replace(/<\//g, '<\\/')
+    .replace(/[\u0000-\u001f\u007f\u0080-\u009f]/g, ' ')
+    .trim();
+}
+
 export function buildBreedingInferenceSystemPrompt(settings, options = {}) {
   const targetName = String(options.targetName || '').trim();
   const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings?.registryCustomNotes || '')).trim();
@@ -353,10 +366,10 @@ export function buildBreedingInferenceSystemPrompt(settings, options = {}) {
     '如果角色当前未怀孕或没有明确初登场怀孕迹象，填写 mens；如果角色当前已怀孕、假孕、产兆前驱或产程中，填写 preg。mens 与 preg 二选一，另一项用 null。',
     '启用 mens 时，必须同时推演 isChaste 与 hasContraception；启用 preg 时，必须同时推演 knowsFatherSource 与 hasProfessionalPrenatalCare。',
     '数值范围为 0-100。0 是极端封闭/否认/失控，50 是普通中性，100 是极端掌控/执迷/展现。不要使用 100+，注册阶段只给 0-100 起始点。',
-    declaredRace ? `用户已声明角色种族倾向：${declaredRace}` : '',
+    declaredRace ? `用户已声明角色种族倾向：${sanitizePromptText(declaredRace)}` : '',
     sourceChild ? '本次角色来源为已出生孩子。payload.source_child 是其固定出生资料与既有天赋；必须用来判断长期人格、母子关系及成长背景，不得改写其种族或天赋。' : '',
-    customNotes ? `角色补充设定：${customNotes}` : '',
-    breedingInferencePrompt ? `额外推演提示：${breedingInferencePrompt}` : '',
+    customNotes ? `角色补充设定：${sanitizePromptText(customNotes)}` : '',
+    breedingInferencePrompt ? `额外推演提示：${sanitizePromptText(breedingInferencePrompt)}` : '',
     'mens 字段定义：',
     ...psyMensLines,
     ...psyMensBoolLines,
