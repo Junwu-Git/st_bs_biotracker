@@ -1086,6 +1086,46 @@ function emitTrackerUpdateCue(detail = {}) {
   globalThis.dispatchEvent?.(new CustomEvent(UPDATE_CUE_EVENT, { detail }));
 }
 
+// ---- 追踪进行中提示 ----
+// 浮球脉动是「事后」才闪、且无变化时不闪，面板里的状态文字在手机上也看不见，
+// 于是整轮追踪期间没有任何可见反馈。用一条常驻 toast 顶住，结束时换成结果提示。
+let trackerBusyToast = null;
+
+function showTrackerBusyToast() {
+  if (trackerBusyToast) return;
+  try {
+    // timeOut/extendedTimeOut = 0：不自动消失，由本轮结束时显式清掉
+    trackerBusyToast = globalThis.toastr?.info?.('追踪更新中…', '[BS BioTracker]', {
+      timeOut: 0,
+      extendedTimeOut: 0,
+    }) || null;
+  } catch {
+    trackerBusyToast = null;
+  }
+}
+
+function clearTrackerBusyToast() {
+  if (!trackerBusyToast) return;
+  try {
+    globalThis.toastr?.clear?.(trackerBusyToast);
+  } catch {
+    // toastr 缺失或已被宿主清空时无需处理
+  }
+  trackerBusyToast = null;
+}
+
+function notifyTrackerDone(hasChanges) {
+  try {
+    globalThis.toastr?.success?.(
+      hasChanges ? '追踪完成，状态已更新' : '追踪完成，本轮无状态变化',
+      '[BS BioTracker]',
+      { timeOut: 3000 },
+    );
+  } catch {
+    // 无 toastr 的环境静默即可
+  }
+}
+
 function recordTrackerRequestDebug(systemPrompt, payload) {
   globalThis[DEBUG_LAST_TRACKER_REQUEST_KEY] = {
     capturedAt: Date.now(),
@@ -1327,6 +1367,7 @@ export async function runTracker(ctx, deps, reason = 'manual') {
   const runToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   globalThis[RUN_RUNTIME_KEY] = runToken;
   markTrackerRunProgress();
+  showTrackerBusyToast();
   try {
     const { nextMessageIndex } =
       reason === 'manual' ? prepareManualReplay(ctx, chatState, chat.length) : reconcileChatStateSnapshots(ctx, chatState, settings);
@@ -1352,6 +1393,8 @@ export async function runTracker(ctx, deps, reason = 'manual') {
       processedCount,
       reason,
     });
+    clearTrackerBusyToast();
+    notifyTrackerDone(toolCalls.length > 0);
     return { skipped: false, processedCount, toolCalls };
   } catch (error) {
     console.error('[BS BioTracker] runTracker failed', error);
@@ -1370,6 +1413,8 @@ export async function runTracker(ctx, deps, reason = 'manual') {
     globalThis.toastr?.error?.(String(error?.message || error), '[BS BioTracker]');
     throw error;
   } finally {
+    // 中途放弃（对话被改动）与失败路径都会走到这里，常驻提示不能留在屏幕上
+    clearTrackerBusyToast();
     // 被看门狗判死的旧轮次可能在新一轮开始后才走到这里，不能清掉别人的锁
     if (globalThis[RUN_RUNTIME_KEY] === runToken) {
       globalThis[RUN_RUNTIME_KEY] = null;
