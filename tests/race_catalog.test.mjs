@@ -100,3 +100,19 @@ test('名录提示至少含一句中文，不会只剩英文原名', () => {
   const englishOnly = [...hinted.matchAll(/([^、:\s]+)\(([^)]*)\)/g)].filter((match) => !/[一-龥]/.test(match[2]));
   assert.deepEqual(englishOnly.map((match) => match[1]), [], '提示不应只剩英文原名');
 });
+
+test('杜拉罕填补胎生组「难受孕 + 高承载」的空缺', async () => {
+  const { VIVIPAROUS_RACES, getRacePhysiologyProfile, getEmbryoTypeByRace } = await import('../scripts/race_config.js');
+  const profile = getRacePhysiologyProfile('杜拉罕');
+  assert.ok(profile, '杜拉罕应有生理参数');
+  assert.equal(getEmbryoTypeByRace('杜拉罕'), '胎生');
+  // 躯体不依赖头颅运作 → 承载力强；妖精血统 → 难受孕。
+  // 胎生组此前是一条负相关（越难怀越扛不住），杜拉罕是唯一的例外点。
+  const quadrant = VIVIPAROUS_RACES.filter((race) => {
+    const item = getRacePhysiologyProfile(race);
+    return item && item.impregnationDifficulty >= 2 && item.breedTolerance >= 2;
+  });
+  assert.deepEqual(quadrant, ['杜拉罕']);
+  // 出生时头颅仍与躯干相连，分娩难度不该低于人类
+  assert.equal(profile.birthDifficulty, getRacePhysiologyProfile('人类').birthDifficulty);
+});

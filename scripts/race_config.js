@@ -14,7 +14,8 @@ export const VIVIPAROUS_RACES = Object.freeze([
   "夜叉",
   "妖狐",
   "貓又",
-  "月兔族"
+  "月兔族",
+  "杜拉罕"
 ]);
 
 export const OVIPAROUS_RACES = Object.freeze([
@@ -156,6 +157,7 @@ export const RACE_INTRODUCTION_LINES = Object.freeze(Object.assign(
     "修格斯": "Shoggoth，形似史莱姆却更为古老的太古存在，承载力极强而极难受孕。",
     "活体铠甲": "Living Armor，寄生型无性种族，附着于冒险者身上；将卵寄入宿主体内孵化，不自行孕育。",
     "伪人": "Doppelganger，模仿并取代人类的不定型种族；各项生理刻意贴近人类，同卵分裂倾向极高。",
+    "杜拉罕": "Dullahan，可将头颅离体持握的亚人，青春期后头颅方与躯干分离，颈上或燃着无实体的火焰；躯体不依赖头颅运作，承载力极强。爱尔兰原典近于妖精，奇幻创作多作不死——取后者写作 [不死]杜拉罕。",
   },
 ));
 export const RACE_INTRODUCTION_FIELD = "introductionLine";
@@ -944,6 +946,16 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
     "impregnationDifficulty": 3,
     "orgasmOvulationAmount": 1,
     "identicalProbability": 33,
+    "genderRatio": 50
+  },
+  "杜拉罕": {
+    "menstrualLengthRatio": 2,
+    "gestationSpeciesSpeed": 0.8,
+    "birthDifficulty": 1,
+    "breedTolerance": 3,
+    "impregnationDifficulty": 2.5,
+    "orgasmOvulationAmount": 1,
+    "identicalProbability": 5,
     "genderRatio": 50
   }
 });
