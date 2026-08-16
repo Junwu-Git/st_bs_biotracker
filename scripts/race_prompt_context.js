@@ -34,9 +34,11 @@ function buildRaceCatalogHint(text) {
   const clauses = line.split(/[；。]/)[0].split('，').map((part) => part.trim()).filter(Boolean);
   const picked = [];
   for (const clause of clauses) {
-    if (picked.length > 0 && [...picked, clause].join('，').length > 28) break;
+    // 长度上限只在已经收到中文之后才生效——只有英文原名的提示没有辨识价值，
+    // 不能因为下一句中文超出预算就把它挡在外面
+    const hasChinese = /[一-龥]/.test(picked.join('，'));
+    if (picked.length > 0 && hasChinese && [...picked, clause].join('，').length > 28) break;
     picked.push(clause);
-    // 只收到英文原名时信息量不足，必须再收一句中文
     const current = picked.join('，');
     if (current.length >= 10 && /[一-龥]/.test(current)) break;
   }

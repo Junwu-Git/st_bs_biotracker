@@ -61,3 +61,42 @@ test('短敘述与名录提示都走使用者覆写', async () => {
     setRacePhysiologyOverrides({});
   }
 });
+
+test('v0.9.5 新增种族有完整参数并归入正确的繁殖分组', async () => {
+  const { getRacePhysiologyProfile, getEmbryoTypeByRace } = await import('../scripts/race_config.js');
+  const expected = {
+    月兔族: '胎生', 狗头人: '卵生', 梅杜莎: '卵胎生',
+    修格斯: '胎转卵生', 活体铠甲: '不定型', 伪人: '不定型',
+  };
+  for (const [race, embryoType] of Object.entries(expected)) {
+    const profile = getRacePhysiologyProfile(race);
+    assert.ok(profile, `${race} 应有生理参数`);
+    assert.ok(Number.isFinite(profile.gestationSpeciesSpeed), `${race} 的孕速应为数值`);
+    assert.equal(getEmbryoTypeByRace(race), embryoType, `${race} 的胚胎类型`);
+  }
+  // 活体铠甲走宿主孵化：受精容易、排卵多，与人类造物组（受精 6）相反
+  assert.ok(getRacePhysiologyProfile('活体铠甲').impregnationDifficulty < 1);
+  // 伪人以复制取代为核心，同卵分裂倾向远高于人类
+  assert.ok(getRacePhysiologyProfile('伪人').identicalProbability > getRacePhysiologyProfile('人类').identicalProbability);
+});
+
+test('修行拆成修炼与魔导后，旧存档与繁体写法仍解析得到', async () => {
+  const raceConfig = await import('../scripts/race_config.js');
+  const canonical = raceConfig.getDerivedTypeFluxProfile('修炼');
+  assert.equal(canonical.fluxName, '炁');
+  // 旧存档写的是 [修行]XXX，不能静默失效
+  assert.equal(raceConfig.getDerivedTypeFluxProfile('修行').fluxName, '炁');
+  assert.equal(raceConfig.getDerivedTypeInheritanceProfile('修行').inheritanceSpeed, 0.75);
+  assert.deepEqual(raceConfig.getDerivedTypeMetabolismExemptions('修行'), ['hunger', 'excretion', 'companionship']);
+  // 繁体写法一并映射；带装饰子项也要能解析
+  assert.equal(raceConfig.getDerivedTypeFluxProfile('修煉').fluxName, '炁');
+  assert.equal(raceConfig.getDerivedTypeFluxProfile('修行-剑修').fluxName, '炁');
+  assert.equal(raceConfig.getDerivedTypeFluxProfile('魔導').fluxName, '魔力');
+  assert.equal(raceConfig.getDerivedTypeInheritanceProfile('魔导').inheritanceSpeed, 1.0);
+});
+
+test('名录提示至少含一句中文，不会只剩英文原名', () => {
+  const hinted = buildRaceCatalogBlock({ withHints: true });
+  const englishOnly = [...hinted.matchAll(/([^、:\s]+)\(([^)]*)\)/g)].filter((match) => !/[一-龥]/.test(match[2]));
+  assert.deepEqual(englishOnly.map((match) => match[1]), [], '提示不应只剩英文原名');
+});

@@ -13,7 +13,8 @@ export const VIVIPAROUS_RACES = Object.freeze([
   "雪族",
   "夜叉",
   "妖狐",
-  "貓又"
+  "貓又",
+  "月兔族"
 ]);
 
 export const OVIPAROUS_RACES = Object.freeze([
@@ -31,7 +32,8 @@ export const OVIPAROUS_RACES = Object.freeze([
   "阿拉克涅",
   "百足姬",
   "天狗",
-  "深潜者"
+  "深潜者",
+  "狗头人"
 ]);
 
 export const OVOVIVIPAROUS_RACES = Object.freeze([
@@ -44,7 +46,8 @@ export const OVOVIVIPAROUS_RACES = Object.freeze([
   "眼魔",
   "水母族",
   "海龙人",
-  "河童"
+  "河童",
+  "梅杜莎"
 ]);
 
 export const METOVIVIPAROUS_RACES = Object.freeze([
@@ -57,7 +60,8 @@ export const METOVIVIPAROUS_RACES = Object.freeze([
   "凤凰",
   "白泽",
   "独角兽",
-  "空鲸"
+  "空鲸",
+  "修格斯"
 ]);
 
 export const AMORPHOUS_RACES = Object.freeze([
@@ -70,7 +74,9 @@ export const AMORPHOUS_RACES = Object.freeze([
   "奈米丛族",
   "元素灵",
   "灯神",
-  "影魔"
+  "影魔",
+  "活体铠甲",
+  "伪人"
 ]);
 
 export const ALL_BUILTIN_RACES = Object.freeze([
@@ -144,12 +150,19 @@ export const RACE_INTRODUCTION_LINES = Object.freeze(Object.assign(
     "元素灵": "Elemental，自然元素的拟人体，如水元素温蒂妮。",
     "灯神": "Djinn，阿拉丁神灯一类的愿望精灵。",
     "影魔": "Shadow-folk，可在平面与立体之间切换、投影于影中的种族。",
+    "月兔族": "Moon Rabbit，居于月球的兔系亚人；繁殖力为胎生种族之最，族中多为雌性。",
+    "狗头人": "Kobold，与哥布林同生态位的小型犬首亚人；却如鸭嘴兽般产卵，分娩负担远低于哥布林。",
+    "梅杜莎": "Medusa，蛇人沾妖后独立演化的分支，发为群蛇；比蛇人更难受孕、孕期更长。",
+    "修格斯": "Shoggoth，形似史莱姆却更为古老的太古存在，承载力极强而极难受孕。",
+    "活体铠甲": "Living Armor，寄生型无性种族，附着于冒险者身上；将卵寄入宿主体内孵化，不自行孕育。",
+    "伪人": "Doppelganger，模仿并取代人类的不定型种族；各项生理刻意贴近人类，同卵分裂倾向极高。",
   },
 ));
 export const RACE_INTRODUCTION_FIELD = "introductionLine";
 
 export const DERIVED_TYPE_RACES = Object.freeze([
-  "修行",
+  "修炼",
+  "魔导",
   "妖怪",
   "神祇",
   "不死",
@@ -162,7 +175,8 @@ export const DERIVED_TYPE_RACES = Object.freeze([
 ]);
 
 export const DERIVED_TYPE_INTRODUCTION_LINES = Object.freeze({
-  "修行": "Cultivator，经由修炼吸收天地灵气、化为自身超凡力量的个体。",
+  "修炼": "Cultivator，东方修仙体系；吸收天地灵气、化为自身超凡力量的个体。",
+  "魔导": "Magus，西方魔法体系：以魔力与术式为根基；巫师血脉、猎魔士与法师皆归此类，不限性别。",
   "妖怪": "Youkai，由执念生智、汲取世人畏惧与认知而存在的异类，遵循自身的怪谈规则。",
   "神祇": "Deity，受凡人祈求与香火供奉而维持神格的存在，具明确神职领域。",
   "不死": "Undead，以死气驱动躯壳的亡者，保留生前记忆但情感淡漠。",
@@ -175,8 +189,11 @@ export const DERIVED_TYPE_INTRODUCTION_LINES = Object.freeze({
 });
 
 export const DERIVED_TYPE_INHERITANCE_PROFILES = Object.freeze({
-  "修行": Object.freeze({
+  "修炼": Object.freeze({
     inheritanceSpeed: 0.75
+  }),
+  "魔导": Object.freeze({
+    inheritanceSpeed: 1.0
   }),
   "妖怪": Object.freeze({
     inheritanceSpeed: 1.25
@@ -208,9 +225,13 @@ export const DERIVED_TYPE_INHERITANCE_PROFILES = Object.freeze({
 });
 
 export const DERIVED_TYPE_FLUX_PROFILES = Object.freeze({
-  "修行": Object.freeze({
+  "修炼": Object.freeze({
     fluxName: "炁",
     fluxDefinition: "个体吸收天地灵气转化为自身的超凡生命能量。\n[平衡] 气息绵长，身心空灵，能完美掌控超凡能力，与自然环境共鸣。\n[正极] 表现为‘走火入魔’：生理上经脉胀痛欲裂、体表溢出肉眼可见的能量狂潮甚至七窍流血；心理上狂躁易怒、心魔幻象丛生，容易失去理智进行无差别破坏。\n[负极] 表现为‘散功衰败’：生理上经脉萎缩闭塞、肉身加速衰老、畏寒骨痛；心理上神识昏沉、感知迟钝，完全无法调动任何术法，甚至退化为凡人状态。",
+  }),
+  "魔导": Object.freeze({
+    fluxName: "魔力",
+    fluxDefinition: "体内蓄积并循环的魔力总量与操控余裕，是施术与维持术式的基础。\n[平衡] 魔力循环平顺，能稳定维持术式与结界，咏唱精准；对魔力波动的感知敏锐，研究与日常生活兼顾。\n[正极] 表现为‘魔力暴走’：生理上魔纹自体表浮现并发烫、魔力外泄扭曲周遭（灯火自燃、物件浮空、气温骤降），指尖不受控地放电；心理上被求知欲与万能感吞噬，无视代价推进禁忌术式，对旁人的劝阻显出居高临下的不耐。\n[负极] 表现为‘魔力枯竭’：生理上失温畏寒、指节僵冷、咏唱中断，连最基础的术式都点不燃，伴随剧烈偏头痛与耳鸣；心理上陷入‘不再是魔法师’的存在危机，回避同行，藏起法杖与魔导书。",
   }),
   "妖怪": Object.freeze({
     fluxName: "妖力",
@@ -253,7 +274,8 @@ export const DERIVED_TYPE_FLUX_PROFILES = Object.freeze({
 export const DERIVED_TYPE_METABOLISM_EXEMPTIONS = Object.freeze({
   "血族": Object.freeze(["hunger", "excretion", "odor"]),
   "不死": Object.freeze(["odor", "sleep", "milk"]),
-  "修行": Object.freeze(["hunger", "excretion", "companionship"]),
+  "修炼": Object.freeze(["hunger", "excretion", "companionship"]),
+  "魔导": Object.freeze(["sleep", "companionship", "odor"]),
   "妖怪": Object.freeze(["hunger", "excretion", "sleep"]),
   "神祇": Object.freeze(["hunger", "sleep", "companionship"]),
   "机械": Object.freeze(["hunger", "milk", "companionship"]),
@@ -685,7 +707,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
     "genderRatio": 50
   },
   "天使": {
-    "menstrualLengthRatio": 1.25,
+    "menstrualLengthRatio": 13,
     "gestationSpeciesSpeed": 0.8,
     "birthDifficulty": 2.5,
     "breedTolerance": 7,
@@ -695,7 +717,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
     "genderRatio": 50
   },
   "恶魔": {
-    "menstrualLengthRatio": 1.25,
+    "menstrualLengthRatio": 13,
     "gestationSpeciesSpeed": 0.8,
     "birthDifficulty": 2.5,
     "breedTolerance": 7,
@@ -861,6 +883,66 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
     "breedTolerance": 5,
     "impregnationDifficulty": 0.5,
     "orgasmOvulationAmount": 0,
+    "identicalProbability": 33,
+    "genderRatio": 50
+  },
+  "月兔族": {
+    "menstrualLengthRatio": 0.5,
+    "gestationSpeciesSpeed": 2,
+    "birthDifficulty": 0.6,
+    "breedTolerance": 2.5,
+    "impregnationDifficulty": 0.4,
+    "orgasmOvulationAmount": 4,
+    "identicalProbability": 30,
+    "genderRatio": 30
+  },
+  "狗头人": {
+    "menstrualLengthRatio": 0.5,
+    "gestationSpeciesSpeed": 2.5,
+    "birthDifficulty": 0.4,
+    "breedTolerance": 1.2,
+    "impregnationDifficulty": 0.3,
+    "orgasmOvulationAmount": 3,
+    "identicalProbability": 20,
+    "genderRatio": 50
+  },
+  "梅杜莎": {
+    "menstrualLengthRatio": 1.5,
+    "gestationSpeciesSpeed": 0.7,
+    "birthDifficulty": 1.5,
+    "breedTolerance": 1,
+    "impregnationDifficulty": 2.5,
+    "orgasmOvulationAmount": 1,
+    "identicalProbability": 5,
+    "genderRatio": 20
+  },
+  "修格斯": {
+    "menstrualLengthRatio": 2,
+    "gestationSpeciesSpeed": 0.3,
+    "birthDifficulty": 2,
+    "breedTolerance": 12,
+    "impregnationDifficulty": 5,
+    "orgasmOvulationAmount": 2,
+    "identicalProbability": 50,
+    "genderRatio": null
+  },
+  "活体铠甲": {
+    "menstrualLengthRatio": 1,
+    "gestationSpeciesSpeed": 1.5,
+    "birthDifficulty": 1.5,
+    "breedTolerance": 2,
+    "impregnationDifficulty": 0.5,
+    "orgasmOvulationAmount": 4,
+    "identicalProbability": 15,
+    "genderRatio": -1
+  },
+  "伪人": {
+    "menstrualLengthRatio": 1,
+    "gestationSpeciesSpeed": 1,
+    "birthDifficulty": 1,
+    "breedTolerance": 2,
+    "impregnationDifficulty": 3,
+    "orgasmOvulationAmount": 1,
     "identicalProbability": 33,
     "genderRatio": 50
   }
@@ -1039,12 +1121,23 @@ export function getRacePhysiologyProfile(race) {
   };
 }
 
+/**
+ * 衍生类型别名：`修行` 在 v0.9.5 拆成东方的 `修炼` 与西方的 `魔导`，
+ * 旧存档里写着 `[修行]XXX` 的角色必须仍能查到 flux/遗传/代谢抵免，否则会静默失效。
+ * 繁体写法一并映射，模型写哪种字形都认得。
+ */
+const DERIVED_TYPE_ALIASES = Object.freeze({
+  修行: '修炼',
+  修煉: '修炼',
+  魔導: '魔导',
+});
+
 export function getBaseDerivedTypeName(derivedType) {
   const value = String(derivedType || '').trim();
   if (!value) return '';
   const subtypeMatch = value.match(/^(.+?)-(.+)$/);
-  if (subtypeMatch) return subtypeMatch[1];
-  return value;
+  const base = subtypeMatch ? subtypeMatch[1] : value;
+  return DERIVED_TYPE_ALIASES[base] || base;
 }
 
 export function getDerivedTypeInheritanceProfile(derivedType) {
