@@ -735,8 +735,9 @@ function sanitizeChildrenList(value) {
 
 function sanitizeProfilePatch(profilePatch) {
   if (!profilePatch || typeof profilePatch !== 'object' || Array.isArray(profilePatch)) return null;
-  const cooldown = sanitizeObjectPatch(profilePatch.cooldown, ['orgasmOvulationUsed', 'pregnancyPressureWarning', 'psychologyUpdateUsed', 'maternalFetalInteractionUsed'], {
+  const cooldown = sanitizeObjectPatch(profilePatch.cooldown, ['orgasmOvulationUsed', 'naturalOvulationUsed', 'pregnancyPressureWarning', 'psychologyUpdateUsed', 'maternalFetalInteractionUsed'], {
     orgasmOvulationUsed: (value) => Boolean(value),
+    naturalOvulationUsed: (value) => Boolean(value),
     pregnancyPressureWarning: (value) => Boolean(value),
     psychologyUpdateUsed: (value) => Boolean(value),
     maternalFetalInteractionUsed: (value) => Boolean(value),
@@ -950,6 +951,7 @@ export function createDefaultFemaleState(name = '') {
     profile: {
       cooldown: {
         orgasmOvulationUsed: false,
+        naturalOvulationUsed: false,
         pregnancyPressureWarning: false,
         psychologyUpdateUsed: false,
         maternalFetalInteractionUsed: false,
@@ -1766,6 +1768,7 @@ function createSnapshotCharacterBaseline(name = '') {
     profile: {
       cooldown: {
         orgasmOvulationUsed: false,
+        naturalOvulationUsed: false,
         pregnancyPressureWarning: false,
         psychologyUpdateUsed: false,
         maternalFetalInteractionUsed: false,

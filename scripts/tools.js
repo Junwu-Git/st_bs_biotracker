@@ -618,11 +618,22 @@ function refreshOutfitPregFit(profile) {
   };
   return outfit;
 }
-function getNaturalOvulationDailyAmount(profile) {
-  const ovulationAmount = clampNumber(profile?.bio?.orgasmOvulationAmount, 0, 100, 1);
-  const menstrualRatio = clampNumber(profile?.bio?.menstrualLengthRatio, 0.1, 20, 1);
-  const ovulationDays = Math.max(1, MENSTRUAL_STAGE_DAYS['排卵期'] * menstrualRatio);
-  return Math.max(1, Math.ceil(ovulationAmount / ovulationDays));
+/**
+ * 单个排卵期自然排出的卵数 = 1 颗基础 + orgasmOvulationAmount 额外排卵倾向。
+ *
+ * 旧算法是「每天至少 1 颗 x 排卵天数」，而排卵天数随 menstrualLengthRatio 线性拉长，
+ * 于是长周期种族按窗口长度虚增：精灵额外倾向明明是 0 却每周期排 6 颗、龙族排 8 颗，
+ * 与该字段的语义（高潮诱发的额外排卵量，见 applyOrgasmOvulation）完全无关。
+ * 周期越长排得越多也让「一年一次经期」这类设定无法成立。
+ */
+function getNaturalOvulationTotal(profile) {
+  const extra = clampNumber(profile?.bio?.orgasmOvulationAmount, 0, 100, 1);
+  return Math.max(1, Math.round(1 + extra));
+}
+
+/** 自然排卵每个排卵期只发生一次，离开排卵期即重置 */
+function shouldResetNaturalOvulation(stage) {
+  return stage !== '排卵期';
 }
 
 function getImplantationDays(profile) {
@@ -1420,8 +1431,11 @@ function processSimpleConception(profile, tick, notify, name) {
   const allowsNaturalConception = [...MENSTRUAL_STAGES, '产后恢复'].includes(stage);
 
   if (allowsNaturalConception) {
-    if (stage === '排卵期' && fullDays > 0) {
-      base.eggs = clampNumber(base.eggs, 0, 99, 0) + (getNaturalOvulationDailyAmount(profile) * fullDays);
+    // 一次性排出本周期的份额：按天累加会让长排卵期窗口把卵数堆到上限，
+    // 而取 min 封顶又会把高潮诱发排卵已经排出的卵砍掉
+    if (stage === '排卵期' && fullDays > 0 && !(profile.cooldown || {}).naturalOvulationUsed) {
+      base.eggs = clampNumber(base.eggs, 0, 99, 0) + getNaturalOvulationTotal(profile);
+      profile.cooldown = { ...(profile.cooldown || {}), naturalOvulationUsed: true };
     }
 
     if (stage === '月经期' && passedHours > 0) {
@@ -3826,6 +3840,7 @@ function applyTimeToCharacter(character, tick) {
   profile.cooldown = {
     ...cooldown,
     orgasmOvulationUsed: shouldResetOrgasmOvulation(stage) ? false : Boolean(cooldown.orgasmOvulationUsed),
+    naturalOvulationUsed: shouldResetNaturalOvulation(stage) ? false : Boolean((profile.cooldown || cooldown).naturalOvulationUsed),
     pregnancyPressureWarning: shouldKeepPregnancyPressureWarning(profile) ? Boolean((profile.cooldown || cooldown).pregnancyPressureWarning) : false,
     psychologyUpdateUsed: tick.passedHours > 0 ? false : Boolean(cooldown.psychologyUpdateUsed),
     maternalFetalInteractionUsed: tick.passedHours > 0 ? false : Boolean(cooldown.maternalFetalInteractionUsed),
@@ -4544,6 +4559,7 @@ function applySetMenstrualPhases(chatState, args) {
     profile.cooldown = {
       ...cooldown,
       orgasmOvulationUsed: shouldResetOrgasmOvulation(stage) ? false : Boolean(cooldown.orgasmOvulationUsed),
+      naturalOvulationUsed: false,
     };
   }
 
