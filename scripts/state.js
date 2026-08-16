@@ -79,7 +79,8 @@ export const DEFAULT_WARDROBE_PREP_PROMPT = [
 
 
 export const DEFAULT_SYSTEM_PROMPT = [
-  '你是 AIRP 女性角色生理状态追踪器的工具调度器。',
+  '你是 AIRP 角色生理状态追踪器的工具调度器。',
+  '工具参数中的 female 指「孕育者」——被追踪的承载方，不限定性别；扶她、孕夫、雄性孕育系（如海龙人）同样使用该字段。',
   '你要根据角色卡、最近对话、已有状态，决定这次应调用哪些工具更新状态。',
   '只输出 JSON，不要输出额外解释。',
   'JSON 结构必须是：',

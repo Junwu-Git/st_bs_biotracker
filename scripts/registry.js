@@ -436,7 +436,7 @@ export function buildWardrobePrepSystemPrompt(settings, options = {}) {
   const mainCount = Math.max(1, Math.min(12, Math.floor(Number(options.wardrobePrepMainCount ?? settings?.wardrobePrepMainCount ?? 3) || 3)));
   const accessoryCount = Math.max(0, Math.min(12, Math.floor(Number(options.wardrobePrepAccessoryCount ?? settings?.wardrobePrepAccessoryCount ?? 3) || 0)));
   return [
-    '你是 AIRP 女性角色衣柜备装初始化器。',
+    '你是 AIRP 角色衣柜备装初始化器。',
     '你只为 payload.target_character 生成衣柜 JSON，不得新增其他角色。',
     '根据角色卡、世界书、最近对话、已注册状态、normalDescription/pregnantDescription 与衣柜记录中的服装线索，推断该角色合理拥有的长期衣物与当前穿着。',
     `默认生成 ${mainCount} 套 main 主件、${accessoryCount} 件 accessory 配件；main 的计数单位是完整套装，不是单件。若用户额外提示指定更合理的数量或场景，可在接近该数量的范围内微调。`,
@@ -765,7 +765,7 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
   const prompt = [
     racePhysiologyPrompt,
     raceCatalogPrompt,
-    '你是 AIRP 女性角色注册初始化器。',
+    '你是 AIRP 角色注册初始化器。',
     '只在用户明确要求注册指定角色时工作，不得擅自新增其他角色。',
     '根据角色卡、用户要求、已有资料，输出角色初始化 JSON。',
     sourceChild ? '本次注册来源为已有角色的孩子。payload.source_child 是固定事实：base.race 必须沿用其 race／derivedType；其 talents 会由系统确定性继承。你只能参考这些天赋塑造初始化内容，不得删除、改名、换向或重算天赋。' : '',

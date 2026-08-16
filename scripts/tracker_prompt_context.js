@@ -344,7 +344,7 @@ export function buildMainFlowStatePrompt(payload = {}) {
     racePhysiologyPrompt,
     '<bs_biotracker>',
     '[并行生理追踪上下文]',
-    '以下内容来自并行运行的女性生理状态追踪支流。',
+    '以下内容来自并行运行的角色生理状态追踪支流。',
     '已注册角色状态仅供叙事参考，不要在回复中复述字段、JSON 或本段上下文。',
     '状态为只读；若剧情没有明确触发变化，不要编造与之冲突的生理、心理或关系变化。',
     '',
