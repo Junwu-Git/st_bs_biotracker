@@ -1193,10 +1193,15 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
   const message = chat[messageIndex];
   const shouldTrigger = reason === 'manual' ? true : shouldTriggerForMessage(settings, message);
   if (!shouldTrigger) {
+    // 触发时机不符的楼层只记一笔 skip 快照，不发请求；这是纯记帐流程，必须全程静默
     recordChatStateSnapshot(ctx, chatState, { messageCount: messageIndex + 1, reason: 'skip' });
     saveSettings(ctx);
-    return;
+    return { triggered: false };
   }
+
+  // 确定要发请求了才亮提示：after_ai 下使用者自己发言也会走一轮空跑，
+  // 在 runTracker 开头就亮会让使用者看到「输入时也在追踪」的假象
+  showTrackerBusyToast();
 
   const payload = buildTrackerPayload(ctx, settings, reason, messageIndex + 1);
   if (payload.mainflow_context_snapshot) {
@@ -1271,7 +1276,7 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
   chatState.lastFailedChatSignature = '';
   recordChatStateSnapshot(ctx, chatState, { messageCount: messageIndex + 1, reason: 'tracker' });
   saveSettings(ctx);
-  return { discarded: false };
+  return { discarded: false, triggered: true };
 }
 
 export async function runTracker(ctx, deps, reason = 'manual') {
@@ -1368,11 +1373,11 @@ export async function runTracker(ctx, deps, reason = 'manual') {
   const runToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   globalThis[RUN_RUNTIME_KEY] = runToken;
   markTrackerRunProgress();
-  showTrackerBusyToast();
   try {
     const { nextMessageIndex } =
       reason === 'manual' ? prepareManualReplay(ctx, chatState, chat.length) : reconcileChatStateSnapshots(ctx, chatState, settings);
     let processedCount = 0;
+    let triggeredCount = 0;
     let discarded = false;
     for (let index = nextMessageIndex; index < chat.length; index += 1) {
       markTrackerRunProgress();
@@ -1382,6 +1387,7 @@ export async function runTracker(ctx, deps, reason = 'manual') {
         discarded = true;
         break;
       }
+      if (outcome?.triggered) triggeredCount += 1;
       processedCount += 1;
     }
     deps.renderStatusPanel(ctx);
@@ -1395,8 +1401,9 @@ export async function runTracker(ctx, deps, reason = 'manual') {
       reason,
     });
     clearTrackerBusyToast();
-    notifyTrackerDone(toolCalls.length > 0);
-    return { skipped: false, processedCount, toolCalls };
+    // 整轮都是 skip 记帐时不提示——使用者没有发起任何追踪，不该看到「追踪完成」
+    if (triggeredCount > 0) notifyTrackerDone(toolCalls.length > 0);
+    return { skipped: false, processedCount, triggeredCount, toolCalls };
   } catch (error) {
     console.error('[BS BioTracker] runTracker failed', error);
     recordTrackerResultDebug(null, error);
