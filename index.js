@@ -5291,6 +5291,7 @@ function applySettingsToForm(ctx) {
   setValue('bs-bt-model', settings.model);
   setValue('bs-bt-formatted-output-v4', settings.formattedOutputV4 !== false);
   setValue('bs-bt-mvu-extra-analysis-compat', settings.mvuExtraAnalysisCompat !== false);
+  setValue('bs-bt-race-catalog', settings.raceCatalogInPrompt !== false);
   setValue('bs-bt-trigger', settings.triggerTiming);
   setValue('bs-bt-poll-ms', settings.pollMs);
   setValue('bs-bt-api-timeout-sec', Math.round((Number(settings.apiTimeoutMs) || 0) / 1000));
@@ -5871,6 +5872,8 @@ function readSettingsFromForm(ctx) {
   if (formattedOutputToggle) settings.formattedOutputV4 = Boolean(formattedOutputToggle.checked);
   const mvuCompatToggle = document.getElementById('bs-bt-mvu-extra-analysis-compat');
   if (mvuCompatToggle) settings.mvuExtraAnalysisCompat = Boolean(mvuCompatToggle.checked);
+  const raceCatalogToggle = document.getElementById('bs-bt-race-catalog');
+  if (raceCatalogToggle) settings.raceCatalogInPrompt = Boolean(raceCatalogToggle.checked);
   settings.triggerTiming = String(getValue('bs-bt-trigger')).trim() || 'after_ai';
   settings.pollMs = Math.max(800, Number(getValue('bs-bt-poll-ms')) || 1800);
   const rawApiTimeoutSec = String(getValue('bs-bt-api-timeout-sec')).trim();

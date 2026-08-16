@@ -714,7 +714,8 @@ test('derived type overrides affect base types and custom subtypes', () => {
   assert.equal(raceConfig.getDerivedTypeOverride('不死-僵尸').metabolismExemptions, undefined);
   raceConfig.setDerivedTypeOverrides({});
   assert.equal(raceConfig.getDerivedTypeFluxProfile('不死').fluxName, '死气');
-  assert.equal(raceConfig.getDerivedTypeIntroductionLine('不死'), '');
+  // 清掉覆写后回落到内建短敘述（此前衍生类型没有内建值，一律为空）
+  assert.equal(raceConfig.getDerivedTypeIntroductionLine('不死'), 'Undead，以死气驱动躯壳的亡者，保留生前记忆但情感淡漠。');
 });
 
 test('an unhydrated blank state never overwrites an existing TauriTavern sidecar', async () => {

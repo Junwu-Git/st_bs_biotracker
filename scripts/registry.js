@@ -1,6 +1,6 @@
 import { callOpenAICompatible } from './api.js';
 import { buildEmbryoTypeLorePrompt } from './embryo_prompt_context.js';
-import { buildRegistryRacePhysiologyPrompt } from './race_prompt_context.js';
+import { buildRaceCatalogBlock, buildRegistryRacePhysiologyPrompt } from './race_prompt_context.js';
 import { DEFAULT_DIARY_WRITING_PROMPT, DEFAULT_REGISTRY_DESCRIPTION_GUIDES } from './registry_config.js';
 import {
   buildEmptyPsychologyGroup,
@@ -750,6 +750,8 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
   const sourceChild = options.payload?.source_child || null;
   const embryoTypeLorePrompt = buildEmbryoTypeLorePrompt(options.payload || {}, { includeAllIfEmpty: true });
   const racePhysiologyPrompt = buildRegistryRacePhysiologyPrompt(options.payload || {});
+  // 注册是一次性请求，附上辨识提示帮模型在形近种族间选对（人鱼／鱼人、精灵／妖精）
+  const raceCatalogPrompt = settings?.raceCatalogInPrompt === false ? '' : buildRaceCatalogBlock({ withHints: true });
   const psyMensLines = Object.entries(PSY_MENS_FIELDS).flatMap(([key, value]) => [
     `- psychology.mens.${key}_value: ${value.definition}`,
     `  阶段预览: ${value.preview}`,
@@ -762,6 +764,7 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
   const psyPregBoolLines = Object.entries(PSY_PREG_BOOL_FIELDS).map(([key, value]) => `- psychology.preg.${key}: ${value.definition}`);
   const prompt = [
     racePhysiologyPrompt,
+    raceCatalogPrompt,
     '你是 AIRP 女性角色注册初始化器。',
     '只在用户明确要求注册指定角色时工作，不得擅自新增其他角色。',
     '根据角色卡、用户要求、已有资料，输出角色初始化 JSON。',

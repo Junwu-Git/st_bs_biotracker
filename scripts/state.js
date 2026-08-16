@@ -125,6 +125,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   modelOptions: [],
   formattedOutputV4: true,
   mvuExtraAnalysisCompat: true,
+  raceCatalogInPrompt: true,
   triggerTiming: 'after_ai',
   pollMs: 1800,
   apiTimeoutMs: 180000,

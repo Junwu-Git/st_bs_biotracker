@@ -1,4 +1,4 @@
-import { getDerivedTypeFluxProfile, getDerivedTypeIntroductionLine, getDerivedTypeMetabolismExemptions, getEmbryoTypeByRace, getMergedRacePhysiologyProfile, getRaceComponents, getRaceDescriptorComponents, getRaceIntroductionLine, getRacePhysiologyProfile } from './race_config.js';
+import { AMORPHOUS_RACES, DERIVED_TYPE_RACES, METOVIVIPAROUS_RACES, OVIPAROUS_RACES, OVOVIVIPAROUS_RACES, VIVIPAROUS_RACES, getDerivedTypeFluxProfile, getDerivedTypeIntroductionLine, getDerivedTypeMetabolismExemptions, getEmbryoTypeByRace, getMergedRacePhysiologyProfile, getRaceComponents, getRaceDescriptorComponents, getRaceIntroductionLine, getRacePhysiologyProfile } from './race_config.js';
 
 /**
  * 提示词插值防线：剥离换行、闭合标签与控制字符——race/derivedType 等用户可控字符串
@@ -12,6 +12,62 @@ function sanitizePromptText(value) {
     // C0 + DEL + C1 控制区（含 NEL U+0085）
     .replace(/[\u0000-\u001f\u007f\u0080-\u009f]/g, ' ')
     .trim();
+}
+
+const RACE_CATALOG_GROUPS = Object.freeze([
+  ['胎生', VIVIPAROUS_RACES],
+  ['卵生', OVIPAROUS_RACES],
+  ['卵胎生', OVOVIVIPAROUS_RACES],
+  ['胎转卵生', METOVIVIPAROUS_RACES],
+  ['不定型', AMORPHOUS_RACES],
+]);
+
+/**
+ * 从短敘述里取一句极短的辨识提示：按逗号逐句累积到长度上限，
+ * 且至少收到一句中文（短敘述多以英文原名开头，只有英文时信息量不足）。
+ * 目的是让模型在名录阶段就能分辨形近种族（人鱼／鱼人、精灵／妖精），
+ * 完整介绍仍由 buildSingleRacePhysiologyBlock 在该族真正登场时给出。
+ */
+function buildRaceCatalogHint(text) {
+  const line = sanitizePromptText(text);
+  if (!line) return '';
+  const clauses = line.split(/[；。]/)[0].split('，').map((part) => part.trim()).filter(Boolean);
+  const picked = [];
+  for (const clause of clauses) {
+    if (picked.length > 0 && [...picked, clause].join('，').length > 28) break;
+    picked.push(clause);
+    // 只收到英文原名时信息量不足，必须再收一句中文
+    const current = picked.join('，');
+    if (current.length >= 10 && /[一-龥]/.test(current)) break;
+  }
+  return picked.join('，');
+}
+
+/**
+ * 种族名录：模型在写 base.race 或 bsAddSperm.race 时唯一的词汇表来源。
+ * 没有它模型只能凭空造名，而自创种族查不到生理参数、会静默走预设值。
+ * withHints=false 只有名字，约 350 token，适合每轮都发的追踪请求；
+ * withHints=true 附极短辨识提示，适合一次性的注册请求。
+ */
+export function buildRaceCatalogBlock({ withHints = false } = {}) {
+  const groupLines = RACE_CATALOG_GROUPS.map(([label, races]) => {
+    const names = races.map((race) => {
+      const hint = withHints ? buildRaceCatalogHint(getRaceIntroductionLine(race)) : '';
+      return hint ? `${race}(${hint})` : race;
+    });
+    return `- ${label}: ${names.join('、')}`;
+  });
+  return [
+    '[可用种族名录]',
+    '以下是系统内建的种族，写 base.race、fatherRace、bsAddSperm.race 时应优先从中选择。',
+    ...groupLines,
+    `- 衍生类型（写作 [类型]种族，如 [血族]人类）: ${DERIVED_TYPE_RACES.map((type) => {
+      const hint = withHints ? buildRaceCatalogHint(getDerivedTypeIntroductionLine(type)) : '';
+      return hint ? `${type}(${hint})` : type;
+    }).join('、')}`,
+    '名录外的形象请就近归入最相似的一项（例如鲸鱼娘归入空鲸或鱼人），不要自创种族名——自创名称在系统内查不到生理参数。',
+    '混血以 x 分隔，装饰子项以 - 附加，例如 兽耳族-兔x精灵-木。',
+  ].join('\n');
 }
 
 function formatNumber(value, digits = 2) {

@@ -81,8 +81,70 @@ export const ALL_BUILTIN_RACES = Object.freeze([
   ...AMORPHOUS_RACES,
 ]);
 
-export const RACE_INTRODUCTION_LINES = Object.freeze(Object.fromEntries(
-  ALL_BUILTIN_RACES.map((race) => [race, ""]),
+export const RACE_INTRODUCTION_LINES = Object.freeze(Object.assign(
+  // 未列出的种族留空，提示词会自动略过该行
+  Object.fromEntries(ALL_BUILTIN_RACES.map((race) => [race, ""])),
+  {
+    "精灵": "Elf，长寿的尖耳亚人，面容姣好、擅长魔法；肤色深青的亚种称黑暗精灵（卓尔）。",
+    "兽耳族": "Kemonomimi／Beastfolk，保有人形、带兽耳兽尾的亚人；日系兽娘与西方 furry 皆归此类。",
+    "袋兽族": "Marsupial-folk，有袋目亚人。幼体极早产出后转入育儿袋，因此承载耐受极低。",
+    "哥布林": "Goblin，西幻小型怪物，繁殖力旺盛且几乎只诞下雄性；少数雌性个体存在。",
+    "兽人": "即 Orc（绿皮），高大粗野的战斗种族；与「兽耳族」无关，勿混用。",
+    "矮人": "Dwarf，居于矿山、擅长锻造的短躯亚人。",
+    "半身人": "Halfling，又称哈比人，身形矮小的和平亚人。",
+    "半人马": "Centaur，上身为人、下身为马的亚人，源自希腊神话。",
+    "巨人": "Giant，体型远超人类的种族；巨魔、山怪、独眼巨人、泰坦皆归此类。",
+    "魅魔": "Succubus／Incubus，性欲特化的恶魔系亚人，与恶魔已分家；男性的梦魔同属此类。",
+    "雪族": "Yuki-onna／Yeti，雪女与雪怪的复合群体，栖于严寒。",
+    "夜叉": "Yaksha／Oni，头生角的日系鬼族，罗刹与阿修罗皆归此类。",
+    "妖狐": "Kitsune，祖先为兽耳族，沾妖后独立演化的狐系妖族，修行增尾；未沾妖的兽耳狐娘应写作兽耳族-狐。",
+    "貓又": "Nekomata，祖先为兽耳族，沾妖后独立演化的猫系妖族，久养成妖、尾端分岔；未沾妖的兽耳猫娘应写作兽耳族-猫。",
+    "鸟人": "Harpy，典型形象为哈比，带翼的鸟类亚人；现代创作已性别比正常化。",
+    "植物亚人": "Dryad／Plant-folk，植物拟人，具自花授粉特性；亦可作为纯粹的播种方怪物。",
+    "社会虫族": "Eusocial Insectfolk，蜜蜂与蚂蚁一类的真社会性虫族，以雌性为绝对多数。",
+    "蜥蜴人": "Lizardfolk，又称亚龙人的鳞甲亚人；设定上从部落怪物到与人平起平坐皆有。",
+    "触手怪": "Tentacle Monster，成群触手构成的无性种族，繁殖上通常作为播种方。",
+    "妖精": "fairy，娇小带翅的精怪；与长身尖耳的「精灵」不同。",
+    "真菌亚人": "Myconid，菌类拟人，具自体授粉特性；亦可作为纯粹的播种方怪物。",
+    "海蛞蝓族": "Sea Slug-folk，海兔拟人，雌雄同体；交配方式奇特（交配列车、阴茎击剑）。",
+    "龟族": "Turtle-folk，龟类拟人，长寿而孕期极长。",
+    "甲壳族": "Crustacean-folk，蟹虾一类的甲壳拟人；亦可作为纯粹的播种方怪物。",
+    "宝箱怪": "Mimic，宝箱拟态怪，雌雄同体；所产之卵呈金币状。",
+    "阿拉克涅": "Arachne，上身为人、下身为蜘蛛的亚人，源自希腊神话。",
+    "百足姬": "Centipede-folk，上身为人、下身为蜈蚣的亚人，雅称天龙；可视为蜈蚣版的阿拉克涅。",
+    "天狗": "Tengu，日系妖怪，形象有鸦、狼、长鼻数种；族群政治性强。",
+    "深潜者": "Deep One，源自克苏鲁的海系异种，潜伏于人类社会；胚胎类型刻意与其他海系亚人不同。",
+    "人鱼": "Mermaid，以鱼尾替代双足的美人鱼；可借魔法置换双足上陆。",
+    "鱼人": "Fishfolk，人形而带鱼类特徵与粗尾鳍，可视为海中的精灵——孕期长、产子少。萨尔达的佐拉族属此。",
+    "海妖": "Scylla，章鱼乌贼一类，以触腕替代双足；无须变形即可上陆。",
+    "独居虫族": "Solitary Insectfolk，与社会虫族相对的独居性虫族；蛾、螳螂等拟人归此，部分会将卵寄入异族代孕孵化。",
+    "蛇人": "Lamia，上身为人、下身为蛇的亚人，形象参考拉米亚。",
+    "蛙人": "Frogfolk，蛙类拟人，出生时性别由外在环境决定，故不适用固定男女比；亦可作为纯粹的播种方怪物。",
+    "眼魔": "Beholder，引用 D&D 的眼球暴君，经拟人化后的形象。",
+    "水母族": "Jellyfish-folk，水母拟人，幼体（水螅体）与成体（水母体）形态差异极大。",
+    "海龙人": "Seahorse-folk，外形似龙、本质为海马的海系亚人，属雄性孕育系。",
+    "河童": "Kappa，头顶盛水皿的日系妖怪，蛙人的妖系分支。",
+    "龙族": "Dragon，可在人态与完全态之间自由转换的上位生物，孕期极长。",
+    "狮鹫族": "Griffin，鹰首狮身的上位幻兽，可在人态与完全态之间转换。",
+    "天使": "Angel，天界种族，以「天使之卵」孕育。",
+    "恶魔": "Demon，魔界种族，以「恶魔之卵」孕育；与已分家的魅魔不同。",
+    "奇美拉": "Chimera，合成兽。胎转卵生的过程可在孕育期平衡混杂血脉的冲突。",
+    "麒麟": "Qilin，东方上位神兽，汲取环境灵气孕育，自身承载耐受偏低；可拟人化。",
+    "凤凰": "Phoenix，东方上位神兽，浴火重生，汲取环境灵气孕育；可拟人化。",
+    "白泽": "Bai Ze，东方上位神兽，通晓万物，汲取环境灵气孕育；承载耐受为神兽中最低。",
+    "独角兽": "Unicorn，额生独角的上位幻兽，可在人态与完全态之间转换。",
+    "空鲸": "Sky Whale，翱翔天际的巨鲸，可在常态人形与巨态鱼形间切换（鲲鹏之属），孕期为全表最长。",
+    "史萊姆": "Slime，繁殖策略极多样：可无性分裂，可孕育任何种族之胎，亦可寄入异族子宫。",
+    "石像鬼": "Gargoyle，人类造物之一，石质无性种族；受精难度极高，繁殖基本限于同族。",
+    "烛灵": "Candle Spirit，人类造物之一，烛火所寄的无性种族；受精难度极高，繁殖基本限于同族。",
+    "人偶": "Living Doll，人类造物之一，得灵的人偶，无性；受精难度极高，繁殖基本限于同族。",
+    "心魇": "Kaijin，由人心中的黑暗诞生的怪人（魔法少女题材），亦会对人类播种。",
+    "宝石人": "Gem-folk，矿物构成的种族，可参考宝石之国一类的设定。",
+    "奈米丛族": "Nanite Swarm，由亿级奈米机械单元构成的液态金属体。",
+    "元素灵": "Elemental，自然元素的拟人体，如水元素温蒂妮。",
+    "灯神": "Djinn，阿拉丁神灯一类的愿望精灵。",
+    "影魔": "Shadow-folk，可在平面与立体之间切换、投影于影中的种族。",
+  },
 ));
 export const RACE_INTRODUCTION_FIELD = "introductionLine";
 
@@ -98,6 +160,19 @@ export const DERIVED_TYPE_RACES = Object.freeze([
   "变异",
   "序列"
 ]);
+
+export const DERIVED_TYPE_INTRODUCTION_LINES = Object.freeze({
+  "修行": "Cultivator，经由修炼吸收天地灵气、化为自身超凡力量的个体。",
+  "妖怪": "Youkai，由执念生智、汲取世人畏惧与认知而存在的异类，遵循自身的怪谈规则。",
+  "神祇": "Deity，受凡人祈求与香火供奉而维持神格的存在，具明确神职领域。",
+  "不死": "Undead，以死气驱动躯壳的亡者，保留生前记忆但情感淡漠。",
+  "血族": "Vampire，以血为食的优雅掠食者，畏光。",
+  "星际": "Xeno，具蜂群思维或高维精神体特质的星际物种，与母体网路心灵共鸣。",
+  "机械": "Android，以核心能源与算力驱动的机械体，具拟似人格。",
+  "器灵": "Artifact Spirit，器物生智而成的灵体，与持有者共鸣。",
+  "变异": "Mutant，基因突变而获得超自然能力的个体。",
+  "序列": "ABO，具 Alpha／Omega 等序列阶级与信息素本能的个体。",
+});
 
 export const DERIVED_TYPE_INHERITANCE_PROFILES = Object.freeze({
   "修行": Object.freeze({
@@ -237,7 +312,7 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
     "impregnationDifficulty": 0.2,
     "orgasmOvulationAmount": 2,
     "identicalProbability": 40,
-    "genderRatio": 99
+    "genderRatio": 95
   },
   "兽人": {
     "menstrualLengthRatio": 0.75,
@@ -843,7 +918,10 @@ export function getDerivedTypeOverride(derivedType) {
 
 export function getDerivedTypeIntroductionLine(derivedType) {
   const baseName = getBaseDerivedTypeName(derivedType);
-  return String(customDerivedTypeProfiles[baseName]?.introductionLine || '').trim();
+  // 使用者覆写优先，内建为 fallback（与 getRaceIntroductionLine 同规则）
+  const customLine = customDerivedTypeProfiles[baseName]?.introductionLine;
+  if (customLine !== undefined) return String(customLine || '').trim();
+  return String(DERIVED_TYPE_INTRODUCTION_LINES[baseName] || '').trim();
 }
 
 function sanitizeRacePhysiologyProfilePatch(profile) {
