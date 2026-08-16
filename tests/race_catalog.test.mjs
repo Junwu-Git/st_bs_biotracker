@@ -116,3 +116,34 @@ test('杜拉罕填补胎生组「难受孕 + 高承载」的空缺', async () =>
   // 出生时头颅仍与躯干相连，分娩难度不该低于人类
   assert.equal(profile.birthDifficulty, getRacePhysiologyProfile('人类').birthDifficulty);
 });
+
+test('承载耐受进入提示词，且偏移不再被胎儿种族放大', async () => {
+  const { buildRacePhysiologyPrompt } = await import('../scripts/race_prompt_context.js');
+  const makePayload = (motherRace, fetusRace) => ({
+    existing_state: {
+      A: {
+        profile: {
+          base: { race: motherRace },
+          pregnant: { fetuses: [{ fathers: 'A', race: fetusRace, gender: '女', embryoType: '胎生', weight: 1 }] },
+        },
+      },
+    },
+  });
+  // 单族区块要能读到耐受，龙族与精灵的叙述必须分得开
+  const toleranceLine = (race) => buildRacePhysiologyPrompt(makePayload(race, race))
+    .split('\n')
+    .find((line) => line.startsWith('- 承载耐受:'));
+  assert.ok(toleranceLine('龙族'), '生理区块应有承载耐受行');
+  // 耐受 10 落在最高档：妊娠近乎无负担
+  assert.match(toleranceLine('龙族'), /行动力与常态无异/);
+  // 耐受 7 落在次高档：明确点出仍可战斗
+  assert.match(toleranceLine('天使'), /战斗/);
+  // 低耐受要能分得开
+  assert.match(toleranceLine('精灵'), /行动力明显下降/);
+
+  // 人类怀龙胎不该因为胎儿种族耐受高而变成十倍耐受
+  const humanCarryingDragon = buildRacePhysiologyPrompt(makePayload('人类', '龙族'));
+  const shiftLine = humanCarryingDragon.split('\n').find((line) => line.startsWith('- 承载耐受偏移:'));
+  assert.ok(shiftLine, '妊娠偏移应有承载耐受行');
+  assert.match(shiftLine, /^- 承载耐受偏移: 1（/, `人类怀龙胎的耐受应维持 1，实际: ${shiftLine}`);
+});

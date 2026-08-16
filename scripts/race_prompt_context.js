@@ -122,6 +122,17 @@ function getBirthDifficultyText(value) {
   return '极高难度，通常属于非常危险或非常罕见的分娩体系。';
 }
 
+function getBreedToleranceText(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '未知';
+  if (num <= 0.2) return '承载能力极低，属于早产入袋一类的繁殖策略；孕期会被胎儿严重拖垮，几乎无法维持日常活动。';
+  if (num <= 0.6) return '承载能力偏低，孕期负担沉重，容易虚弱、阻滞与不适，行动力明显下降。';
+  if (num <= 1.25) return '常规承载力，孕期会切实感到负担，接近人类标准。';
+  if (num <= 3) return '承载能力偏高，孕期负担较轻，日常活动大致不受影响。';
+  if (num <= 8) return '承载能力很高，妊娠几乎不削弱她；照常行动、劳作乃至战斗都在能力范围内。';
+  return '承载能力极高，妊娠对身体近乎无负担，行动力与常态无异。';
+}
+
 function getImpregnationDifficultyText(value) {
   const num = Number(value);
   if (!Number.isFinite(num)) return '未知';
@@ -252,6 +263,7 @@ function buildSingleRacePhysiologyBlock(race) {
     `- 妊娠长度: ${formatGestation(profile.gestationSpeciesSpeed)}`,
     `- 产后恢复时间: ${formatRecoveryDays(profile.recoveryDays)}`,
     `- 分娩难度: ${getBirthDifficultyText(profile.birthDifficulty)}`,
+    `- 承载耐受: ${getBreedToleranceText(profile.breedTolerance)}（数值 ${formatNumber(profile.breedTolerance)}；越高则孕期越不被削弱）`,
     `- 受精难度: ${getImpregnationDifficultyText(profile.impregnationDifficulty)}`,
     `- 多产性: ${getProlificacyText(profile.orgasmOvulationAmount, profile.identicalProbability)}；额外排卵倾向 ${formatNumber(profile.orgasmOvulationAmount)}，同卵多胎概率 ${formatNumber(profile.identicalProbability)}%`,
     `- 性别比: ${getGenderRatioText(profile.genderRatio)}`,
@@ -273,6 +285,7 @@ function buildHybridAverageBlock(race) {
     `- 平均妊娠长度: ${formatGestation(merged.gestationSpeciesSpeed)}`,
     `- 平均产后恢复时间: ${formatRecoveryDays(merged.recoveryDays)}`,
     `- 平均分娩难度: ${getBirthDifficultyText(merged.birthDifficulty)}`,
+    `- 平均承载耐受: ${getBreedToleranceText(merged.breedTolerance)}`,
     `- 平均受精难度: ${getImpregnationDifficultyText(merged.impregnationDifficulty)}`,
     `- 平均多产性参考: ${getProlificacyText(merged.orgasmOvulationAmount, merged.identicalProbability)}；额外排卵倾向 ${formatNumber(merged.orgasmOvulationAmount)}，同卵多胎概率 ${formatNumber(merged.identicalProbability)}%`,
     `- 平均性别比参考: ${getGenderRatioText(merged.genderRatio)}`,
@@ -381,7 +394,6 @@ function buildPregnancyShiftBlock(characterState) {
   let totalWeight = 0;
   let gestationDaysAccumulator = 0;
   let birthAccumulator = 0;
-  let toleranceAccumulator = 0;
   let recoveryAccumulator = 0;
 
   // 下面的累加与平均方式必须跟 tools.js 的妊娠偏移一致，否则提示词报的数值和实际推进对不上
@@ -394,7 +406,6 @@ function buildPregnancyShiftBlock(characterState) {
     gestationDaysAccumulator += 280 / fetusGestationSpeed;
     // 分娩难度同样不按胎重加权
     birthAccumulator += Math.max(0.1, Math.min(100, Number(raceProfile?.birthDifficulty) || 1.0));
-    toleranceAccumulator += weight * Math.max(0.1, Math.min(100, Number(raceProfile?.breedTolerance) || 1.0));
     recoveryAccumulator += weight * getEmbryoRecoveryCoefficient(fetus?.embryoType);
   }
 
@@ -402,7 +413,6 @@ function buildPregnancyShiftBlock(characterState) {
   const averageGestationDays = gestationDaysAccumulator / fetusCount;
   const averageGestation = averageGestationDays > 0 ? 280 / averageGestationDays : 1.0;
   const averageBirth = birthAccumulator / fetusCount;
-  const averageTolerance = toleranceAccumulator / Math.max(totalWeight, 0.33);
   const averageRecoveryCoefficient = recoveryAccumulator / Math.max(totalWeight, 0.33);
   const fetusCountModifier = 1 + ((fetuses.length - 1) * 0.08);
   const toleranceCountModifier = Math.max(0.6, 1 - ((fetuses.length - 1) * 0.04));
@@ -416,7 +426,8 @@ function buildPregnancyShiftBlock(characterState) {
   // 只有承载耐受是在母体 base 上做偏移
   const shiftedGestationSpeciesSpeed = Math.max(0.1, Math.min(20, averageGestation));
   const shiftedBirthDifficulty = Math.max(0.1, Math.min(100, averageBirth * fetusCountModifier));
-  const shiftedBreedTolerance = Math.max(0.1, Math.min(100, baseBreedTolerance * averageTolerance * toleranceCountModifier));
+  // 承载耐受只取母体自身 x 胎数修正（与 tools.js 同）：胎儿族的承载力不是母体的加成
+  const shiftedBreedTolerance = Math.max(0.1, Math.min(100, baseBreedTolerance * toleranceCountModifier));
   // 恢复天数按「胚胎类型恢复系数 × (280/妊娠速度) × (分娩难度/承载耐受)」计算
   const shiftedRecoveryDays = Math.max(
     1,
@@ -436,6 +447,7 @@ function buildPregnancyShiftBlock(characterState) {
     `- 母体种族: ${sanitizePromptText(motherRace)}`,
     `- 妊娠长度偏移: ${describeShift(gestationShiftedDays, gestationBaseDays, (value) => formatGestation(280 / value))}`,
     `- 分娩难度偏移: ${describeShift(shiftedBirthDifficulty, baseBirthDifficulty, (value) => `${formatNumber(value)}（${getBirthDifficultyText(value)}）`)}`,
+    `- 承载耐受偏移: ${describeShift(shiftedBreedTolerance, baseBreedTolerance, (value) => `${formatNumber(value)}（${getBreedToleranceText(value)}）`)}`,
     `- 产后恢复时间偏移: ${describeShift(shiftedRecoveryDays, baseRecoveryDays, (value) => formatRecoveryDays(value))}`,
   ].join('\n');
 }

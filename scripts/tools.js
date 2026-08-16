@@ -1090,7 +1090,6 @@ function applyPregnancyPhysiology(profile, runtime) {
   let gestationCount = 0;
   let birthAccumulator = 0;
   let birthCount = 0;
-  let toleranceAccumulator = 0;
   let recoveryAccumulator = 0;
 
   for (const fetus of fetuses) {
@@ -1104,14 +1103,12 @@ function applyPregnancyPhysiology(profile, runtime) {
     gestationCount += 1;
     birthAccumulator += clampNumber(raceProfile.birthDifficulty, 0.1, 100, 1.0);
     birthCount += 1;
-    toleranceAccumulator += weight * clampNumber(raceProfile.breedTolerance, 0.1, 100, 1.0);
     recoveryAccumulator += weight * embryoModifiers.recoveryCoefficient;
   }
 
   const averageGestationDays = gestationDaysAccumulator / Math.max(gestationCount, 1);
   const averageGestation = averageGestationDays > 0 ? 280 / averageGestationDays : 1.0;
   const averageBirth = birthAccumulator / Math.max(birthCount, 1);
-  const averageTolerance = toleranceAccumulator / Math.max(totalWeight, 0.33);
   const averageRecoveryCoefficient = recoveryAccumulator / Math.max(totalWeight, 0.33);
   const fetusCountModifier = 1 + ((fetuses.length - 1) * 0.08);
   const toleranceCountModifier = Math.max(0.6, 1 - ((fetuses.length - 1) * 0.04));
@@ -1120,7 +1117,11 @@ function applyPregnancyPhysiology(profile, runtime) {
   const gestationEffectiveSpeed = clampNumber(averageGestation * gestationModifierMultiplier, 0, 20, averageGestation);
   const recoveryGestationSpeed = Math.max(0.1, gestationEffectiveSpeed > 0 ? gestationEffectiveSpeed : averageGestation);
   const birthDifficulty = clampNumber(averageBirth * fetusCountModifier, 0.1, 100, originalBio.birthDifficulty);
-  const breedTolerance = clampNumber(originalBio.breedTolerance * averageTolerance * toleranceCountModifier, 0.1, 100, originalBio.breedTolerance);
+  // 承载耐受只取母体自身 x 胎数修正：breedTolerance 描述「这具身体多能扛妊娠」，
+  // 是承载者的属性。此前还乘上胎儿族的 breedTolerance，等于把胎儿族的承载力
+  // 当成母体的加成——人类怀龙胎会变成十倍耐受，比怀人类胎还轻松，方向是反的。
+  // 跨种族的额外负担已由 getConceptionWeightRatio 换算成胎重，不该在这里再算一遍。
+  const breedTolerance = clampNumber(originalBio.breedTolerance * toleranceCountModifier, 0.1, 100, originalBio.breedTolerance);
   const recoveryDays = Math.max(
     1,
     Math.round(clampNumber(averageRecoveryCoefficient, 0.1, 2.0, 0.2) * (280 / recoveryGestationSpeed) * (birthDifficulty / Math.max(breedTolerance, 0.1))),
