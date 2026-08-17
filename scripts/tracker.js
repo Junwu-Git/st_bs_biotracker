@@ -1174,6 +1174,16 @@ function isAfterAiMessageSettled(ctx, settings, chatState) {
     return true;
   }
 
+  // 串流开始时宿主会先补上一个空的助手楼层，内容要过一阵子才写进 mes。
+  // 空字串会「稳定」地空着，而 buildStreamingGuardSignature 只比对内容有没有变，
+  // 于是撑过 settle 时间后被误判成已完成，对着空白楼层发出一次无意义的追踪请求
+  // （使用者回报的「串流一开始就触发一次」）。空白助手楼层一律视为尚未就绪。
+  if (!String(lastMessage.mes || '').trim()) {
+    delete chatState.pendingAssistantSignature;
+    delete chatState.pendingAssistantUpdatedAt;
+    return false;
+  }
+
   const signature = buildStreamingGuardSignature(ctx);
   const now = Date.now();
   if (chatState.pendingAssistantSignature !== signature) {
