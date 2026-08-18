@@ -1371,6 +1371,27 @@ export async function runTracker(ctx, deps, reason = 'manual') {
   if (reason === 'poll' && !isAfterAiMessageSettled(ctx, settings, chatState)) {
     return { skipped: true, reason: 'message_not_settled' };
   }
+  if (reason === 'poll') {
+    const injectionSignal = globalThis.__st_message_component_injected__;
+    const signalMessageId = injectionSignal ? String(injectionSignal.messageId || '') : '';
+    if (signalMessageId && String(lastMessage.id || '') === signalMessageId) {
+      const processedThisCount = Array.isArray(chatState.snapshots)
+        && chatState.snapshots.some((s) => Number(s?.messageCount) === chat.length);
+      if (processedThisCount) {
+        // B 已分析过该楼层计数；本次 mes 变更来自组件注入 → 采纳注入后内容为已处理基线，跳过重复分析
+        recordChatStateSnapshot(ctx, chatState, { messageCount: chat.length, reason: 'injected_by_component_generator' });
+        chatState.lastProcessedSignature = buildSignature(ctx, chat.length);
+        delete chatState.pendingAssistantSignature;
+        delete chatState.pendingAssistantUpdatedAt;
+        globalThis.__st_message_component_injected__ = null;
+        saveSettings(ctx);
+        console.info('[BS BioTracker] 检测到组件生成器注入，已采纳注入后内容为已处理基线，跳过本轮重复分析。');
+        return { skipped: true, reason: 'injected_by_component_generator' };
+      }
+      // B 尚未分析过该楼层计数（A 注入早于 B 首轮，罕见）：清信号后放行，让 B 对当前内容分析一次
+      globalThis.__st_message_component_injected__ = null;
+    }
+  }
   if (reason === 'poll' && !hasPendingChatHistory(ctx, chatState)) {
     return { skipped: true, reason: 'no_pending_history' };
   }

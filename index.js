@@ -7337,6 +7337,8 @@ async function bootstrap() {
       'chatChanged',
       globalThis[CHAT_CHANGED_HANDLER_KEY],
       async () => {
+        // 切换聊天后清除组件注入信号，避免跨聊天残留误判
+        globalThis.__st_message_component_injected__ = null;
         // 不能让载入失败中断后面的刷新，否则面板会停在上一个聊天或空状态
         await ensureChatStateHydrated(ctx);
         if (globalThis[PENDING_CHAT_INHERIT_KEY]) {
