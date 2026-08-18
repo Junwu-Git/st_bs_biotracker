@@ -1373,8 +1373,8 @@ export async function runTracker(ctx, deps, reason = 'manual') {
   }
   if (reason === 'poll') {
     const injectionSignal = globalThis.__st_message_component_injected__;
-    const signalMessageId = injectionSignal ? String(injectionSignal.messageId || '') : '';
-    if (signalMessageId && String(lastMessage.id || '') === signalMessageId) {
+    const signalChatLength = injectionSignal ? Number(injectionSignal.chatLength) : NaN;
+    if (Number.isFinite(signalChatLength) && signalChatLength === chat.length) {
       const processedThisCount = Array.isArray(chatState.snapshots)
         && chatState.snapshots.some((s) => Number(s?.messageCount) === chat.length);
       if (processedThisCount) {
